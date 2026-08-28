@@ -1,0 +1,116 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GAWAAH — Device Passport (Gates G3/G4)</title>
+<style>
+  :root{--bg:#14161a;--fg:#e6e2d9;--dim:#8e8a81;--ok:#7fbba1;--bad:#e07964;--warn:#e0b964;--rule:#2c3037;--card:#1a1d22}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif;padding:16px}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:12px;margin-bottom:16px;font-family:ui-monospace,Menlo,monospace}
+  button{background:var(--ok);color:#000;border:0;border-radius:8px;padding:13px 18px;font-size:16px;font-weight:600;width:100%;margin-bottom:14px}
+  button:disabled{opacity:.5}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:9px 11px;border-bottom:1px solid var(--rule);font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  .row b{font-weight:600;color:var(--dim);flex:0 0 auto}
+  .row span{text-align:right;word-break:break-all}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:10px;margin-bottom:14px;overflow:hidden}
+  .card h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:0;padding:11px;border-bottom:1px solid var(--rule)}
+  .verdict{padding:13px;font-weight:700;font-size:15px}
+  video{width:100%;border-radius:8px;background:#000;margin-bottom:14px}
+  pre{background:#000;color:var(--ok);padding:11px;border-radius:8px;overflow-x:auto;font-size:11px;white-space:pre-wrap;word-break:break-all}
+</style>
+<h1>GAWAAH — Device Passport</h1>
+<div class="sub">Gates G3 (still resolution) &amp; G4 (opencv symbols)</div>
+
+<button id="go">Start camera &amp; run all gates</button>
+<video id="v" playsinline muted autoplay></video>
+
+<div class="card"><h2>G3 — Still capture resolution</h2><div id="g3"></div><div class="verdict" id="g3v">—</div></div>
+<div class="card"><h2>Camera track (live stream)</h2><div id="trk"></div></div>
+<div class="card"><h2>Constrainable properties (JUGNU-killers)</h2><div id="cap"></div></div>
+<div class="card"><h2>Platform</h2><div id="plat"></div></div>
+<div class="card"><h2>Copy this into FAILURES.md</h2><pre id="out">run the gates first</pre></div>
+
+<script>
+const R = {};
+const $ = id => document.getElementById(id);
+function row(el, k, v, cls){
+  const d = document.createElement('div'); d.className='row';
+  d.innerHTML = '<b></b><span class="'+(cls||'')+'"></span>';
+  d.children[0].textContent = k; d.children[1].textContent = v;
+  $(el).appendChild(d);
+}
+function dump(){ $('out').textContent = JSON.stringify(R, null, 1); }
+
+$('go').onclick = async () => {
+  $('go').disabled = true; $('go').textContent = 'running…';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:{ideal:'environment'}, width:{ideal:4096}, height:{ideal:2160} }, audio:false
+    });
+    $('v').srcObject = stream;
+    const track = stream.getVideoTracks()[0];
+    const st = track.getSettings();
+    R.track = st;
+    row('trk','live width', st.width); row('trk','live height', st.height);
+    row('trk','frameRate', st.frameRate); row('trk','facingMode', st.facingMode||'—');
+    row('trk','deviceId', (st.deviceId||'').slice(0,16)+'…');
+
+    // ---- G3 : still capture resolution ----
+    let maxW = null, note = '';
+    if (window.ImageCapture) {
+      try {
+        const ic = new ImageCapture(track);
+        const pc = await ic.getPhotoCapabilities();
+        maxW = pc.imageWidth && pc.imageWidth.max;
+        R.photoCapabilities = { imageWidth: pc.imageWidth, imageHeight: pc.imageHeight };
+        row('g3','ImageCapture','available','ok');
+        row('g3','imageWidth.max', maxW, maxW>=2500?'ok':'bad');
+        row('g3','imageHeight.max', pc.imageHeight && pc.imageHeight.max);
+      } catch(e){ note = 'getPhotoCapabilities threw: '+e.name; row('g3','ImageCapture', note,'bad'); }
+    } else {
+      note = 'ImageCapture not implemented (Safari/iOS)';
+      row('g3','ImageCapture', note, 'bad');
+      row('g3','fallback', 'must measure via a full-res <canvas> grab', 'warn');
+    }
+    R.G3 = { maxStillWidth: maxW, note };
+
+    const v = $('g3v');
+    if (maxW === null){ v.textContent = 'G3 INCONCLUSIVE — no ImageCapture. Measure by canvas grab.'; v.className='verdict warn'; R.G3.verdict='INCONCLUSIVE'; }
+    else if (maxW < 1280){ v.textContent = 'G3 FAIL — KHATA LIFT dead, PAKKA dead.'; v.className='verdict bad'; R.G3.verdict='FAIL_BOTH'; }
+    else if (maxW < 2500){ v.textContent = 'G3 PARTIAL — PAKKA dead ('+maxW+' < 2500). KHATA survives.'; v.className='verdict warn'; R.G3.verdict='FAIL_PAKKA'; }
+    else { v.textContent = 'G3 PASS — '+maxW+'px. PAKKA and KHATA both viable.'; v.className='verdict ok'; R.G3.verdict='PASS'; }
+
+    // ---- constrainable props ----
+    const sup = navigator.mediaDevices.getSupportedConstraints();
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    R.constraints = {};
+    for (const k of ['exposureMode','torch','focusMode','whiteBalanceMode','zoom']){
+      const has = (k in sup) || (k in caps);
+      R.constraints[k] = has ? (caps[k] !== undefined ? caps[k] : true) : false;
+      row('cap', k, has ? JSON.stringify(caps[k] ?? true) : 'NOT SUPPORTED', has?'ok':'bad');
+    }
+
+    // ---- platform ----
+    R.platform = { ua: navigator.userAgent, webgpu: !!navigator.gpu,
+      cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory||null,
+      dpr: devicePixelRatio, screen: screen.width+'x'+screen.height };
+    row('plat','WebGPU', R.platform.webgpu?'yes':'no', R.platform.webgpu?'ok':'warn');
+    row('plat','cores', R.platform.cores);
+    row('plat','deviceMemory(GB)', R.platform.mem ?? 'not exposed');
+    row('plat','screen', R.platform.screen + ' @' + R.platform.dpr);
+    row('plat','UA', navigator.userAgent.slice(0,70)+'…');
+
+    dump();
+    $('go').textContent = 'done — scroll for results';
+  } catch(e){
+    $('go').textContent = 'FAILED: '+e.name;
+    R.error = e.name + ': ' + e.message;
+    row('g3','getUserMedia', e.name+' — '+e.message, 'bad');
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost')
+      row('g3','cause','NOT a secure context. Serve over HTTPS (cloudflared).','bad');
+    dump();
+  }
+};
+</script>
