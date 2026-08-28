@@ -47,3 +47,29 @@ Not attempted — require a Razorpay test account, which needs a human signup. *
 `tools/device-passport.html` written. Reports `ImageCapture.getPhotoCapabilities().imageWidth.max` and renders the kill verdict directly. Also captures the `exposureMode` / `torch` / `focusMode` support that killed JUGNU, plus WebGPU and device memory.
 
 Requires a **secure context** — `getUserMedia` is blocked over plain HTTP from a LAN IP, so it must be served over HTTPS via `cloudflared`. Same dependency as G2, so both are unblocked by the same step.
+
+---
+
+## 2026-08-29 — S2 PASS · three real bugs found by the plane tests
+
+**Acceptance: reprojection RMSE < 1.0 px across tilts. Achieved 2.4e-05 px.** 48 tests green.
+
+### Bug 1 — the synthetic harness projected the mat outside the frame
+First run: every tilt test failed with `no markers detected`, while the raw mat detected fine. Diagnosis: the camera model put the mat quad at y=-320..1280 in a 960-tall frame, so the markers were off-sensor. **The test harness was broken, not the detector.** Fix: derive camera distance from a fit ratio so the mat always occupies ~82% of frame. Recorded because a harness bug that looks like a library bug is the most expensive kind of wrong turn.
+
+### Bug 2 — `_scale_error` measured perspective foreshortening, not scale
+It compared marker side lengths **in the raw frame**, so a legitimate 2° tilt produced a 2.657% "scale error" and refused to lock. Under perspective, sides *should* differ.
+
+Fix: measure the marker sides **on the rectified plane** against the known 30 mm, by pushing corners through `H` (four `perspectiveTransform` calls, no full remap). Measured result: **0.4–0.9% across tilts from 0° to 20°** — genuinely tilt-invariant, which is what a scale check must be. Pinned by `test_scale_error_is_tilt_invariant`.
+
+### Bug 3 — the tilt estimator is focal-length dependent, and the test hid it
+Replaced a hand-rolled homography decomposition with a **dimensionless perspective index** from the last row of the buffer→frame homography (zero for an affine/nadir view). Calibrated against synthetic ground truth: `persp_index ≈ 0.286 × tan(tilt)`, recovering true tilt within 0.3°.
+
+**But `PERSP_K` absorbs the camera's focal length.** My first calibration test asserted accuracy at a different `fit` ratio than it was fitted at, and failed at ≥5° — which is the estimator telling the truth about its own limits.
+
+Design consequence, now enforced by three tests:
+- the **gate thresholds the raw index**, which is monotonic in tilt for *any* lens
+- `persp_to_deg` is tested only **at its calibration geometry**
+- `test_persp_to_deg_does_not_transfer_across_focal_length` **asserts the limitation holds**, so nobody later reports it as a measured angle on real hardware
+
+A number that is only valid on one lens must not be printed as degrees on a shop counter.
