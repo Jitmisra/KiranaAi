@@ -73,3 +73,28 @@ Design consequence, now enforced by three tests:
 - `test_persp_to_deg_does_not_transfer_across_focal_length` **asserts the limitation holds**, so nobody later reports it as a measured angle on real hardware
 
 A number that is only valid on one lens must not be printed as degrees on a shop counter.
+
+---
+
+## 2026-08-29 — Build traps verified independently, and a NEW cross-platform hazard found
+
+The rescue spec lists three build traps. I ran all three against the actual installed libraries rather than trusting the writeup.
+
+| Trap | Claim | Verified result |
+|---|---|---|
+| `Mat.clone()` aliases the source | breaks absdiff → no crossing ever fires | **JS/wasm only.** Python `.copy()` is safe; `absdiff` returned 2500 nonzero as it should. Applies to `web/` only. |
+| `cv.TERM_CRITERIA_COUNT` undefined | `findTransformECC` silently throws | **JS/wasm only.** Python cv2 5.0.0 exposes **both** spellings (`TERM_CRITERIA_COUNT`=1 *and* `TermCriteria_COUNT`=1). Applies to `web/` only. |
+| `findTransformECC` throws instead of returning a low correlation | must wrap every call | **CONFIRMED IN PYTHON.** Two unrelated noise images raise `cv2.error` at `ecc.cpp:597`. It does **not** return a low `cc`. |
+
+**Consequence:** every `findTransformECC` call in `ident_sticker` and `saaf` must be wrapped in `try/except cv2.error` with a throw treated as *frame rejected*, never as *no motion*. An unwrapped call turns a normal registration failure into a crash.
+
+### NEW FINDING — the feature detectors are inverted between our two OpenCV builds
+
+| | AKAZE | SIFT | ORB |
+|---|---|---|---|
+| **JS wasm** `@techstark/opencv-js@4.11.0` (decoded binary) | ✅ present (16 refs) | ❌ absent | ✅ |
+| **Python** `opencv-contrib-python-headless 5.0.0` | ❌ **absent** | ✅ present | ✅ |
+
+Exactly inverted. A module that registers frames with AKAZE works in the browser and **crashes on the brain**; one that uses SIFT does the reverse.
+
+**Design consequence: ORB is the only descriptor present in both, so ORB is mandatory for any registration code that must run on both sides.** This also corrects the earlier record — I previously noted "AKAZE present, prior research was right", which was true *for the JS 4.11.0 wasm only*. It is false for the Python build we actually run the brain on. Both facts are needed; neither alone is safe to design from.

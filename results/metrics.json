@@ -1,0 +1,432 @@
+{
+  "bench_version": "1",
+  "benchmarks": {
+    "kernel_exactly_once": {
+      "best": 1.0,
+      "decimals": 4,
+      "detail": {
+        "audit_lines_written": 12,
+        "duplicate_intents": 0,
+        "extra_callers_admitted": 0,
+        "ledger_chains_broken": 0,
+        "rounds_per_seed": 2,
+        "rounds_total": 6,
+        "threads_per_round": 24
+      },
+      "deterministic": true,
+      "mean": 1.0,
+      "median": 1.0,
+      "modules": [
+        "gawaah.kernel",
+        "gawaah.ledger",
+        "gawaah.clock",
+        "gawaah.money"
+      ],
+      "n": 6,
+      "nondeterministic": {
+        "wall_s": 1.195
+      },
+      "p95": 1.0,
+      "per_seed": {
+        "0": {
+          "best": 1.0,
+          "mean": 1.0,
+          "median": 1.0,
+          "n": 2,
+          "p95": 1.0,
+          "stdev": 0.0,
+          "worst": 1.0
+        },
+        "1": {
+          "best": 1.0,
+          "mean": 1.0,
+          "median": 1.0,
+          "n": 2,
+          "p95": 1.0,
+          "stdev": 0.0,
+          "worst": 1.0
+        },
+        "2": {
+          "best": 1.0,
+          "mean": 1.0,
+          "median": 1.0,
+          "n": 2,
+          "p95": 1.0,
+          "stdev": 0.0,
+          "worst": 1.0
+        }
+      },
+      "polarity": "higher_is_better",
+      "status": "OK",
+      "stdev": 0.0,
+      "unit": "fraction",
+      "what": "rounds where racing threads produced exactly one debit",
+      "worst": 1.0,
+      "worst_seed": 0
+    },
+    "ledger_verify_throughput": {
+      "best": 230663.879468089,
+      "decimals": 0,
+      "detail": {
+        "all_chains_verified": true,
+        "chains": 3,
+        "lines_per_chain": 4000,
+        "repeats_per_chain": 3
+      },
+      "deterministic": false,
+      "mean": 224440.961296566,
+      "median": 225020.919894072,
+      "modules": [
+        "gawaah.ledger",
+        "gawaah.clock"
+      ],
+      "n": 9,
+      "nondeterministic": {
+        "bytes_written": 3401970,
+        "mean_build_s": 0.1431,
+        "wall_s": 0.592
+      },
+      "p95": 219405.999958415,
+      "per_seed": {
+        "0": {
+          "best": 222516.859266093,
+          "mean": 220535.171124437,
+          "median": 219682.654148803,
+          "n": 3,
+          "p95": 219405.999958415,
+          "stdev": 1405.809447341,
+          "worst": 219405.999958415
+        },
+        "1": {
+          "best": 227825.566701241,
+          "mean": 225013.231819701,
+          "median": 226260.340822622,
+          "n": 3,
+          "p95": 220953.787935242,
+          "stdev": 2940.725137454,
+          "worst": 220953.787935242
+        },
+        "2": {
+          "best": 230663.879468089,
+          "mean": 227774.480945561,
+          "median": 227638.643474523,
+          "n": 3,
+          "p95": 225020.919894072,
+          "stdev": 2305.730116095,
+          "worst": 225020.919894072
+        }
+      },
+      "polarity": "higher_is_better",
+      "status": "OK",
+      "stdev": 3769.862931865,
+      "unit": "lines/s",
+      "what": "from-genesis chain re-verification rate",
+      "worst": 219405.999958415,
+      "worst_seed": 0
+    },
+    "placement_footprint_err_mm": {
+      "best": 0.35356144,
+      "decimals": 3,
+      "detail": {
+        "angle_worst_deg": 0.207975157,
+        "centre_worst_mm": 0.209559261,
+        "long_edge_mean_mm": 0.447248246,
+        "long_edge_worst_mm": 0.671945714,
+        "objects_measured": 30,
+        "objects_missed": 0,
+        "objects_unmeasurable": 0,
+        "short_edge_mean_mm": 0.448733205,
+        "short_edge_worst_mm": 0.701597351,
+        "sizes_mm": [
+          [
+            210.0,
+            30.0
+          ],
+          [
+            150.0,
+            100.0
+          ],
+          [
+            120.0,
+            80.0
+          ],
+          [
+            60.0,
+            40.0
+          ],
+          [
+            25.0,
+            15.0
+          ]
+        ]
+      },
+      "deterministic": true,
+      "mean": 0.475797339,
+      "median": 0.456838281,
+      "modules": [
+        "gawaah.placement",
+        "gawaah.takhti"
+      ],
+      "n": 30,
+      "nondeterministic": {
+        "wall_s": 0.349
+      },
+      "p95": 0.695785838,
+      "per_seed": {
+        "0": {
+          "best": 0.420074829,
+          "mean": 0.458518729,
+          "median": 0.446898258,
+          "n": 10,
+          "p95": 0.510253669,
+          "stdev": 0.031972167,
+          "worst": 0.510253669
+        },
+        "1": {
+          "best": 0.379547093,
+          "mean": 0.485724585,
+          "median": 0.472110815,
+          "n": 10,
+          "p95": 0.695785838,
+          "stdev": 0.089813915,
+          "worst": 0.695785838
+        },
+        "2": {
+          "best": 0.35356144,
+          "mean": 0.483148702,
+          "median": 0.471227479,
+          "n": 10,
+          "p95": 0.701597351,
+          "stdev": 0.090606818,
+          "worst": 0.701597351
+        }
+      },
+      "polarity": "lower_is_better",
+      "status": "OK",
+      "stdev": 0.076918783,
+      "unit": "mm",
+      "what": "worse of the two measured edges vs the pasted truth",
+      "worst": 0.701597351,
+      "worst_seed": 2
+    },
+    "plane_reproj_rmse_px": {
+      "best": 0.128186386,
+      "decimals": 4,
+      "detail": {
+        "baseline_untilted_noiseless_px": 0.128186386,
+        "fit_residual_stdev_px": 0.0,
+        "fit_residual_worst_px": 2.3677e-05,
+        "frames_attempted": 27,
+        "frames_locked": 27,
+        "held_out_points_per_frame": 16,
+        "lock_rate": 1.0,
+        "max_persp_index": 0.032952607,
+        "max_scale_err": 0.007611885,
+        "noise_sigmas": [
+          0.0,
+          3.0,
+          6.0
+        ],
+        "refusals": [],
+        "worst_err_mm": 0.097420395
+      },
+      "deterministic": true,
+      "mean": 0.230726653,
+      "median": 0.241200837,
+      "modules": [
+        "gawaah.takhti"
+      ],
+      "n": 27,
+      "nondeterministic": {
+        "wall_s": 0.453
+      },
+      "p95": 0.272943661,
+      "per_seed": {
+        "0": {
+          "best": 0.128186386,
+          "mean": 0.225461843,
+          "median": 0.239749792,
+          "n": 9,
+          "p95": 0.272943661,
+          "stdev": 0.044085593,
+          "worst": 0.272943661
+        },
+        "1": {
+          "best": 0.128186386,
+          "mean": 0.234533678,
+          "median": 0.241200837,
+          "n": 9,
+          "p95": 0.275546488,
+          "stdev": 0.040384953,
+          "worst": 0.275546488
+        },
+        "2": {
+          "best": 0.128186386,
+          "mean": 0.232184438,
+          "median": 0.246819033,
+          "n": 9,
+          "p95": 0.272296381,
+          "stdev": 0.039605271,
+          "worst": 0.272296381
+        }
+      },
+      "polarity": "lower_is_better",
+      "status": "OK",
+      "stdev": 0.041582842,
+      "unit": "px",
+      "what": "marker reprojection RMSE across tilts and sensor noise",
+      "worst": 0.275546488,
+      "worst_seed": 1
+    },
+    "sellevent_recall": {
+      "best": 1.0,
+      "decimals": 4,
+      "detail": {
+        "amber_events": 1,
+        "counted_out_crossings": 44,
+        "entries_from_out": 0,
+        "events": 72,
+        "events_per_seed": 24,
+        "exception_codes": {
+          "detected_but_never_counted": 1
+        },
+        "false_positive_crossings": 0,
+        "jitter_sigma_mm": 0.6,
+        "misses_that_raised": 1,
+        "misses_that_were_silent": 1,
+        "recall_no_dropout": 1.0,
+        "recall_pooled": 0.956521739,
+        "recall_with_long_dropout": 0.333333333,
+        "sales_counted": 44,
+        "true_out_crossings": 46,
+        "vanished_same_side": 77
+      },
+      "deterministic": true,
+      "mean": 0.958333333,
+      "median": 1.0,
+      "modules": [
+        "gawaah.sellevent",
+        "gawaah.takhti"
+      ],
+      "n": 3,
+      "nondeterministic": {
+        "wall_s": 0.01
+      },
+      "p95": 0.875,
+      "per_seed": {
+        "0": {
+          "best": 1.0,
+          "mean": 1.0,
+          "median": 1.0,
+          "n": 1,
+          "p95": 1.0,
+          "stdev": 0.0,
+          "worst": 1.0
+        },
+        "1": {
+          "best": 0.875,
+          "mean": 0.875,
+          "median": 0.875,
+          "n": 1,
+          "p95": 0.875,
+          "stdev": 0.0,
+          "worst": 0.875
+        },
+        "2": {
+          "best": 1.0,
+          "mean": 1.0,
+          "median": 1.0,
+          "n": 1,
+          "p95": 1.0,
+          "stdev": 0.0,
+          "worst": 1.0
+        }
+      },
+      "polarity": "higher_is_better",
+      "status": "OK",
+      "stdev": 0.058925565,
+      "unit": "fraction",
+      "what": "scripted OUT crossings the zone actually counted",
+      "worst": 0.875,
+      "worst_seed": 1
+    }
+  },
+  "config": {
+    "only": [],
+    "scale": 1.0
+  },
+  "content_hash": "08fe8224a43d3e39a054f83b8cdb89f5494cf535c7b78ced5f7b4fa6a75a7f93",
+  "generated_at": "2026-08-28T21:22:49.041+00:00",
+  "git_sha": "4581dd047afd98e358be6073185afa25b7f13f5d-dirty",
+  "modules": {
+    "gawaah.chilla": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.clock": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.ident_sticker": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.identity": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.kernel": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.ledger": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.money": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.mudra": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.paisa": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.placement": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.rzp_sim": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.saaf": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.sellevent": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.session": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.takhti": {
+      "built": true,
+      "detail": ""
+    },
+    "gawaah.webhook": {
+      "built": true,
+      "detail": ""
+    }
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ]
+}

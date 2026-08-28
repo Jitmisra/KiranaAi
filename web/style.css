@@ -1,0 +1,184 @@
+/* GAWAAH counter PWA. One stylesheet, no framework, no webfont, no image.
+   The counter chrome colour follows session state; the palette is the whole
+   point, so it lives at the top and nothing else hard-codes these values. */
+
+:root {
+  --ink: #eef1f6;
+  --ink-dim: #97a0b0;
+  --bg: #0b0d11;
+  --panel: #141821;
+  --line: #232a36;
+
+  --grey: #6b7480;
+  --amber: #e0a33c;
+  --yellow: #d6d13a;
+  --white: #eef1f6;
+  --green: #3ddc84;
+  --red: #e2503f;
+
+  --chrome: var(--grey);
+  --radius: 10px;
+  --gap: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+/* the camera source is never displayed */
+#cam { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: -9999px; }
+
+/* ---------------------------------------------------- chrome ------------ */
+.chrome {
+  min-height: 100dvh;
+  padding: max(8px, env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom));
+  border-top: 5px solid var(--chrome);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chrome) 22%, transparent),
+              inset 0 90px 130px -90px color-mix(in srgb, var(--chrome) 38%, transparent);
+  transition: border-color .18s linear, box-shadow .18s linear;
+}
+.chrome-grey   { --chrome: var(--grey); }
+.chrome-amber  { --chrome: var(--amber); }
+.chrome-yellow { --chrome: var(--yellow); }
+.chrome-white  { --chrome: var(--white); }
+.chrome-green  { --chrome: var(--green); }
+.chrome-red    { --chrome: var(--red); }
+
+/* PAID and RED HOLD are the two states that must be readable across a shop */
+.chrome-green { box-shadow: inset 0 0 0 1px var(--green), inset 0 130px 180px -110px color-mix(in srgb, var(--green) 55%, transparent); }
+.chrome-red   { box-shadow: inset 0 0 0 2px var(--red),   inset 0 130px 180px -110px color-mix(in srgb, var(--red) 55%, transparent); }
+
+/* ---------------------------------------------------- header ------------ */
+.bar { display: flex; align-items: center; gap: var(--gap); margin-bottom: 8px; }
+.brand { font-weight: 700; letter-spacing: .16em; font-size: 13px; }
+.brand-sub { color: var(--ink-dim); font-weight: 400; letter-spacing: .04em; margin-left: 7px; }
+
+.lock {
+  margin-left: auto;
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .1em;
+  padding: 6px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.lock-on  { color: var(--green); }
+.lock-off { color: var(--grey); }
+.fps { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-dim); min-width: 8ch; text-align: right; }
+
+.banner {
+  background: color-mix(in srgb, var(--amber) 16%, var(--panel));
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ------------------------------------------- split preview -------------- */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+.pane { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.pane canvas { display: block; width: 100%; height: auto; background: #05070a; }
+.pane-rect { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+.pane figcaption { font-size: 11px; color: var(--ink-dim); padding: 6px 8px; border-top: 1px solid var(--line); }
+.pane figcaption b { color: var(--ink); font-weight: 600; }
+/* the rectified pane says out loud what it is retaining */
+#rect[data-policy="nothing"] { opacity: .45; }
+
+.lockdetail {
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-dim);
+  padding: 7px 2px 0;
+}
+
+/* ---------------------------------------------------- totals ------------ */
+.totals { display: flex; align-items: baseline; gap: var(--gap); margin: 12px 0 6px; flex-wrap: wrap; }
+.total-label { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-dim); }
+.total {
+  font: 700 44px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--chrome);
+}
+.chrome-grey .total, .chrome-white .total { color: var(--ink); }
+.amber-note {
+  margin-left: auto;
+  color: var(--amber);
+  border: 1px dashed var(--amber);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------- lines ------------- */
+.lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.line {
+  display: flex; align-items: center; gap: var(--gap);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.line:active { transform: scale(.995); }
+.line-name { font-weight: 600; }
+.line-price { margin-left: auto; font: 600 15px/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.line-committed { border-color: color-mix(in srgb, var(--green) 35%, var(--line)); }
+
+/* AMBER: hatched, and it says it is excluded. It never shows a price and it is
+   never in the total. Hatching is the visual promise that nothing was guessed. */
+.line-amber {
+  border-color: var(--amber);
+  color: var(--amber);
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--amber) 15%, transparent) 0 7px,
+      transparent 7px 14px),
+    var(--panel);
+}
+.line-amber .line-price { letter-spacing: .06em; font-size: 12px; }
+
+.line-reverted { opacity: .42; text-decoration: line-through; border-style: dashed; }
+
+/* ---------------------------------------------------- actions ----------- */
+.actions { display: flex; gap: var(--gap); margin-top: 14px; }
+.btn {
+  flex: 1;
+  font: 700 16px/1 inherit;
+  letter-spacing: .1em;
+  padding: 16px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--chrome);
+  background: color-mix(in srgb, var(--chrome) 14%, var(--panel));
+  color: var(--ink);
+  cursor: pointer;
+}
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+.btn-ack { border-color: var(--amber); color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, var(--panel)); flex: 0 1 auto; }
+
+/* ---------------------------------------------------- footnotes --------- */
+.footnotes { display: flex; gap: var(--gap); margin-top: 12px; flex-wrap: wrap; }
+.reason, .cvstat { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-dim); }
+.cvstat { margin-left: auto; text-align: right; }
+.cvstat-ok { color: var(--green); }
+.cvstat-absent { color: var(--amber); }
+
+/* ---------------------------------------------------- narrow ------------ */
+@media (max-width: 560px) {
+  .split { grid-template-columns: 1fr; }
+  .total { font-size: 38px; }
+  .amber-note { margin-left: 0; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chrome { transition: none; }
+}

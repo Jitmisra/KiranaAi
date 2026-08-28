@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d11">
+<meta name="referrer" content="no-referrer">
+<!-- The phone talks to one origin: the brain on the LAN. No cloud, no CDN, no
+     model weights. Everything this page loads is served from beside it. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' ws://localhost:8787; base-uri 'none'; form-action 'none'">
+<title>GAWAAH — counter</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<div id="chrome" class="chrome chrome-grey" data-state="SETUP">
+
+  <header class="bar">
+    <div class="brand">GAWAAH<span class="brand-sub">counter</span></div>
+    <div id="lock" class="lock lock-off">NO LOCK</div>
+    <div id="fps" class="fps">—</div>
+  </header>
+
+  <div id="banner" class="banner" hidden>AMBER PENDING — offline, nothing authorised</div>
+
+  <!-- INVARIANT 4, made visible. Left: the raw feed, scrimmed outside the mat
+       quad the instant we lock. Right: the rectified crop, which is the ONLY
+       buffer that survives a frame grab and the only thing that ever leaves
+       this device. -->
+  <section class="split">
+    <figure class="pane">
+      <canvas id="raw" width="1280" height="960"></canvas>
+      <figcaption>
+        <b>raw feed</b> — masked outside the mat at frame grab.
+        Tap a glyph to revert that line.
+      </figcaption>
+    </figure>
+    <figure class="pane pane-rect">
+      <canvas id="rect" width="840" height="1188" data-policy="nothing"></canvas>
+      <figcaption>
+        <b>rectified crop</b> — 840&times;1188, the only buffer that survives.
+      </figcaption>
+    </figure>
+  </section>
+
+  <div id="lockdetail" class="lockdetail">waiting for the mat</div>
+
+  <section class="totals">
+    <div class="total-wrap">
+      <div class="total-label">total</div>
+      <div id="total" class="total">&#8377;0.00</div>
+    </div>
+    <div id="amber" class="amber-note" hidden></div>
+  </section>
+
+  <ol id="lines" class="lines"></ol>
+
+  <footer class="actions">
+    <button id="ack" class="btn btn-ack" hidden>check the counter — acknowledge</button>
+    <button id="done" class="btn btn-done" disabled>DONE</button>
+  </footer>
+
+  <div class="footnotes">
+    <div id="reason" class="reason">session_opened</div>
+    <div id="cvstat" class="cvstat">loading vendored OpenCV&hellip;</div>
+  </div>
+
+</div>
+
+<!-- The camera element is never shown; it is the source for the canvases.
+     Nothing is recorded from it and nothing is uploaded from it. -->
+<video id="cam" playsinline muted autoplay></video>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
