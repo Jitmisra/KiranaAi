@@ -67,6 +67,9 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Protocol
 
 import numpy as np
 
+# identity's four reason codes are imported to be RE-EXPORTED (see __all__), so
+# a consumer has one import site for every reason a line can carry and never
+# has to know which of the two modules invented which string.
 from gawaah.identity import (
     ABSTAIN_REASONS,
     DEFAULT_PHI,
@@ -457,11 +460,24 @@ class Recogniser:
     def skus(self) -> tuple[str, ...]:
         return self.identifier.gallery.skus()
 
-    def reload(self) -> ReloadResult:
+    def reload(self, *, deep: bool = True) -> ReloadResult:
         """Re-read the catalog. Picks up SKUs enrolled since start without
         reconstructing this object, and WITHOUT resetting the statistics — the
         abstention rate is a running record of this counter's day, and an
-        enrolment is not a reason to forget how often it said "I don't know"."""
+        enrolment is not a reason to forget how often it said "I don't know".
+
+        `deep` (the default) first asks the STORE to re-read itself, because
+        the enrolment surface and the counter are different processes: the
+        upload app writes the catalog on :8790 and the brain reads it on :8787,
+        so a recogniser that only re-snapshotted its own store's memory would
+        never see a product the shopkeeper just taught. If that re-read raises
+        — a corrupt catalog — it is allowed to propagate: an unpriced counter
+        with a loud error beats a silently empty shop.
+        """
+        if deep:
+            store_reload = getattr(self.store, "reload", None)
+            if callable(store_reload):
+                store_reload()
         gallery = self._gallery_of()
         if not isinstance(gallery, Gallery):
             raise RecogniserError(

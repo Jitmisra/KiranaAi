@@ -45,6 +45,21 @@ function T(name, fn) {
   catch (e) { fail++; failures.push(`${group} :: ${name}\n      ${e.message}`); }
 }
 function G(name) { group = name; console.log(`\n── ${name}`); }
+
+/**
+ * The async sibling of T. The photo flow talks to a service, so the calls that
+ * exercise it are promises; they are collected here and awaited once, together,
+ * before the report is printed. A test that is merely STARTED and never awaited
+ * is a test that always passes, which is worse than no test at all.
+ */
+const pending = [];
+function TA(name, fn) {
+  const g0 = group;
+  pending.push((async () => {
+    try { await fn(); pass++; }
+    catch (e) { fail++; failures.push(`${g0} :: ${name}\n      ${e.message}`); }
+  })());
+}
 function ok(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
 function eq(a, b, msg) {
   if (!Object.is(a, b)) throw new Error(`${msg || 'eq'}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
@@ -1248,6 +1263,1199 @@ T('brainUrl follows the origin the page was served from', () => {
     }
   }
 });
+
+
+// ==========================================================================
+// K. THE ENROLMENT DESK ADDRESS. Configurable, and honest about CSP.
+// ==========================================================================
+G('K. the enrolment desk address');
+
+T('an empty base means SAME ORIGIN and is valid, not missing', () => {
+  const v = E.normaliseShopBase('');
+  ok(v.ok);
+  eq(v.base, E.SAME_ORIGIN);
+  eq(E.normaliseShopBase('   ').base, '');
+  eq(E.normaliseShopBase(null).base, '');
+});
+
+T('a full http base is normalised and its trailing slash removed', () => {
+  eq(E.normaliseShopBase('http://127.0.0.1:8790').base, 'http://127.0.0.1:8790');
+  eq(E.normaliseShopBase('http://127.0.0.1:8790/').base, 'http://127.0.0.1:8790');
+  eq(E.normaliseShopBase('http://127.0.0.1:8790///').base, 'http://127.0.0.1:8790');
+  eq(E.normaliseShopBase('https://shop.local/desk/').base, 'https://shop.local/desk',
+    'a proxy path prefix survives');
+});
+
+T('a base that is not http(s) is REFUSED by name, never silently ignored', () => {
+  for (const bad of ['javascript:alert(1)', 'file:///etc/passwd', 'ftp://x/y', 'ws://x:1/y']) {
+    const v = E.normaliseShopBase(bad);
+    eq(v.ok, false, `${bad} must be refused`);
+    eq(v.reason, E.ServiceRefusal.BAD_BASE);
+    ok(v.base === null, 'no base escapes a refusal');
+  }
+  eq(E.normaliseShopBase('not a url at all').ok, false);
+  measured.desk_base_refusals = '5/5';
+});
+
+T('the base is resolved by a stated precedence: option, query, global, default', () => {
+  const loc = { hostname: '127.0.0.1', protocol: 'http:', port: '8787', origin: 'http://127.0.0.1:8787', search: '?shop=http://desk.local:9000' };
+  eq(E.resolveShopBase({ shopBase: 'http://opt:1' }, loc, {}).source, 'option');
+  eq(E.resolveShopBase({ shopBase: 'http://opt:1' }, loc, {}).base, 'http://opt:1');
+  eq(E.resolveShopBase({}, loc, {}).source, 'query');
+  eq(E.resolveShopBase({}, loc, {}).base, 'http://desk.local:9000');
+  eq(E.resolveShopBase({}, { ...loc, search: '' }, { GAWAAH_SHOP_BASE: 'http://g:2' }).source, 'global');
+  const d = E.resolveShopBase({}, { ...loc, search: '' }, {});
+  eq(d.source, 'default');
+  eq(d.base, `http://127.0.0.1:${E.SHOP_PORT}`);
+  measured.desk_default_base = d.base;
+});
+
+T('a page served BY the desk defaults to same-origin, not to a hardcoded host', () => {
+  const onDesk = { hostname: '127.0.0.1', protocol: 'http:', port: String(E.SHOP_PORT), origin: `http://127.0.0.1:${E.SHOP_PORT}`, search: '' };
+  const r = E.resolveShopBase({}, onDesk, {});
+  eq(r.source, 'same-origin');
+  eq(r.base, E.SAME_ORIGIN);
+});
+
+T('THE CSP FACT: a cross-origin desk is named as BLOCKED before it is dialled', () => {
+  // web/index.html ships connect-src 'self'. A page on the brain's port cannot
+  // fetch the desk's port, and the browser's own error is an opaque TypeError
+  // that reads exactly like "the service is down". Telling an operator to start
+  // a service that is already running is the worst available advice, so this is
+  // decided from the CSP, up front, and not from a failed call.
+  const onBrain = { origin: 'http://127.0.0.1:8787', hostname: '127.0.0.1', protocol: 'http:', port: '8787' };
+  const r = E.describeReach('http://127.0.0.1:8790', onBrain, 'self');
+  eq(r.blocked, true);
+  eq(r.reason, E.ServiceRefusal.CSP_BLOCKED);
+  includes(r.detail, 'connect-src');
+  includes(r.detail, 'This is a permission, not an outage');
+  includes(r.detail, 'http://127.0.0.1:8790');
+  measured.csp_blocked_reason = r.reason;
+});
+
+T('same-origin and the empty base are never reported as blocked', () => {
+  const onDesk = { origin: 'http://127.0.0.1:8790' };
+  eq(E.describeReach(E.SAME_ORIGIN, onDesk, 'self').blocked, false);
+  eq(E.describeReach('http://127.0.0.1:8790', onDesk, 'self').blocked, false);
+  eq(E.describeReach('http://127.0.0.1:8790', onDesk, 'self').sameOrigin, true);
+  // With a relaxed CSP the call is allowed and must not be pre-refused.
+  eq(E.describeReach('http://127.0.0.1:8790', { origin: 'http://127.0.0.1:8787' }, 'open').blocked, false);
+  // With no known page origin we cannot PROVE it is blocked, so we do not claim it.
+  eq(E.describeReach('http://127.0.0.1:8790', null, 'self').blocked, false);
+});
+
+T('the CSP claim this panel makes matches the CSP the shell actually ships', () => {
+  // If the shell ever widens connect-src, the sentence above becomes a lie.
+  // Read the real header rather than trusting a comment.
+  let shell = null;
+  try { shell = readFileSync(join(HERE, '..', 'index.html'), 'utf8'); } catch { shell = null; }
+  if (shell === null) return;
+  // Read the META TAG, not the prose around it: index.html discusses
+  // connect-src at length in a comment, and matching that comment was a real
+  // false positive while writing this test.
+  const tag = /<meta http-equiv="Content-Security-Policy"[\s\S]*?content="([^"]+)"/.exec(shell);
+  ok(tag, 'no CSP meta tag in index.html');
+  const m = /connect-src ([^;]+)/.exec(tag[1]);
+  ok(m, 'no connect-src in the CSP meta tag');
+  measured.shell_connect_src = m[1].trim();
+  eq(m[1].trim(), "'self'", 'the shell CSP changed; the CSP_BLOCKED prose must be revisited');
+});
+
+// ==========================================================================
+// L. THE PRICE BOUNDARY AT THE PHOTO SEAM. The named cases, again, but this
+//    time through the function that actually builds the upload.
+// ==========================================================================
+G('L. buildEnrolRequest — the price boundary where a photo is taught');
+
+const PHOTO = { kind: 'file', name: 'parle.png', size: 40000, type: 'image/png' };
+const teach = (price, name = 'Parle-G 100g') =>
+  E.buildEnrolRequest({ name, price, image: PHOTO, base: 'http://d:1' });
+
+T('THE NAMED CASE: 214.507 is refused at the photo boundary and nothing is built', () => {
+  const r = teach('214.507');
+  eq(r.ok, false);
+  eq(r.request, null, 'no request object is built for a refused price');
+  eq(r.paise, null);
+  eq(r.refusal.field, 'price');
+  eq(r.refusal.reason, E.PriceRefusal.SUB_PAISE);
+  includes(r.refusal.detail, 'NOT rounded');
+  eq(r.refusal.typed, '214.507');
+});
+
+T('THE NAMED CASE: "abc" is refused as not a number', () => {
+  const r = teach('abc');
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.PriceRefusal.NOT_A_NUMBER);
+  eq(r.request, null);
+});
+
+T('THE NAMED CASE: "" is refused as empty', () => {
+  eq(teach('').refusal.reason, E.PriceRefusal.EMPTY);
+  eq(teach('   ').refusal.reason, E.PriceRefusal.EMPTY);
+  eq(teach(null).refusal.reason, E.PriceRefusal.EMPTY);
+});
+
+T('THE NAMED CASE: -5 is refused as negative', () => {
+  eq(teach('-5').refusal.reason, E.PriceRefusal.NEGATIVE);
+  eq(teach(-5).refusal.reason, E.PriceRefusal.NEGATIVE);
+});
+
+T('THE NAMED CASE: "1e3" is refused as exponent notation', () => {
+  const r = teach('1e3');
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.PriceRefusal.EXPONENT);
+  eq(r.request, null, 'a thousand rupees was NOT quietly enrolled');
+});
+
+T('THE NAMED CASE: 0 is refused as a zero price', () => {
+  eq(teach('0').refusal.reason, E.PriceRefusal.ZERO);
+  eq(teach('0.00').refusal.reason, E.PriceRefusal.ZERO);
+  eq(teach(0).refusal.reason, E.PriceRefusal.ZERO);
+});
+
+T('all six named cases refuse, and NONE of them produces an upload', () => {
+  const named = ['214.507', 'abc', '', '-5', '1e3', '0'];
+  const seen = [];
+  for (const p of named) {
+    const r = teach(p);
+    eq(r.ok, false, `${JSON.stringify(p)} must be refused`);
+    eq(r.request, null, `${JSON.stringify(p)} must not build a request`);
+    seen.push(`${JSON.stringify(p)}->${r.refusal.reason}`);
+  }
+  eq(new Set(seen.map((s) => s.split('->')[1])).size, 6, 'six distinct reasons');
+  measured.photo_price_refusals = seen.join('  ');
+});
+
+T('a good price DOES build the upload, and the paise are carried out with it', () => {
+  const r = teach('214.50');
+  ok(r.ok, r.refusal && r.refusal.detail);
+  eq(r.paise, 21450, 'the integer that will be stored');
+  eq(r.rupees, '214.50');
+  eq(r.request.method, 'POST');
+  eq(r.request.path, '/enrol');
+  eq(r.request.url, 'http://d:1/enrol');
+  eq(r.request.fields.sku_id, 'parle-g-100g');
+  eq(r.request.fields.name, 'Parle-G 100g');
+  eq(r.request.fields.price_rupees, '214.50');
+  eq(r.request.fields.price_paise, '21450');
+  eq(r.request.image.kind, 'file');
+  measured.teach_fields = JSON.stringify(r.request.fields);
+});
+
+T('the wire rupees are re-derived FROM the paise, not echoed from the keystrokes', () => {
+  // ' Rs 214.5 ' and '214.50' mean the same integer, so they must put the same
+  // characters on the wire. Echoing the typed string would make the browser and
+  // the desk disagree about a value they both already agree on.
+  const a = teach(' Rs 214.5 ');
+  const b = teach('214.50');
+  ok(a.ok && b.ok);
+  eq(a.paise, b.paise);
+  eq(a.request.fields.price_rupees, b.request.fields.price_rupees);
+  eq(a.request.fields.price_rupees, '214.50');
+});
+
+T('the NAME is refused before the price, and the price before the upload', () => {
+  // The operator is told the FIRST thing that was wrong, not the last.
+  const r = E.buildEnrolRequest({ name: '', price: '214.507', image: PHOTO });
+  eq(r.refusal.field, 'name', 'an empty name is reported before the bad price');
+  const r2 = E.buildEnrolRequest({ name: 'ok', price: '214.507', image: null });
+  eq(r2.refusal.field, 'price', 'the price is proved before an 8 MB upload is contemplated');
+});
+
+T('a duplicate name is refused against the names already taught', () => {
+  const r = E.buildEnrolRequest({ name: 'Parle-G', price: '10', image: PHOTO, taken: ['parle-g'] });
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.NameRefusal.DUPLICATE);
+});
+
+// ==========================================================================
+G('M. paiseToRupeeString — the wire form of an integer');
+
+T('the wire string round-trips through parsePaise exactly, across the range', () => {
+  let n = 0;
+  for (let p = 1; p <= 20000; p++) {
+    const s = E.paiseToRupeeString(p);
+    const back = E.parsePaise(s);
+    ok(back.ok, `${p} -> ${s} did not re-parse`);
+    eq(back.paise, p, `wire round trip ${p} via ${s}`);
+    n++;
+  }
+  eq(E.paiseToRupeeString(21450), '214.50');
+  eq(E.paiseToRupeeString(1), '0.01');
+  eq(E.paiseToRupeeString(100), '1.00');
+  eq(E.paiseToRupeeString(100000000), '1000000.00');
+  measured.wire_round_trip_exact = `${n}/20000`;
+});
+
+T('the wire form carries no grouping, no currency mark and no float', () => {
+  // A comma would be refused by parsePaise on the way back in, and a currency
+  // mark is not a number. The wire form is digits and one dot.
+  for (const p of [1, 99, 100, 123456, 100000000]) {
+    ok(/^\d+\.\d\d$/.test(E.paiseToRupeeString(p)), `bad wire form for ${p}`);
+  }
+  eq(E.paiseToRupeeString(1.5), null, 'a non-integer has no wire form');
+  eq(E.paiseToRupeeString(-1), null);
+  eq(E.paiseToRupeeString('21450'), null, 'a string is not an integer paise value');
+});
+
+// ==========================================================================
+G('N. checkImage — INVARIANT 4 at the upload boundary');
+
+T('a RAW FRAME is refused by name, exactly as app.js refuses it on the socket', () => {
+  for (const k of E.FORBIDDEN_IMAGE_KEYS) {
+    const r = E.checkImage({ kind: 'file', name: 'x.png', size: 10, type: 'image/png', [k]: 'PAYLOAD' });
+    eq(r.ok, false, `key ${k} must be refused`);
+    eq(r.reason, E.TeachRefusal.RAW_FRAME);
+    includes(r.detail, 'INVARIANT 4');
+    includes(r.detail, JSON.stringify(k));
+  }
+  measured.raw_frame_keys_refused = `${E.FORBIDDEN_IMAGE_KEYS.length}/${E.FORBIDDEN_IMAGE_KEYS.length}`;
+});
+
+T('a raw frame cannot sneak through buildEnrolRequest either', () => {
+  const r = E.buildEnrolRequest({
+    name: 'X', price: '10',
+    image: { kind: 'rectified_mat_crop', b64: 'AAAA', raw_frame: 'the whole shop' },
+  });
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.TeachRefusal.RAW_FRAME);
+  eq(r.request, null);
+});
+
+T('the rectified mat crop IS accepted, and is the only camera source', () => {
+  const r = E.checkImage({ kind: E.RECTIFIED_CROP_KIND, b64: 'QUJD' });
+  ok(r.ok);
+  eq(r.image.kind, 'rectified_mat_crop');
+  eq(r.image.type, 'image/png');
+  includes(r.image.label, 'rectified mat crop');
+  eq(E.checkImage({ kind: E.RECTIFIED_CROP_KIND, b64: '' }).reason, E.TeachRefusal.NO_CAMERA_CROP);
+});
+
+T('no image at all is a named refusal, not a crash', () => {
+  eq(E.checkImage(null).reason, E.TeachRefusal.NO_IMAGE);
+  eq(E.checkImage(undefined).reason, E.TeachRefusal.NO_IMAGE);
+  eq(E.checkImage('a string').reason, E.TeachRefusal.NO_IMAGE);
+  eq(E.checkImage({ kind: 'nonsense' }).reason, E.TeachRefusal.NO_IMAGE);
+});
+
+T('an oversized file is refused BEFORE the upload, with its real size named', () => {
+  const r = E.checkImage({ kind: 'file', name: 'burst.png', size: E.MAX_IMAGE_BYTES + 1, type: 'image/png' });
+  eq(r.ok, false);
+  eq(r.reason, E.TeachRefusal.TOO_LARGE);
+  includes(r.detail, String(E.MAX_IMAGE_BYTES + 1));
+  ok(E.checkImage({ kind: 'file', name: 'ok.png', size: E.MAX_IMAGE_BYTES, type: 'image/png' }).ok,
+    'exactly at the cap is allowed');
+  measured.max_image_bytes = String(E.MAX_IMAGE_BYTES);
+});
+
+T('a KNOWN-WRONG type is refused; an UNKNOWN type is allowed through to the desk', () => {
+  const heic = E.checkImage({ kind: 'file', name: 'IMG.HEIC', size: 100, type: 'image/heic' });
+  eq(heic.ok, false);
+  eq(heic.reason, E.TeachRefusal.BAD_TYPE);
+  includes(heic.detail, 'HEIC');
+  // An empty type is a platform quirk on real photos. Refusing it here would
+  // block genuine uploads on the strength of a missing header; the desk sniffs
+  // the bytes anyway, so the unknown case is passed on rather than guessed at.
+  ok(E.checkImage({ kind: 'file', name: 'photo', size: 100, type: '' }).ok);
+  eq(E.checkImage({ kind: 'file', name: 'a.pdf', size: 10, type: 'application/pdf' }).reason,
+    E.TeachRefusal.BAD_TYPE);
+});
+
+// ==========================================================================
+G('O. safeThumb — desk-supplied bytes, never a desk-supplied fetch');
+
+T('a remote thumbnail URL is REFUSED: this page fetches no image it was handed', () => {
+  for (const bad of ['http://evil.example/x.png', 'https://cdn.example/y.jpg', '//evil.example/z.png']) {
+    const r = E.safeThumb(bad);
+    eq(r.ok, false, `${bad} must be refused`);
+    eq(r.reason, E.ThumbRefusal.REMOTE_URL);
+    eq(r.src, null, 'no src escapes');
+  }
+  measured.remote_thumb_refusals = '3/3';
+});
+
+T('an inline data: URI of a real image type is accepted', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const r = E.safeThumb(png);
+  ok(r.ok);
+  eq(r.src, png);
+  ok(E.safeThumb('data:image/jpeg;base64,QUJDRA==').ok);
+  ok(E.safeThumb('data:image/webp;base64,QUJDRA==').ok);
+});
+
+T('a data: URI that is not an image, or not base64, is refused', () => {
+  eq(E.safeThumb('data:text/html;base64,PHNjcmlwdD4=').reason, E.ThumbRefusal.NOT_AN_IMAGE);
+  eq(E.safeThumb('data:image/svg+xml;base64,PHN2Zz4=').reason, E.ThumbRefusal.NOT_AN_IMAGE,
+    'SVG is a script surface, not a thumbnail');
+  eq(E.safeThumb('data:image/png,<not base64>').reason, E.ThumbRefusal.NOT_AN_IMAGE);
+});
+
+T('bare base64 is wrapped as PNG, which is what a photo_png field holds', () => {
+  const r = E.safeThumb('iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB');
+  ok(r.ok);
+  ok(r.src.startsWith('data:image/png;base64,'));
+  eq(E.safeThumb('not base64 at all!!').reason, E.ThumbRefusal.NOT_AN_IMAGE);
+  eq(E.safeThumb('').reason, E.ThumbRefusal.ABSENT);
+  eq(E.safeThumb(null).reason, E.ThumbRefusal.ABSENT);
+  eq(E.safeThumb(12345).reason, E.ThumbRefusal.NOT_AN_IMAGE);
+});
+
+T('an oversized thumbnail is dropped rather than wedged into the DOM', () => {
+  const huge = 'A'.repeat(E.MAX_THUMB_CHARS + 1);
+  eq(E.safeThumb(huge).reason, E.ThumbRefusal.TOO_LARGE);
+  measured.max_thumb_chars = String(E.MAX_THUMB_CHARS);
+});
+
+// ==========================================================================
+G('P. readShopResponse — every way the desk can fail to be a result');
+
+T('a 200 with good JSON is a result', () => {
+  const r = E.readShopResponse(200, JSON.stringify({ ok: true, skus: [] }));
+  ok(r.ok);
+  eq(r.refusal, null);
+  ok(Array.isArray(r.data.skus));
+});
+
+T('a 500 with an HTML error page is shop_service_http_error, not a crash', () => {
+  const r = E.readShopResponse(500, '<html><body>Internal Server Error</body></html>');
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.ServiceRefusal.HTTP);
+  eq(r.refusal.status, 500);
+  includes(r.refusal.detail, 'Internal Server Error');
+});
+
+T('a 200 with a body that is not JSON is named, and the body is quoted back', () => {
+  const r = E.readShopResponse(200, 'not json at all');
+  eq(r.refusal.reason, E.ServiceRefusal.BAD_JSON);
+  includes(r.refusal.detail, 'not json at all');
+});
+
+T("the desk's OWN named refusal is passed through as a result, not overwritten", () => {
+  // A desk that says {"ok": false, "reason": "mat_did_not_lock"} has produced a
+  // RESULT. Replacing its reason with a generic one would throw away the only
+  // sentence that tells the operator what to change.
+  const r = E.readShopResponse(400, JSON.stringify({
+    ok: false, reason: 'mat_did_not_lock', detail: 'found 2 of 4 markers; move the light',
+  }));
+  eq(r.ok, false);
+  eq(r.refusal.reason, 'mat_did_not_lock');
+  includes(r.refusal.detail, '2 of 4 markers');
+  measured.desk_refusal_passthrough = r.refusal.reason;
+});
+
+T('a non-2xx with JSON but no reason still gets a named refusal', () => {
+  const r = E.readShopResponse(404, JSON.stringify({ ok: true, detail: 'nope' }));
+  eq(r.ok, false);
+  eq(r.refusal.reason, E.ServiceRefusal.REFUSED);
+});
+
+T('a JSON array or a bare number is not a result shape', () => {
+  eq(E.readShopResponse(200, '[1,2,3]').refusal.reason, E.ServiceRefusal.BAD_JSON);
+  eq(E.readShopResponse(200, '42').refusal.reason, E.ServiceRefusal.BAD_JSON);
+  eq(E.readShopResponse(200, '').refusal.reason, E.ServiceRefusal.BAD_JSON);
+});
+
+T('every service refusal code has help text an operator can act on', () => {
+  for (const c of E.SERVICE_REFUSAL_CODES) {
+    ok(String(E.SERVICE_REFUSAL_HELP[c]).length > 40, `${c} has no usable help`);
+  }
+  for (const c of E.TEACH_REFUSAL_CODES) {
+    ok(String(E.TEACH_REFUSAL_HELP[c]).length > 40, `${c} has no usable help`);
+  }
+  for (const c of E.THUMB_REFUSAL_CODES) {
+    ok(String(E.THUMB_REFUSAL_HELP[c]).length > 20, `${c} has no usable help`);
+  }
+  measured.named_service_codes = String(
+    E.SERVICE_REFUSAL_CODES.length + E.TEACH_REFUSAL_CODES.length + E.THUMB_REFUSAL_CODES.length);
+});
+
+// ==========================================================================
+G('Q. deriveShopCatalog — unknown is not empty');
+
+T('never fetched is UNKNOWN; an answered empty desk is EMPTY, and they differ', () => {
+  const unknown = E.deriveShopCatalog(null);
+  eq(unknown.known, false);
+  eq(unknown.count, 0);
+  const empty = E.deriveShopCatalog({ ok: true, skus: [] });
+  eq(empty.known, true);
+  eq(empty.count, 0);
+  ok(unknown.known !== empty.known, 'the two states must not be collapsed');
+});
+
+T('a taught SKU carries paise, rupees, footprint mm and a thumbnail', () => {
+  const c = E.deriveShopCatalog({
+    ok: true,
+    skus: [{
+      sku_id: 'parle-g-100g', name: 'Parle-G 100g', price_paise: 1000,
+      footprint_mm: 38.19, photo_png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+    }],
+  });
+  eq(c.known, true);
+  eq(c.count, 1);
+  const r = c.rows[0];
+  eq(r.pricePaise, 1000);
+  eq(r.rupees, '₹10.00');
+  eq(r.paiseText, '1000 paise');
+  eq(r.footprintText, '38.19 mm');
+  ok(r.thumbSrc.startsWith('data:image/png;base64,'));
+  measured.catalog_row = `${r.name} ${r.paiseText} ${r.rupees} ${r.footprintText}`;
+});
+
+T('a price that is not integer paise is NOT rendered as money', () => {
+  // A desk that returns 10.5 has a bug. Painting '₹0.11' beside it would hide
+  // that bug behind a plausible number; the row goes priceless and says so.
+  const c = E.deriveShopCatalog({ skus: [{ sku_id: 'x', name: 'X', price_paise: 10.5 }] });
+  const r = c.rows[0];
+  eq(r.priceOk, false);
+  eq(r.pricePaise, null);
+  eq(r.rupees, null);
+  eq(r.priceReason, 'price_not_integer_paise');
+  eq(E.deriveShopCatalog({ skus: [{ sku_id: 'y', name: 'Y' }] }).rows[0].priceReason, 'price_absent');
+  eq(E.deriveShopCatalog({ skus: [{ sku_id: 'z', price_paise: -5 }] }).rows[0].priceOk, false);
+});
+
+T('an unmeasured footprint says so rather than showing 0.00 mm', () => {
+  const c = E.deriveShopCatalog({ skus: [{ sku_id: 'x', name: 'X', price_paise: 100 }] });
+  eq(c.rows[0].footprintMm, null);
+  eq(c.rows[0].footprintText, 'not measured');
+  eq(E.formatMm(0), null);
+  eq(E.formatMm(-1), null);
+  eq(E.formatMm(NaN), null);
+  eq(E.formatMm(38.19), '38.19 mm');
+});
+
+T('an answer with no skus array is BAD SHAPE, not an empty shop', () => {
+  const c = E.deriveShopCatalog({ ok: true, something_else: 1 });
+  eq(c.known, false);
+  eq(c.refusal.reason, E.ServiceRefusal.BAD_SHAPE);
+});
+
+T('a service refusal reaches the catalogue instead of a blank list', () => {
+  const c = E.deriveShopCatalog(null, { reason: E.ServiceRefusal.UNREACHABLE, detail: 'nope', status: null });
+  eq(c.known, false);
+  eq(c.refusal.reason, E.ServiceRefusal.UNREACHABLE);
+});
+
+// ==========================================================================
+G('R. deriveRecognition — AMBER is excluded, and the total is AUDITED');
+
+const REC = {
+  ok: true,
+  total_paise: 3000,
+  items: [
+    { sku_id: 'parle-g', name: 'Parle-G', price_paise: 1000, reason: 'match', top1: 0.91, top2: 0.42, margin: 0.49, long_edge_mm: 38.19 },
+    { sku_id: 'maggi', name: 'Maggi', price_paise: 2000, reason: 'match', top1: 0.88, top2: 0.31, margin: 0.57, long_edge_mm: 61.4 },
+    { sku_id: null, price_paise: null, reason: 'below_similarity', top1: 0.21, top2: 0.19, margin: 0.02, long_edge_mm: 44.0 },
+  ],
+};
+
+T('named items are priced, unnamed ones are AMBER and excluded from the total', () => {
+  const r = E.deriveRecognition(REC);
+  eq(r.known, true);
+  eq(r.items.length, 3);
+  eq(r.priced, 2);
+  eq(r.amber, 1);
+  eq(r.totalPaise, 3000, 'only the two named lines');
+  eq(r.totalRupees, '₹30.00');
+  eq(r.items[2].amber, true);
+  eq(r.items[2].pricePaise, null, 'an amber line has no price at all');
+  eq(r.items[0].amber, false);
+  measured.recognition_total = `${r.totalPaise} paise from ${r.priced} named, ${r.amber} amber excluded`;
+});
+
+T('THE AUDIT: a total that disagrees with its own lines shows NO total', () => {
+  // The desk says 9999; its own priced lines add to 3000. A UI that prints the
+  // desk's number is hiding the bug; a UI that prints its own is overruling the
+  // service. This one prints neither and names the disagreement.
+  const r = E.deriveRecognition({ ...REC, total_paise: 9999 });
+  eq(r.totalAgrees, false);
+  eq(r.totalPaise, null);
+  eq(r.totalRupees, null);
+  eq(r.serverTotalPaise, 9999);
+  eq(r.refusal.reason, E.ServiceRefusal.TOTAL_DISAGREES);
+  includes(r.refusal.detail, '9999');
+  includes(r.refusal.detail, '3000');
+  measured.total_audit = 'desk 9999 vs lines 3000 -> shop_total_disagrees_with_its_own_lines';
+});
+
+T('a desk that reports no total of its own is not treated as disagreeing', () => {
+  const noTotal = { ok: true, items: REC.items };
+  const r = E.deriveRecognition(noTotal);
+  eq(r.totalAgrees, true);
+  eq(r.totalPaise, 3000);
+  eq(r.serverTotalPaise, null);
+});
+
+T('a sku WITH a match but WITHOUT a usable price lands amber, never bills 0', () => {
+  const r = E.deriveRecognition({ items: [{ sku_id: 'x', name: 'X', reason: 'match', price_paise: null }] });
+  eq(r.items[0].amber, true);
+  eq(r.priced, 0);
+  eq(r.totalPaise, 0, 'the total of no named lines is zero paise, and it is honest');
+  const f = E.deriveRecognition({ items: [{ sku_id: 'x', name: 'X', reason: 'match', price_paise: 12.5 }] });
+  eq(f.items[0].amber, true, 'a float price is not money and cannot be billed');
+  eq(f.priced, 0);
+});
+
+T('a sku returned with a NON-match reason is amber even if it carries a price', () => {
+  // Belt and braces: the abstention lives in the reason, and a price arriving
+  // beside an abstention does not promote it to a sale.
+  const r = E.deriveRecognition({ items: [{ sku_id: 'x', name: 'X', reason: 'below_margin', price_paise: 500 }] });
+  eq(r.items[0].amber, true);
+  eq(r.priced, 0);
+  eq(r.totalPaise, 0);
+});
+
+T("every one of identity.py's four abstention reasons is explained to a shopkeeper", () => {
+  for (const code of E.RECOGNISE_ABSTAIN_CODES) {
+    const note = E.recogniseReasonNote(code);
+    ok(note.length > 60, `${code} has no usable explanation`);
+    excludes(note, 'unrecognised reason code', `${code} fell through to the unknown branch`);
+  }
+  eq(E.RECOGNISE_ABSTAIN_CODES.length, 4);
+  measured.recognise_reasons = E.RECOGNISE_ABSTAIN_CODES.join(',');
+});
+
+T('an unknown reason code gets NO invented prose', () => {
+  const note = E.recogniseReasonNote('vibes_were_off');
+  includes(note, 'unrecognised reason code');
+  includes(note, 'will not translate a code it does not know');
+  includes(E.recogniseReasonNote(''), 'nothing to explain');
+});
+
+T('the reason codes here are the reason codes gawaah/identity.py actually emits', () => {
+  // A rename on the Python side must break this test, not silently produce a
+  // panel that shows an untranslated code to a shopkeeper.
+  let py = null;
+  try { py = readFileSync(join(HERE, '..', '..', 'gawaah', 'identity.py'), 'utf8'); } catch { py = null; }
+  if (py === null) return;
+  const found = [];
+  for (const m of py.matchAll(/^REASON_[A-Z_]+ = "([a-z_]+)"$/gm)) found.push(m[1]);
+  ok(found.length >= 5, `expected 5 reason constants, found ${found.length}`);
+  for (const c of found) {
+    ok(Object.values(E.RecogniseReason).includes(c), `identity.py emits ${c}, this panel does not know it`);
+  }
+  measured.identity_reason_codes = found.join(',');
+});
+
+T('a recognition with no items array is BAD SHAPE', () => {
+  eq(E.deriveRecognition({ ok: true }).refusal.reason, E.ServiceRefusal.BAD_SHAPE);
+  eq(E.deriveRecognition(null).known, false);
+  eq(E.deriveRecognition(null).refusal, null, 'never asked is not a refusal');
+});
+
+// ==========================================================================
+G('S. derivePhoto — the photo flow abstains by name too (INVARIANT 7)');
+
+T('every declared photo abstention is REACHABLE from a state, with help text', () => {
+  // Not all five are cold states, and pretending they were would be the same
+  // dishonesty this test exists to prevent. `photo_desk_not_reached` needs a
+  // desk that actually failed, so each code is reached from ITS OWN state.
+  const states = {
+    [E.PhotoAbstain.CATALOG_UNKNOWN]: {},
+    [E.PhotoAbstain.NO_IMAGE]: {},
+    [E.PhotoAbstain.NO_CAMERA_CROP]: {},
+    [E.PhotoAbstain.NOTHING_TRIED]: {},
+    [E.PhotoAbstain.NO_SERVICE]: {
+      shopRefusal: { reason: E.ServiceRefusal.UNREACHABLE, detail: 'x', status: null },
+    },
+  };
+  for (const c of E.PHOTO_ABSTAIN_CODES) {
+    const p = E.deriveEnrol(states[c]).photo;
+    ok(p.abstentions.includes(c), `unreachable photo abstention: ${c}`);
+    ok(String(E.PHOTO_ABSTAIN_HELP[c]).length > 30, `${c} has no help text`);
+  }
+  measured.photo_abstentions_reachable = `${E.PHOTO_ABSTAIN_CODES.length}/${E.PHOTO_ABSTAIN_CODES.length}`;
+});
+
+T('a cold photo flow abstains on the four things it has not been told', () => {
+  const p = E.deriveEnrol({}).photo;
+  eq(p.abstentions.length, 4);
+  ok(!p.abstentions.includes(E.PhotoAbstain.NO_SERVICE),
+    'a desk that has not been ASKED has not FAILED, and must not be reported as unreachable');
+  measured.cold_photo_abstentions = p.abstentions.join(',');
+});
+
+T('the photo abstentions are SEPARATE from the brain abstentions', () => {
+  // Merging them would tell an operator to restart the wrong process.
+  const m = E.deriveEnrol({});
+  eq(m.abstentions.length, 4, 'the brain list is untouched by the photo flow');
+  for (const c of E.PHOTO_ABSTAIN_CODES) {
+    ok(!m.abstentions.includes(c), `${c} leaked into the brain abstention list`);
+  }
+  for (const c of E.ABSTAIN_CODES) {
+    ok(!m.photo.abstentions.includes(c), `${c} leaked into the photo abstention list`);
+  }
+});
+
+T('each photo abstention clears only when its own fact arrives', () => {
+  const p = E.deriveEnrol({
+    shop: { ok: true, skus: [] },
+    recognition: { ok: true, items: [] },
+    image: { kind: 'file', name: 'a.png', size: 10, type: 'image/png' },
+    cameraCrop: 'QUJDRA==',
+  }).photo;
+  eq(p.abstentions.length, 0, `still abstaining on: ${p.abstentions.join(',')}`);
+});
+
+T('the live paise preview is the integer that WILL be stored', () => {
+  const good = E.deriveEnrol({ typedPrice: '214.50' }).photo.preview;
+  eq(good.ok, true);
+  eq(good.paise, 21450);
+  eq(good.paiseText, '21450 paise');
+  eq(good.rupees, '₹214.50');
+  eq(good.wire, '214.50');
+  const bad = E.deriveEnrol({ typedPrice: '214.507' }).photo.preview;
+  eq(bad.ok, false);
+  eq(bad.paise, null);
+  eq(bad.reason, E.PriceRefusal.SUB_PAISE);
+  includes(bad.detail, 'NOT rounded');
+});
+
+// ==========================================================================
+G('T. the photo surface on screen');
+
+const FULL = () => E.deriveEnrol({
+  shop: {
+    ok: true,
+    skus: [{
+      sku_id: 'parle-g-100g', name: 'Parle-G 100g', price_paise: 1000,
+      footprint_mm: 38.19, photo_png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+    }],
+  },
+  recognition: REC,
+  typedPrice: '214.50',
+  image: { kind: 'file', name: 'a.png', size: 10, type: 'image/png' },
+  cameraCrop: 'QUJDRA==',
+});
+
+T('the catalogue row shows thumbnail, name, rupees AND paise, mm and a remove button', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const row = byClass(el, 'enrol-catalog-row');
+  const img = one(row, (e) => e.tagName === 'IMG', 'thumbnail');
+  ok(String(img.getAttribute('src')).startsWith('data:image/png;base64,'));
+  includes(img.getAttribute('alt'), 'Parle-G 100g');
+  includes(row.textContent, 'Parle-G 100g');
+  includes(row.textContent, '1000 paise');
+  includes(row.textContent, '₹10.00');
+  includes(row.textContent, '38.19 mm');
+  const rm = one(row, (e) => e.getAttribute('data-forget') === 'parle-g-100g', 'remove button');
+  eq(rm.textContent, 'remove');
+  measured.catalog_render = row.textContent.replace(/\s+/g, ' ').slice(0, 90);
+});
+
+T('an amber recognition line names its reason, explains it, and shows NO price', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const amber = byClassAll(el, 'enrol-try-amber');
+  eq(amber.length, 1);
+  const t = amber[0].textContent;
+  includes(t, 'AMBER — I DO NOT KNOW');
+  includes(t, 'below_similarity');
+  includes(t, 'has not been taught yet');
+  includes(t, 'EXCLUDED from the total');
+  excludes(t, '₹', 'an amber line must not carry a rupee figure at all');
+  ok(String(amber[0].className).split(/\s+/).includes('line-amber'),
+    'amber must wear the shell amber class, so it looks amber everywhere');
+});
+
+T('the TRY IT total names the paise, the rupees and what was excluded', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const tot = byClass(el, 'enrol-try-total');
+  includes(tot.textContent, '3000 paise');
+  includes(tot.textContent, '₹30.00');
+  includes(tot.textContent, '1 amber and EXCLUDED');
+  eq(tot.dataset.amber, '1');
+  eq(tot.dataset.priced, '2');
+});
+
+T('a disagreeing total renders NO total at all, only the named disagreement', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({ recognition: { ...REC, total_paise: 9999 } }), doc);
+  const bad = byClass(el, 'enrol-try-total-bad');
+  includes(bad.textContent, 'NO TOTAL IS SHOWN');
+  includes(bad.textContent, E.ServiceRefusal.TOTAL_DISAGREES);
+  eq(byClassAll(el, 'enrol-try-total').length, 0, 'no total element may be rendered');
+  excludes(bad.textContent, '₹99.99', 'the desk figure must not be printed as money');
+});
+
+T('REGRESSION: a disagreeing total still shows the LINES it disagrees about', () => {
+  // First cut of renderTryIt treated any recognition refusal as "replace the
+  // whole reading", so a total that failed its own audit deleted two perfectly
+  // good recognised lines from the screen. A footer that does not add up is a
+  // reason to withhold the FOOTER, not the reading.
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({ recognition: { ...REC, total_paise: 9999 } }), doc);
+  eq(byClassAll(el, 'enrol-try-row').length, 3, 'all three lines must survive');
+  includes(byClass(el, 'enrol-try-rows').textContent, 'Parle-G');
+  includes(byClass(el, 'enrol-try-total-bad').textContent, 'NO TOTAL IS SHOWN');
+  eq(byClassAll(el, 'enrol-try-total').length, 0);
+});
+
+T('the stylesheet names every structural class the photo flow renders', () => {
+  // A class that gets markup but no rule is an unstyled block in the browser
+  // and is invisible to every assertion in this file. Checked wholesale.
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const structural = [
+    'enrol-service', 'enrol-teach', 'enrol-catalog', 'enrol-try',
+    'enrol-thumb', 'enrol-catalog-row', 'enrol-try-row', 'enrol-preview',
+    'enrol-try-total', 'enrol-btn-forget', 'enrol-input-base',
+  ];
+  const missingMarkup = structural.filter((c) => byClassAll(el, c).length === 0);
+  eq(missingMarkup.length, 0, `never rendered: ${missingMarkup.join(', ')}`);
+  const missingRule = structural.filter((c) => !E.STYLE_TEXT.includes(`.${c}`));
+  eq(missingRule.length, 0, `rendered but unstyled: ${missingRule.join(', ')}`);
+  measured.photo_classes_styled = `${structural.length}/${structural.length}`;
+});
+
+T('TRY IT says on screen that a reading is not a bill', () => {
+  const doc = makeDoc();
+  const t = byClass(E.renderEnrol(FULL(), doc), 'enrol-try').textContent;
+  includes(t, 'this is a READING, not a bill');
+  includes(t, 'signature-verified webhook');
+  includes(t, 'EXCLUDED from the total');
+});
+
+T('TRY IT is placed immediately after the catalogue, ahead of the legacy sections', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const order = walk(el)
+    .filter((e) => ['enrol-teach', 'enrol-catalog', 'enrol-try', 'enrol-form'].some(
+      (c) => String(e.className).split(/\s+/).includes(c)))
+    .map((e) => String(e.className).split(/\s+/).find((c) => c.startsWith('enrol-')));
+  eq(order.join('>'), 'enrol-teach>enrol-catalog>enrol-try>enrol-form',
+    'teach, then the catalogue, then the payoff');
+  measured.panel_order = order.join(' > ');
+});
+
+T('the live paise preview is on screen before anything is uploaded', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const pv = byClass(el, 'enrol-preview-ok');
+  includes(pv.textContent, '21450 paise');
+  includes(pv.textContent, '₹214.50');
+  includes(pv.textContent, 'sent on the wire as 214.50');
+  eq(pv.dataset.paise, '21450');
+});
+
+T('a bad typed price paints the named refusal live, and no paise', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({ typedPrice: '214.507' }), doc);
+  const pv = byClass(el, 'enrol-preview-bad');
+  includes(pv.textContent, 'NO PAISE YET');
+  includes(pv.textContent, 'price_sub_paise');
+  includes(pv.textContent, 'NOT rounded');
+  excludes(pv.textContent, '21451', 'the rounded value must appear nowhere');
+  excludes(pv.textContent, '21450');
+});
+
+T('a cold photo surface renders every photo abstention code, never a blank', () => {
+  const doc = makeDoc();
+  const m = E.deriveEnrol({});
+  const t = E.renderEnrol(m, doc).textContent;
+  ok(m.photo.abstentions.length > 0);
+  for (const c of m.photo.abstentions) includes(t, c, `photo abstention ${c} not on screen`);
+  includes(t, 'I DO NOT KNOW');
+  measured.cold_photo_render_chars = String(t.length);
+});
+
+T('a dead desk renders a NAMED reason, not an empty catalogue', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({
+    shopRefusal: {
+      reason: E.ServiceRefusal.UNREACHABLE,
+      detail: E.SERVICE_REFUSAL_HELP[E.ServiceRefusal.UNREACHABLE],
+      status: null,
+    },
+  }), doc);
+  const box = byClass(el, 'enrol-desk-refused');
+  includes(box.textContent, 'THE DESK DID NOT ANSWER');
+  includes(box.textContent, E.ServiceRefusal.UNREACHABLE);
+  includes(box.textContent, 'tools/upload_app.py');
+  eq(byClassAll(el, 'enrol-catalog-rows').length, 0, 'no row list is drawn over a refusal');
+});
+
+T('a CSP-blocked desk says BLOCKED, not "down", and names the fix', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({
+    baseResolution: { ok: true, base: 'http://127.0.0.1:8790', source: 'default', typed: '' },
+    reach: E.describeReach('http://127.0.0.1:8790', { origin: 'http://127.0.0.1:8787' }, 'self'),
+  }), doc);
+  const csp = byClass(el, 'enrol-csp');
+  includes(csp.textContent, 'BLOCKED BY THIS PAGE');
+  includes(csp.textContent, 'connect-src');
+  includes(csp.textContent, 'permission, not an outage');
+  includes(csp.textContent, E.CROSS_ORIGIN_FIX);
+  includes(csp.textContent, E.ServiceRefusal.CSP_BLOCKED);
+});
+
+T('an unusable desk address is refused on screen with what was typed', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({
+    baseResolution: E.normaliseShopBase('javascript:alert(1)'),
+  }), doc);
+  const bad = byClass(el, 'enrol-base-bad');
+  includes(bad.textContent, 'REFUSED');
+  includes(bad.textContent, E.ServiceRefusal.BAD_BASE);
+  includes(bad.textContent, 'not http or https');
+});
+
+T('the camera button is disabled and says why when there is no crop', () => {
+  const doc = makeDoc();
+  const cold = E.renderEnrol(E.deriveEnrol({}), doc);
+  const btn = byId(cold, 'enrol-capture');
+  eq(btn.getAttribute('disabled'), 'disabled');
+  includes(btn.textContent, 'no crop yet');
+  includes(byClass(cold, 'enrol-nocrop').textContent, E.PhotoAbstain.NO_CAMERA_CROP);
+
+  const warm = E.renderEnrol(E.deriveEnrol({ cameraCrop: 'QUJDRA==' }), makeDoc());
+  eq(byId(warm, 'enrol-capture').getAttribute('disabled'), null);
+  includes(byClass(warm, 'enrol-crop-ready').textContent, 'INVARIANT 4');
+});
+
+T('a catalogue row with an unusable price shows no rupees and says it will abstain', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({
+    shop: { skus: [{ sku_id: 'x', name: 'X', price_paise: 10.5, footprint_mm: 40 }] },
+  }), doc);
+  const row = byClass(el, 'enrol-catalog-row');
+  includes(row.textContent, 'price_not_integer_paise');
+  includes(row.textContent, 'will abstain at the till');
+  excludes(row.textContent, '₹');
+});
+
+T('a refused thumbnail is stated, not silently blank', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(E.deriveEnrol({
+    shop: { skus: [{ sku_id: 'x', name: 'X', price_paise: 100, photo_png: 'http://evil/x.png' }] },
+  }), doc);
+  const none = byClass(el, 'enrol-thumb-none');
+  includes(none.textContent, E.ThumbRefusal.REMOTE_URL);
+  eq(all(el, (e) => e.tagName === 'IMG').length, 0, 'no img element is created for a refused thumb');
+});
+
+T('every rupee figure in the photo flow also wears .num', () => {
+  const doc = makeDoc();
+  const el = E.renderEnrol(FULL(), doc);
+  const rupees = all(el, (e) => e.childNodes.length === 1
+    && e.childNodes[0].nodeType === 3 && /^₹[\d,]+\.\d\d$/.test(e.childNodes[0].data));
+  ok(rupees.length >= 4, `expected at least 4 rupee figures, got ${rupees.length}`);
+  for (const r of rupees) {
+    ok(String(r.className).split(/\s+/).includes('num'), `a rupee figure without .num: ${r.textContent}`);
+  }
+  measured.photo_rupee_figures = String(rupees.length);
+});
+
+// ==========================================================================
+G('U. the panel end to end, against a fake desk');
+
+class FakeFormData {
+  constructor() { this.entries = []; }
+  append(k, v, n) { this.entries.push([k, v, n]); }
+  get(k) { const e = this.entries.find((x) => x[0] === k); return e ? e[1] : null; }
+}
+
+function fakeDesk(routes) {
+  const calls = [];
+  const f = async (url, init = {}) => {
+    const method = init.method || 'GET';
+    calls.push({ url, method, body: init.body });
+    const hit = routes[`${method} ${url}`];
+    if (hit === undefined) throw new TypeError('Failed to fetch');
+    return { status: hit.status ?? 200, text: async () => JSON.stringify(hit.body) };
+  };
+  f.calls = calls;
+  return f;
+}
+
+const DESK = 'http://127.0.0.1:8790';
+function mountPanel(routes, extra = {}) {
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc,
+    shopBase: DESK,
+    csp: 'open',
+    fetch: fakeDesk(routes),
+    FormData: FakeFormData,
+    toBlob: async (img) => ({ blob: img.kind }),
+    location: { origin: DESK, hostname: '127.0.0.1', protocol: 'http:', port: '8790', search: '' },
+    global: {},
+    ...extra,
+  });
+  panel.paint();
+  return { doc, panel, root: doc.getElementById(E.PANEL_ROOT_ID) };
+}
+
+const TAUGHT = {
+  ok: true,
+  skus: [{
+    sku_id: 'parle-g-100g', name: 'Parle-G 100g', price_paise: 21450,
+    footprint_mm: 38.19, photo_png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB',
+  }],
+};
+
+TA('THE ROUND TRIP: teach a product from a photo, then see it in the catalogue', async () => {
+  const { panel, root } = mountPanel({
+    [`POST ${DESK}/enrol`]: { body: { ok: true, stored: 'parle-g-100g' } },
+    [`GET ${DESK}/shop`]: { body: TAUGHT },
+  });
+  panel.handlers.onPick({ name: 'parle.png', size: 40000, type: 'image/png' });
+  const res = await panel.handlers.onTeach('Parle-G 100g', '214.50');
+  ok(res.ok, JSON.stringify(res.refusal || {}));
+
+  // the multipart body really carried the integer and the canonical rupees
+  eq(panel.model.photo.catalog.known, true);
+  eq(panel.model.photo.catalog.count, 1);
+  const row = byClass(root, 'enrol-catalog-row');
+  includes(row.textContent, 'Parle-G 100g');
+  includes(row.textContent, '21450 paise');
+  includes(row.textContent, '₹214.50');
+  includes(row.textContent, '38.19 mm');
+  measured.round_trip_row = row.textContent.replace(/\s+/g, ' ').trim().slice(0, 80);
+});
+
+TA('the upload really carries price_paise and a canonical price_rupees', async () => {
+  const fetchFn = fakeDesk({
+    [`POST ${DESK}/enrol`]: { body: { ok: true, skus: TAUGHT.skus } },
+  });
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc, shopBase: DESK, csp: 'open', fetch: fetchFn, FormData: FakeFormData,
+    toBlob: async () => ({ blob: 1 }), location: { origin: DESK, search: '' }, global: {},
+  });
+  panel.paint();
+  panel.handlers.onPick({ name: 'p.png', size: 100, type: 'image/png' });
+  await panel.handlers.onTeach('Parle-G 100g', ' Rs 214.5 ');
+  eq(fetchFn.calls.length, 1);
+  const form = fetchFn.calls[0].body;
+  eq(form.get('sku_id'), 'parle-g-100g');
+  eq(form.get('name'), 'Parle-G 100g');
+  eq(form.get('price_rupees'), '214.50', 'canonical, not the typed characters');
+  eq(form.get('price_paise'), '21450');
+  ok(form.get('image'), 'the photo itself was attached');
+  measured.upload_fields = form.entries.map((e) => e[0]).join(',');
+});
+
+TA('a REFUSED price never reaches the network at all', async () => {
+  const fetchFn = fakeDesk({ [`POST ${DESK}/enrol`]: { body: { ok: true } } });
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc, shopBase: DESK, csp: 'open', fetch: fetchFn, FormData: FakeFormData,
+    toBlob: async () => ({ blob: 1 }), location: { origin: DESK, search: '' }, global: {},
+  });
+  panel.paint();
+  panel.handlers.onPick({ name: 'p.png', size: 100, type: 'image/png' });
+  for (const bad of ['214.507', 'abc', '', '-5', '1e3', '0']) {
+    await panel.handlers.onTeach('Thing', bad);
+  }
+  eq(fetchFn.calls.length, 0, 'six refused prices, zero uploads');
+  const root = doc.getElementById(E.PANEL_ROOT_ID);
+  includes(byClass(root, 'enrol-refusal').textContent, 'price_zero');
+  measured.refused_prices_uploaded = '0/6';
+});
+
+TA('THE PAYOFF: a second photo is recognised, priced, and the amber is excluded', async () => {
+  const { panel, root } = mountPanel({
+    [`GET ${DESK}/shop`]: { body: TAUGHT },
+    [`POST ${DESK}/recognise`]: { body: REC },
+  });
+  panel.handlers.onTryPick({ name: 'second.png', size: 50000, type: 'image/png' });
+  const res = await panel.handlers.onTry();
+  ok(res.ok);
+  eq(panel.model.photo.recognition.priced, 2);
+  eq(panel.model.photo.recognition.amber, 1);
+  eq(panel.model.photo.recognition.totalPaise, 3000);
+  const tryEl = byClass(root, 'enrol-try');
+  includes(tryEl.textContent, 'Parle-G');
+  includes(tryEl.textContent, '₹30.00');
+  includes(tryEl.textContent, 'AMBER — I DO NOT KNOW');
+  includes(tryEl.textContent, 'below_similarity');
+  measured.payoff = `${panel.model.photo.recognition.priced} priced, ${panel.model.photo.recognition.amber} amber, total ${panel.model.photo.recognition.totalPaise} paise`;
+});
+
+TA('a DEAD desk degrades with a named reason and never a blank panel', async () => {
+  const { panel, root } = mountPanel({});   // every route throws
+  const res = await panel.handlers.onRefresh();
+  eq(res.ok, false);
+  eq(res.refusal.reason, E.ServiceRefusal.UNREACHABLE);
+  const box = byClass(root, 'enrol-desk-refused');
+  includes(box.textContent, E.ServiceRefusal.UNREACHABLE);
+  includes(box.textContent, 'Failed to fetch', 'the browser\'s own words are kept');
+  ok(root.textContent.length > 2000, 'the panel still rendered in full');
+  measured.dead_desk_render_chars = String(root.textContent.length);
+});
+
+TA('a desk that refuses BY NAME has its own reason shown, not a generic one', async () => {
+  const { panel, root } = mountPanel({
+    [`GET ${DESK}/shop`]: { status: 400, body: { ok: false, reason: 'mat_did_not_lock', detail: 'found 2 of 4 markers' } },
+  });
+  await panel.handlers.onRefresh();
+  const box = byClass(root, 'enrol-desk-refused');
+  includes(box.textContent, 'mat_did_not_lock');
+  includes(box.textContent, '2 of 4 markers');
+});
+
+TA('a CSP-blocked desk is never dialled at all', async () => {
+  const fetchFn = fakeDesk({ [`GET ${DESK}/shop`]: { body: TAUGHT } });
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc, shopBase: DESK, fetch: fetchFn, FormData: FakeFormData,
+    toBlob: async () => ({ blob: 1 }),
+    location: { origin: 'http://127.0.0.1:8787', hostname: '127.0.0.1', protocol: 'http:', port: '8787', search: '' },
+    global: {},
+  });
+  panel.paint();
+  eq(panel.reach.blocked, true);
+  const res = await panel.handlers.onRefresh();
+  eq(res.ok, false);
+  eq(res.refusal.reason, E.ServiceRefusal.CSP_BLOCKED);
+  eq(fetchFn.calls.length, 0, 'a call the browser would block is not attempted');
+  includes(byClass(doc.getElementById(E.PANEL_ROOT_ID), 'enrol-csp').textContent, 'permission, not an outage');
+});
+
+TA('removing an SKU calls DELETE with a percent-encoded id', async () => {
+  const fetchFn = fakeDesk({
+    [`GET ${DESK}/shop`]: { body: TAUGHT },
+    [`DELETE ${DESK}/shop/parle-g-100g`]: { body: { ok: true, skus: [] } },
+  });
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc, shopBase: DESK, csp: 'open', fetch: fetchFn, FormData: FakeFormData,
+    toBlob: async () => ({ blob: 1 }), location: { origin: DESK, search: '' }, global: {},
+  });
+  panel.paint();
+  await panel.handlers.onRefresh();
+  eq(panel.model.photo.catalog.count, 1);
+  await panel.handlers.onForget('parle-g-100g');
+  eq(panel.model.photo.catalog.count, 0);
+  ok(fetchFn.calls.some((c) => c.method === 'DELETE' && c.url === `${DESK}/shop/parle-g-100g`));
+});
+
+T('a Unicode SKU id is percent-encoded in the DELETE path', () => {
+  const id = E.skuIdFor('चाय');
+  ok(id.ok, 'a Devanagari name must survive into an id');
+  eq(id.skuId, 'चाय');
+  const r = E.buildRemoveRequest(id.skuId, DESK);
+  ok(r.ok);
+  eq(r.request.method, 'DELETE');
+  eq(r.request.url, `${DESK}/shop/${encodeURIComponent('चाय')}`);
+  ok(!r.request.url.includes('चाय'), 'the raw codepoints must not sit in the URL');
+  eq(E.buildRemoveRequest('', DESK).ok, false);
+  measured.unicode_sku_url = r.request.url;
+});
+
+T('an SKU id is a slug, and a name that slugs to nothing is refused', () => {
+  eq(E.skuIdFor('Parle-G 100g').skuId, 'parle-g-100g');
+  eq(E.skuIdFor('  Tata   Salt  ').skuId, 'tata-salt');
+  eq(E.skuIdFor('...').ok, false, 'a name of punctuation is not an id');
+  eq(E.skuIdFor('').ok, false);
+});
+
+TA('the camera crop arrives on a frame message and becomes a teachable source', async () => {
+  const { panel, root } = mountPanel({
+    [`POST ${DESK}/enrol`]: { body: { ok: true, skus: TAUGHT.skus } },
+  });
+  eq(panel.cameraCrop, null);
+  includes(byClass(root, 'enrol-nocrop').textContent, E.PhotoAbstain.NO_CAMERA_CROP);
+
+  const consumed = panel.onState({ type: 'frame', rect: 'QUJDRA==', ts: 'now' });
+  eq(consumed, true, 'a frame must be consumed for its rectified crop');
+  eq(panel.cameraCrop, 'QUJDRA==');
+  const choice = panel.handlers.onCapture();
+  eq(choice.kind, E.RECTIFIED_CROP_KIND);
+  const res = await panel.handlers.onTeach('Camera Thing', '10');
+  ok(res.ok, JSON.stringify(res.refusal || {}));
+  measured.camera_teach = 'rectified_mat_crop uploaded';
+});
+
+T('INVARIANT 4: a frame message contributes ONLY its rectified crop', () => {
+  const doc = makeDoc();
+  const panel = E.createPanel({ doc, location: { origin: DESK, search: '' }, global: {} });
+  panel.paint();
+  panel.onState({
+    type: 'frame', rect: 'QUJDRA==',
+    raw_frame: 'THE WHOLE ROOM', full_frame: 'FACES',
+  });
+  eq(panel.cameraCrop, 'QUJDRA==');
+  const t = doc.getElementById(E.PANEL_ROOT_ID).textContent;
+  excludes(t, 'THE WHOLE ROOM', 'a raw frame must not be retained anywhere');
+  excludes(t, 'FACES');
+  eq(panel.model.photo.cameraCrop, 'QUJDRA==');
+});
+
+T('a frame with no rect is not consumed and invents no crop', () => {
+  const doc = makeDoc();
+  const panel = E.createPanel({ doc, location: { origin: DESK, search: '' }, global: {} });
+  panel.paint();
+  eq(panel.onState({ type: 'frame' }), false);
+  eq(panel.cameraCrop, null);
+});
+
+TA('pointing at a new desk drops the old catalogue rather than relabelling it', async () => {
+  const { panel } = mountPanel({ [`GET ${DESK}/shop`]: { body: TAUGHT } });
+  await panel.handlers.onRefresh();
+  eq(panel.model.photo.catalog.count, 1);
+  panel.handlers.onBase('http://other.desk:9999');
+  eq(panel.model.photo.catalog.known, false, 'the old shop must not be shown under a new address');
+  eq(panel.shopBase.base, 'http://other.desk:9999');
+});
+
+TA('no fetch in the runtime is a named refusal, not a thrown panel', async () => {
+  const doc = makeDoc();
+  const panel = E.createPanel({
+    doc, shopBase: DESK, csp: 'open', fetch: null,
+    location: { origin: DESK, search: '' }, global: {},
+  });
+  panel.paint();
+  const res = await panel.handlers.onRefresh();
+  eq(res.ok, false);
+  eq(res.refusal.reason, E.ServiceRefusal.NO_FETCH);
+});
+
+// ==========================================================================
+G('V. the money discipline holds across the new code');
+
+T('the photo flow does no float arithmetic on money either', () => {
+  // The same source lint as section B, extended over the whole file: no
+  // toFixed, parseFloat or Math.round may appear on any line that mentions
+  // paise, anywhere in this module.
+  const codeOnly = ENROL_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const offenders = [];
+  for (const line of codeOnly.split('\n')) {
+    if (!/[Pp]aise/.test(line)) continue;
+    for (const f of ['parseFloat', 'toFixed', 'Math.round', 'Number.parseFloat']) {
+      if (line.includes(f)) offenders.push(`${f}: ${line.trim()}`);
+    }
+  }
+  eq(offenders.length, 0, `float arithmetic near money: ${offenders.join(' | ')}`);
+  measured.money_lines_with_float = '0';
+});
+
+T('millimetres are allowed a float, and are never confused with money', () => {
+  // gawaah/identity.py: "nothing here touches money, so plain floats are
+  // correct". A length is not a price and formatMm is not formatPaise.
+  eq(E.formatMm(38.185), '38.19 mm');
+  eq(E.formatPaise(38.185), '—', 'a non-integer is never rendered as money');
+  ok(!String(E.formatMm(38.19)).includes('₹'));
+});
+
+T('the total is integer addition of integer paise and nothing else', () => {
+  const r = E.deriveRecognition({
+    items: [
+      { sku_id: 'a', reason: 'match', price_paise: 1 },
+      { sku_id: 'b', reason: 'match', price_paise: 2 },
+      { sku_id: 'c', reason: 'match', price_paise: 3 },
+    ],
+  });
+  eq(r.totalPaise, 6);
+  ok(Number.isInteger(r.totalPaise));
+  eq(r.totalRupees, '₹0.06');
+});
+
+// every async test must have finished before a single number is printed
+await Promise.all(pending);
 
 // ============================================================== report =====
 console.log('\n──────────────────────────────────────────────────────────────');

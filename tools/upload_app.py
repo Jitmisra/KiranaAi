@@ -112,6 +112,7 @@ R_EMPTY_GALLERY = "nothing_enrolled_yet"
 R_UNKNOWN_SKU = "sku_not_enrolled"
 R_IDENTITY = "identity_refused"
 R_NO_PRICE = "sku_matched_but_no_price"
+R_REFERENCE_REQUIRED = "empty_mat_reference_required"
 
 #: The gates identity uses. Named here so /health can publish them and so the
 #: page can show the number a refusal was measured against. INVARIANT 7 says
@@ -811,13 +812,20 @@ def parse_multipart(raw: bytes, content_type: str) -> dict[str, Part]:
     Later parts with a duplicate name win, which matches how a browser replays a
     re-submitted form field.
     """
-    ctype = (content_type or "").lower()
+    raw_ctype = content_type or ""
+    ctype = raw_ctype.lower()
     if "multipart/form-data" not in ctype or "boundary=" not in ctype:
         raise UploadRefused(
             R_BAD_MULTIPART,
             "Expected multipart/form-data with a boundary. The page sends a "
             "FormData; from a shell use curl -F image=@photo.jpg -F sku_id=... ")
-    boundary = ctype.split("boundary=", 1)[1].split(";")[0].strip().strip('"')
+    # The boundary is taken from the ORIGINAL header, not the lower-cased copy.
+    # Boundaries are case-sensitive and real ones carry upper-case letters
+    # (curl's are base64-ish, browsers' contain a mixed-case nonce), so lowering
+    # the whole header makes the separator never match, every part is dropped
+    # and the request looks like a form somebody forgot to fill in.
+    cut = ctype.index("boundary=") + len("boundary=")
+    boundary = raw_ctype[cut:].split(";")[0].strip().strip('"')
     sep = b"--" + boundary.encode()
 
     out: dict[str, Part] = {}
@@ -860,7 +868,14 @@ async def read_form(request: Request) -> dict[str, Any]:
     float-is-not-money holds at the API.
     """
     raw = await request.body()
-    ctype = (request.headers.get("content-type") or "").lower()
+    # The ORIGINAL header is kept for parse_multipart, which needs the boundary
+    # with its case intact; only a lower-cased COPY is used for the type checks.
+    # Passing the lower-cased header down was a real bug that no test here could
+    # catch: httpx builds its boundary out of lower-case hex, so lower-casing it
+    # is a no-op and TestClient passed happily, while `curl -F` (mixed-case
+    # boundary) silently delivered a form with every field missing.
+    raw_ctype = request.headers.get("content-type") or ""
+    ctype = raw_ctype.lower()
     if "application/json" in ctype:
         import json
         try:
@@ -870,7 +885,14 @@ async def read_form(request: Request) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise UploadRefused(R_BAD_MULTIPART, "JSON body must be an object")
         return {"_kind": "json", **data}
-    return {"_kind": "multipart", "_parts": parse_multipart(raw, ctype)}
+    if "application/x-www-form-urlencoded" in ctype:
+        # What an HTTP client sends for a form with no file in it. It cannot
+        # carry an image, so /enrol will still refuse for a MISSING IMAGE rather
+        # than for the encoding -- which is the refusal the caller can act on.
+        from urllib.parse import parse_qsl
+        return {"_kind": "json",
+                **dict(parse_qsl(raw.decode("utf-8", "replace")))}
+    return {"_kind": "multipart", "_parts": parse_multipart(raw, raw_ctype)}
 
 
 def form_value(form: dict[str, Any], name: str) -> Any:
@@ -1046,21 +1068,17 @@ def deps_status() -> dict[str, Any]:
     return out
 
 
-def _field(rec: Any, *names: str, default: Any = None) -> Any:
-    """Read one field off a store record, whether it is an object or a dict.
+def _stored_thumb(store: Any, sku_id: str) -> Optional[str]:
+    """The enrolment photo the store kept, as base64 PNG, or None.
 
-    gawaah/shop_store.py is written by another pair of hands against a written
-    contract, and the contract fixes the METHODS but not whether .all() yields
-    dataclasses or dicts. Reading both ways here costs six lines and means a
-    reasonable choice on that side cannot break this page.
+    The catalog on disk holds a PATH and a byte count, never the pixels, so the
+    picture is read back here only when the page asks for it.
     """
-    for n in names:
-        if isinstance(rec, dict):
-            if n in rec:
-                return rec[n]
-        elif hasattr(rec, n):
-            return getattr(rec, n)
-    return default
+    try:
+        data = store.photo_bytes(sku_id)
+    except Exception:
+        return None
+    return None if not data else base64.b64encode(data).decode()
 
 
 # --------------------------------------------------------------- the crop
@@ -1136,10 +1154,29 @@ SAMPLE_PRODUCTS: tuple[SampleProduct, ...] = (
                   "3.00", (85, 160, 65), (245, 245, 245), "dot"),
 )
 
-#: Same size and same palette as parle_g_biscuit; only the layout differs.
+#: THE 180-DEGREE TWIN. Same size and same palette as parle_g_biscuit, and its
+#: cap is at the BOTTOM instead of the top -- which is the one difference this
+#: pipeline provably cannot see. Placement reports angle_deg in [0, 180), so a
+#: packet laid head-up and the same packet laid head-down produce the SAME
+#: measured angle and therefore crops that differ by a 180 degree turn. A
+#: descriptor that separated these two would be WORSE, not better: it would
+#: report a different identity for one product depending on which way round the
+#: shopkeeper happened to put it down. Measured: this pair scores 0.9986, and
+#: parle_g against its own 180-degree rotation scores 0.9980 -- the same number,
+#: because it is the same observation. The collision guard refuses this
+#: enrolment, which is the correct and only safe answer.
 HARD_PAIR_PRODUCT = SampleProduct(
-    "jeera_biscuit", "Jeera biscuit 100g", 60.0, 95.0,
+    "jeera_biscuit", "Jeera biscuit 100g (180-degree twin)", 60.0, 95.0,
     "12.00", (60, 190, 235), (110, 60, 35), "cap_bottom")
+
+#: THE LAYOUT TWIN. Also the same size and the same two colours as
+#: parle_g_biscuit, but its layout is NOT a rotation of it. This is the pair
+#: that shows what the descriptor can genuinely do: measured 0.4643, below the
+#: 0.55 similarity gate, so the two are separable and both enrol cleanly. A
+#: global colour histogram would score these two at essentially 1.0.
+LAYOUT_TWIN_PRODUCT = SampleProduct(
+    "glucose_biscuit", "Glucose biscuit 100g (layout twin)", 60.0, 95.0,
+    "14.00", (60, 190, 235), (110, 60, 35), "dot")
 
 #: Never enrolled by the demo. Same footprint as parle_g_biscuit on purpose.
 INTRUDER_PRODUCT = SampleProduct(
@@ -1147,7 +1184,8 @@ INTRUDER_PRODUCT = SampleProduct(
     "0.00", (150, 60, 130), (40, 170, 240), "dot")
 
 PRODUCTS_BY_ID = {p.sku_id: p for p in
-                  SAMPLE_PRODUCTS + (HARD_PAIR_PRODUCT, INTRUDER_PRODUCT)}
+                  SAMPLE_PRODUCTS + (HARD_PAIR_PRODUCT, LAYOUT_TWIN_PRODUCT,
+                                     INTRUDER_PRODUCT)}
 
 
 def render_product(p: SampleProduct, px_per_mm: float) -> np.ndarray:
@@ -1245,6 +1283,26 @@ def scene_png(poses: list[Pose], seed: int = 11) -> bytes:
     return buf.tobytes()
 
 
+def scene_png_and_reference(poses: list[Pose], seed: int = 11
+                            ) -> tuple[bytes, Optional[np.ndarray]]:
+    """The simulated photo AND the rectified empty-mat buffer that goes with it.
+
+    A real shopkeeper shoots the empty mat once and POSTs it to /reference; the
+    demo has that frame for free, so it uses it. This is not the demo being
+    kinder to itself than reality — it is the demo doing the thing the tool
+    already asks a real user to do, and reporting reference_source so which one
+    was used is never in doubt.
+    """
+    loaded, empty = product_scene(poses, seed)
+    ok, buf = cv2.imencode(".png", loaded)
+    if not ok:
+        raise UploadRefused(R_INTERNAL, "could not encode the simulated scene")
+    eng = PlaneEngine()
+    elock = eng.detect(empty)
+    ref = eng.rectify(empty, elock.H) if elock.locked else None
+    return buf.tobytes(), ref
+
+
 def enrol_pose(p: SampleProduct, seed: int = 11) -> list[Pose]:
     """One product alone, mid-mat, square on — an enrolment photograph."""
     return [(p, MAT_W_MM / 2.0, MAT_H_MM / 2.0, 0.0)]
@@ -1252,7 +1310,8 @@ def enrol_pose(p: SampleProduct, seed: int = 11) -> list[Pose]:
 
 # ------------------------------------------------------- measure the scene
 
-def _rectify_and_place(bgr: np.ndarray, *, settle_frames: int = 6
+def _rectify_and_place(bgr: np.ndarray, *, settle_frames: int = 6,
+                       reference: Optional[np.ndarray] = None
                        ) -> tuple[np.ndarray, list[Any], dict[str, Any]]:
     """Lock -> rectify -> placements. Raises UploadRefused with the diagnosis.
 
@@ -1270,9 +1329,14 @@ def _rectify_and_place(bgr: np.ndarray, *, settle_frames: int = 6
         raise exc
 
     rect = eng.rectify(bgr, lock.H)
-    ref = _REFERENCE["buffer"]
+    ref = reference if reference is not None else _REFERENCE["buffer"]
     ref_source = "empty_mat_photo_supplied"
     if ref is None:
+        # Without a real empty-mat photo the printed design is synthesised, and
+        # it does NOT cancel perfectly: the 20 mm scale patch and the exit arrow
+        # leave residue that segments as small blobs. They are reported, and
+        # they abstain honestly rather than being filtered away by size --
+        # silently dropping small blobs would also drop a genuine sachet.
         ref = synthesised_reference(lock.H, bgr.shape)
         ref_source = "synthesised_from_printed_design"
 
@@ -1325,10 +1389,14 @@ def _body_image(raw: bytes, content_type: str) -> bytes:
     python-multipart is not installed here, so the one part is unwrapped by hand
     rather than adding a dependency for a demo tool.
     """
-    ctype = (content_type or "").lower()
+    raw_ctype = content_type or ""
+    ctype = raw_ctype.lower()
     if "multipart/form-data" not in ctype or "boundary=" not in ctype:
         return raw
-    boundary = ctype.split("boundary=", 1)[1].split(";")[0].strip().strip('"')
+    # Case-sensitive: see parse_multipart. Lower-casing the boundary here made
+    # `curl -F` uploads silently arrive empty.
+    cut = ctype.index("boundary=") + len("boundary=")
+    boundary = raw_ctype[cut:].split(";")[0].strip().strip('"')
     sep = b"--" + boundary.encode()
     parts = [p for p in raw.split(sep) if p not in (b"", b"--", b"--\r\n", b"\r\n")]
     for part in parts:
@@ -1399,6 +1467,13 @@ def health() -> JSONResponse:
         "reference_at": _REFERENCE["at"],
         "opencv": cv2.__version__,
         "money": "none — this service cannot price, bill or mark anything GREEN",
+        # The two injected pieces the enrol/recognise path needs. Reported
+        # rather than assumed, so a page that cannot teach says WHY instead of
+        # rendering an empty catalog that looks like an empty shop.
+        "dependencies": deps_status(),
+        "identity_gates": {"theta": THETA, "phi": PHI, "tau_mm": TAU_MM},
+        "model_weights": "none — invariant 3; the descriptor is classical cv2",
+        "store_dir": str(store_dir()),
     })
 
 
@@ -1517,7 +1592,8 @@ def _valid_name(name: str) -> str:
 
 
 def do_enrol(raw: bytes, sku_id: str, name: str, price_paise: int,
-             *, force: bool = False) -> dict[str, Any]:
+             *, force: bool = False,
+             reference: Optional[np.ndarray] = None) -> dict[str, Any]:
     """One photo + a name + a price -> one SKU the counter can price.
 
     The order is deliberate: the mat locks first, the item is MEASURED first,
@@ -1530,7 +1606,33 @@ def do_enrol(raw: bytes, sku_id: str, name: str, price_paise: int,
     store = load_store()
 
     bgr, note = decode_upload(raw)
-    rect, placements, lock_info = _rectify_and_place(bgr)
+    rect, placements, lock_info = _rectify_and_place(bgr, reference=reference)
+
+    # TEACHING REQUIRES AN HONEST BACKGROUND, and this is not fussiness.
+    #
+    # Without a real empty-mat photo the background is SYNTHESISED from the
+    # printed design, and it does not cancel perfectly: the mat's own 20 mm
+    # scale patch and its exit arrow survive as small blobs. Enrolment takes the
+    # LARGEST blob, so on a mat with nothing on it the largest blob is the mat's
+    # own printing -- and it was measured here doing exactly that, teaching the
+    # scale patch as a 21.0 mm product and then confidently billing it at the
+    # price the operator typed.
+    #
+    # A mis-taught SKU is permanent and produces a confident WRONG PRICE for
+    # ever after, which is the one outcome this whole system exists to prevent.
+    # Recognition is allowed to run without a reference because its mistakes are
+    # transient and abstain safely; enrolment is not, because its mistakes do
+    # not. One extra photograph, once, is a cheap price for that.
+    if lock_info["reference_source"] != "empty_mat_photo_supplied":
+        raise UploadRefused(
+            R_REFERENCE_REQUIRED,
+            "Teaching needs a photograph of the EMPTY mat first. Without one "
+            "the background is synthesised from the printed design and does not "
+            "cancel exactly, so the mat's own printed scale patch and arrow are "
+            "indistinguishable from a small product — and the largest blob on "
+            "an empty mat is the mat itself. Shoot the mat with nothing on it, "
+            "POST it to /reference (the SET EMPTY-MAT REFERENCE button), then "
+            "teach.")
 
     usable = [p for p in placements
               if p.measurable and p.long_edge_mm and p.area_mm2]
@@ -1600,14 +1702,19 @@ def do_enrol(raw: bytes, sku_id: str, name: str, price_paise: int,
             f"disambiguating photo — a different face of the packet — or give "
             f"them genuinely different sizes.")
 
-    try:
-        store.add_sku(sku_id, name, int(price_paise), [vector.tolist()],
-                      footprint_mm, photo_png=_thumb_png(crop))
-    except TypeError:
-        # The photo is a convenience, not a requirement. If the store's
-        # signature does not take one, the SKU is still worth storing.
-        store.add_sku(sku_id, name, int(price_paise), [vector.tolist()],
-                      footprint_mm)
+    # The crop goes in as an ndarray: ShopStore downscales and re-encodes it
+    # itself, so encoding here just to have it decoded again would be waste.
+    result = store.add_sku(sku_id, name, int(price_paise), [vector],
+                           footprint_mm, photo_png=crop)
+    if not result.ok:
+        # The store runs its own collision guard with the same thresholds. If it
+        # refuses after we cleared the item, the two disagree and that is a bug
+        # worth surfacing loudly, not papering over.
+        raise UploadRefused(
+            R_COLLISION if result.collides_with else result.reason,
+            f"{result.message or result.reason}"
+            + (f" (colliding with {result.collides_with!r})"
+               if result.collides_with else ""))
 
     return {
         "ok": True,
@@ -1635,11 +1742,16 @@ def do_enrol(raw: bytes, sku_id: str, name: str, price_paise: int,
             "vector_dim": int(vector.shape[0]),
             "replaced_existing": bool(replaced),
             "embed_ms": embed_ms,
+            "store_action": result.action,
+            "store_reason": result.reason,
+            "photo_action": result.photo_action,
+            "photo_bytes": int(result.photo_bytes),
+            "previous_price_paise": result.previous_price_paise,
         },
         "collision": verdict,
         "forced": bool(force and collision.collides),
         "crop_png": _thumb_png(crop, 220),
-        "catalog_size": len(store.to_gallery()),
+        "catalog_size": len(store),
         "input": note,
         "source_image_returned": False,
         "gates": {"theta": THETA, "phi": PHI, "tau_mm": TAU_MM},
@@ -1675,7 +1787,8 @@ def _draw_recognition(rect: np.ndarray, rows: list[dict[str, Any]]) -> np.ndarra
     return vis
 
 
-def do_recognise(raw: bytes) -> dict[str, Any]:
+def do_recognise(raw: bytes, *,
+                 reference: Optional[np.ndarray] = None) -> dict[str, Any]:
     """Every item on the mat, named or honestly refused, and a total.
 
     The total is the sum of the items that were NAMED. Amber items are listed,
@@ -1688,7 +1801,7 @@ def do_recognise(raw: bytes) -> dict[str, Any]:
 
     bgr, note = decode_upload(raw)
     gallery = store.to_gallery()
-    rect, placements, lock_info = _rectify_and_place(bgr)
+    rect, placements, lock_info = _rectify_and_place(bgr, reference=reference)
 
     ident = Identifier(gallery, embed, theta=THETA, phi=PHI, tau_mm=TAU_MM)
 
@@ -1771,10 +1884,14 @@ def do_recognise(raw: bytes) -> dict[str, Any]:
         rec = store.get(res.sku_id)
         base.update({
             "sku_id": res.sku_id,
-            "name": _field(rec, "name", default=res.sku_id),
+            "name": getattr(rec, "name", res.sku_id) if rec else res.sku_id,
             "price_paise": int(price),
             "price_rupees": rupees_str(int(price)),
-            "enrolled_footprint_mm": _field(rec, "footprint_mm"),
+            "enrolled_footprint_mm": (
+                round(float(rec.footprint_mm), 2) if rec else None),
+            "footprint_delta_mm": (
+                round(abs(float(rec.footprint_mm) - float(p.long_edge_mm)), 2)
+                if rec else None),
         })
         total += int(price)
         rows.append(base)
@@ -1877,25 +1994,25 @@ async def recognise_ep(request: Request) -> JSONResponse:
 def catalog() -> dict[str, Any]:
     store = load_store()
     gallery = store.to_gallery()
-    prices = store.price_book()
+    prices = store.price_map()
     rows = []
     for sku_id in gallery.skus():
-        rec = store.get(sku_id)
-        price = _field(rec, "price_paise", "price", default=None)
-        if price is None:
-            try:
-                price = prices[sku_id]
-            except Exception:
-                price = None
+        # to_gallery() and price_map() are two projections of one dict, so they
+        # cannot disagree about which SKUs exist. Reading the price through the
+        # map rather than the record keeps that guarantee load-bearing here: if
+        # they ever DID diverge, this page would show it as a missing price
+        # rather than quietly preferring one source.
+        price = prices.get(sku_id)
+        entry = gallery.get(sku_id)
         rows.append({
             "sku_id": sku_id,
-            "name": _field(rec, "name", default=sku_id),
+            "name": getattr(store.get(sku_id), "name", sku_id),
             "price_paise": None if price is None else int(price),
             "price_rupees": None if price is None else rupees_str(int(price)),
             "footprint_mm": round(float(gallery.footprint(sku_id)), 2),
-            "n_views": int(gallery.get(sku_id).n_views),
-            "vector_dim": int(gallery.get(sku_id).dim),
-            "thumb_png": _field(rec, "photo_png", "thumb_png", "photo"),
+            "n_views": int(entry.n_views),
+            "vector_dim": int(entry.dim),
+            "thumb_png": _stored_thumb(store, sku_id),
         })
     return {
         "ok": True,
@@ -1926,14 +2043,15 @@ def shop_ep() -> JSONResponse:
 def shop_delete_ep(sku_id: str) -> JSONResponse:
     try:
         store = load_store()
-        if sku_id not in store.to_gallery():
+        if sku_id not in store:
             raise UploadRefused(
                 R_UNKNOWN_SKU,
-                f"{sku_id!r} is not in the catalog. Nothing was removed.")
-        store.remove(sku_id)
-        return JSONResponse({"ok": True, "reason": "sku_removed",
+                f"{sku_id!r} is not in the catalog. Nothing was removed. "
+                f"Enrolled: {list(store.skus()) or 'nothing yet'}.")
+        removed = store.remove(sku_id)
+        return JSONResponse({"ok": bool(removed), "reason": "sku_removed",
                              "sku_id": sku_id, "settles_money": False,
-                             "count": len(store.to_gallery())})
+                             "count": len(store)})
     except UploadRefused as exc:
         return _refusal(exc, status=404 if exc.reason == R_UNKNOWN_SKU else 400)
     except Exception as exc:                                  # never a 500
@@ -1961,15 +2079,21 @@ async def demo_teach_ep(request: Request) -> JSONResponse:
         form = await read_form(request) if await request.body() else {"_kind": "json"}
     except UploadRefused:
         form = {"_kind": "json"}
+    # ?hard_pair=1 additionally offers the two twins, which are the interesting
+    # cases: the LAYOUT twin enrols cleanly (0.4643, separable) and the
+    # 180-DEGREE twin is REFUSED by the collision guard (0.9986, provably not
+    # separable). Both outcomes are correct and the demo shows both.
     hard = str(form_value(form, "hard_pair") or "").lower() in ("1", "true", "yes")
-    products = list(SAMPLE_PRODUCTS) + ([HARD_PAIR_PRODUCT] if hard else [])
+    products = list(SAMPLE_PRODUCTS) + (
+        [LAYOUT_TWIN_PRODUCT, HARD_PAIR_PRODUCT] if hard else [])
 
     taught: list[dict[str, Any]] = []
     for p in products:
-        png = scene_png(enrol_pose(p))
+        png, ref = scene_png_and_reference(enrol_pose(p))
         try:
             r = do_enrol(png, p.sku_id, p.name,
-                         price_to_paise(p.price_rupees), force=False)
+                         price_to_paise(p.price_rupees), force=False,
+                         reference=ref)
             taught.append({
                 "sku_id": p.sku_id, "ok": True,
                 "truth_long_mm": round(p.long_edge_mm, 2),
@@ -2013,8 +2137,8 @@ def demo_recognise_ep(intruder: str = "1", seed: int = 23) -> JSONResponse:
             if sku != INTRUDER_PRODUCT.sku_id
             or str(intruder).lower() in ("1", "true", "yes")
         ]
-        png = scene_png(poses, seed=int(seed))
-        res = do_recognise(png)
+        png, ref = scene_png_and_reference(poses, seed=int(seed))
+        res = do_recognise(png, reference=ref)
         res["simulated"] = True
         res["simulated_note"] = SIM_NOTE
         res["scene_truth"] = [
@@ -2024,6 +2148,7 @@ def demo_recognise_ep(intruder: str = "1", seed: int = 23) -> JSONResponse:
              "taught": p.sku_id != INTRUDER_PRODUCT.sku_id}
             for p, x, y, r in poses
         ]
+        res["scoring"] = score_against_truth(res)
         if res.get("overlay_png"):
             buf = cv2.imdecode(np.frombuffer(
                 base64.b64decode(res["overlay_png"]), np.uint8), cv2.IMREAD_COLOR)
@@ -2036,6 +2161,102 @@ def demo_recognise_ep(intruder: str = "1", seed: int = 23) -> JSONResponse:
                              "detail": f"{type(exc).__name__}: {exc}",
                              "items": [], "amber": [], "total_paise": 0},
                             status_code=400)
+
+
+def score_against_truth(res: dict[str, Any]) -> dict[str, Any]:
+    """Mark the demo's own homework, and publish the marks.
+
+    The simulated scene knows what is really on the mat, so the demo can check
+    itself — and the only version of that worth shipping is the one that reports
+    its own failures as loudly as its successes.
+
+    The verdict that matters is MIS-NAMED: an item that was never taught, given
+    a name and a price anyway. That is a confident wrong price, the one outcome
+    this whole system exists to prevent, and it is strictly worse than an
+    abstention. An untaught item that comes back amber is a CORRECT answer and
+    is counted as one.
+
+    Items are matched to truth by centre, in millimetres — the one quantity that
+    cannot be confused between items 90 mm apart. Matching by identity would let
+    the scorer grade itself on its own answer.
+    """
+    truth = res.get("scene_truth") or []
+    rows: list[dict[str, Any]] = []
+    unmatched = [i for i in res.get("items", [])
+                 if (i.get("measured") or {}).get("long_edge_mm") is not None]
+    for t in truth:
+        best, best_d = None, None
+        for it in unmatched:
+            c = it["measured"]["centre_mm"]
+            d = ((c[0] - t["centre_mm"][0]) ** 2
+                 + (c[1] - t["centre_mm"][1]) ** 2) ** 0.5
+            if best_d is None or d < best_d:
+                best, best_d = it, d
+        if best is None:
+            rows.append({"truth_sku": t["sku_id"], "verdict": "not_detected",
+                         "taught": t["taught"]})
+            continue
+        unmatched.remove(best)
+        got = best.get("sku_id")
+        if t["taught"]:
+            verdict = "correct" if got == t["sku_id"] else (
+                "mis_named" if got else "abstained_on_a_taught_item")
+        else:
+            verdict = "correctly_abstained" if got is None else "MIS_NAMED"
+        rows.append({
+            "truth_sku": t["sku_id"], "taught": t["taught"], "got_sku": got,
+            "verdict": verdict, "top1": best.get("top1"),
+            "reason": best.get("reason"),
+            "price_paise": best.get("price_paise"),
+            "centre_err_mm": round(best_d, 2),
+        })
+
+    mis = [r for r in rows if r.get("verdict") == "MIS_NAMED"]
+    return {
+        "rows": rows,
+        "correct": sum(1 for r in rows if r.get("verdict") == "correct"),
+        "correctly_abstained": sum(
+            1 for r in rows if r.get("verdict") == "correctly_abstained"),
+        "mis_named_untaught": len(mis),
+        "mis_priced_paise": sum(int(r.get("price_paise") or 0) for r in mis),
+        "honest": not mis,
+        "headline": (
+            "Every item was either named correctly or honestly refused."
+            if not mis else
+            f"{len(mis)} item(s) that were NEVER TAUGHT were named and priced "
+            f"anyway, adding {sum(int(r.get('price_paise') or 0) for r in mis)} "
+            f"paise that should not be in the total. This is a confident wrong "
+            f"price. The similarity gate phi={PHI} did not hold: "
+            + "; ".join(f"{r['truth_sku']} scored {r['top1']} as "
+                        f"{r['got_sku']}" for r in mis)
+            + ". The gate is NOT widened or narrowed to hide this — it belongs "
+              "to gawaah/identity.py and the descriptor to gawaah/embedder.py."),
+    }
+
+
+@app.post("/demo/reference")
+def demo_reference_ep() -> JSONResponse:
+    """Install the SIMULATED empty mat as the reference.
+
+    The real button takes a photograph of the operator's own empty mat. This is
+    the same act for someone who has neither mat nor camera, and it is the step
+    /enrol now insists on, so the mouse-only round trip still works end to end.
+    """
+    try:
+        _, empty = product_scene([], seed=11)
+        eng = PlaneEngine()
+        lock = eng.detect(empty)
+        if not lock.locked:
+            raise UploadRefused(str(lock.reason),
+                                "the simulated empty mat did not lock")
+        _REFERENCE["buffer"] = eng.rectify(empty, lock.H)
+        _REFERENCE["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        return JSONResponse({"ok": True, "reason": "reference_accepted",
+                             "simulated": True, "simulated_note": SIM_NOTE,
+                             "reference_at": _REFERENCE["at"],
+                             "settles_money": False})
+    except UploadRefused as exc:
+        return _refusal(exc)
 
 
 @app.get("/demo/photo")
@@ -2054,7 +2275,12 @@ def demo_photo_ep(sku: str = "parle_g_biscuit", seed: int = 11):
                     headers={"X-Gawaah-Simulated": "true"})
 
 
-PAGE = """<!doctype html><meta charset=utf-8>
+# A RAW string: the page carries JS regexes (\d, \.) and escaped quotes (\') that
+# must reach the browser verbatim. Without the r-prefix Python eats the
+# backslashes, \' collapses to ' and the catalog's REMOVE button emits broken
+# JavaScript -- a failure that is invisible in Python tests and fatal in a
+# browser, which is exactly why tests/test_upload_enrol.py asserts on it.
+PAGE = r"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>GAWAAH — upload an image</title>
 <style>
@@ -2099,12 +2325,101 @@ PAGE = """<!doctype html><meta charset=utf-8>
  .scroll{overflow-x:auto}
  h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);
     margin:0 0 10px;font-weight:650}
+ .step{border:1px solid var(--rule);border-radius:12px;padding:16px;margin-bottom:16px;
+   background:var(--card)}
+ .step>h3{margin:0 0 4px;font-size:16px;font-weight:680}
+ .step>.why{color:var(--dim);font-size:13px;margin:0 0 14px}
+ .money{border-left:3px solid var(--ok);background:#121a16}
+ input[type=text]{background:#0c0e12;border:1px solid #333a44;color:var(--fg);
+   border-radius:8px;padding:10px 12px;font:13px ui-monospace,Menlo,monospace;min-width:0}
+ input[type=text]:focus{outline:2px solid #3d6ea8}
+ .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;
+   margin-bottom:12px}
+ .fields label{display:flex;flex-direction:column;gap:5px;font:11px ui-monospace,Menlo,monospace;
+   color:var(--dim);letter-spacing:.05em;text-transform:uppercase}
+ .pill{display:inline-block;padding:3px 9px;border-radius:99px;font:11px ui-monospace,Menlo,monospace;
+   font-weight:700;letter-spacing:.04em}
+ .pill.ok{background:#16301f;color:var(--ok);border:1px solid #23503330}
+ .pill.amb{background:#31260f;color:var(--amb)}
+ .pill.bad{background:#331a16;color:var(--bad)}
+ .total{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+   border-top:2px solid var(--rule);margin-top:12px;padding-top:12px}
+ .total b{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+ .total span{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+ .thumb{width:52px;height:52px;object-fit:contain;background:#0b0d11;border-radius:6px;
+   border:1px solid var(--rule)}
+ .x{background:transparent;border:1px solid var(--rule);color:var(--bad);border-radius:6px;
+   padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer}
+ .muted{color:var(--dim);font-size:12.5px}
+ hr{border:0;border-top:1px solid var(--rule);margin:30px 0 22px}
 </style>
+<h1>GAWAAH — teach it a product, then let it price it</h1>
+<div class=lead>Photograph an item on the mat, give it a name and a price in rupees, and from
+then on this page recognises that item and prices it. The descriptor is classical OpenCV —
+colour, layout, edges and shape. <b>No model weights, anywhere, ever</b> (invariant 3).</div>
+
+<div class="banner money"><b>NOTHING HERE SETTLES MONEY.</b> Recognition only ever
+<i>proposes</i> a price. Only a signature-verified Razorpay webhook can mark a session GREEN.
+An item this page cannot name with confidence is shown AMBER with its reason and is
+<b>excluded from the total</b> — never priced by a guess.</div>
+
+<div id=deps></div>
+
+<div class=step>
+  <h3>1 &nbsp;Teach a product</h3>
+  <p class=why>One photo of the item alone on the mat. The mat locks, the item is measured in
+  millimetres, the largest placement is cropped and embedded, and the vector is stored against
+  your name and price. Price is converted to integer paise at this boundary and refused if it
+  is not exact — 214.507 is rejected, never rounded.</p>
+  <div class=fields>
+    <label>sku id<input type=text id=t_sku placeholder="parle_g_100g"></label>
+    <label>name<input type=text id=t_name placeholder="Parle-G biscuit 100g"></label>
+    <label>price in rupees<input type=text id=t_price placeholder="10.00" oninput="pricePreview()"></label>
+  </div>
+  <div id=refstate></div>
+  <div class=row>
+    <label class=g>SET EMPTY-MAT REFERENCE<input type=file accept="image/*" onchange="setRef(this)"></label>
+    <label class=f>CHOOSE A PHOTO<input type=file id=t_file accept="image/*" onchange="teachPick()"></label>
+    <button onclick="teach()">TEACH THIS PRODUCT</button>
+    <span class=sub id=t_hint>no file chosen</span>
+  </div>
+  <div class=row>
+    <span class=sub>no mat or camera? use a simulated photo:</span>
+    <button class=s onclick="demoTeach(false)">TEACH 3 SAMPLE PRODUCTS</button>
+    <button class=s onclick="demoTeach(true)">…AND BOTH HARD TWINS</button>
+    <button class=s onclick="grabDemoPhoto()">PUT A SAMPLE PHOTO IN THE FORM</button>
+  </div>
+  <div id=teachout></div>
+</div>
+
+<div class=step>
+  <h3>2 &nbsp;The catalog</h3>
+  <p class=why>Every product taught so far, with the price in rupees AND in the integer paise
+  actually stored, the footprint measured off the mat, and the crop the embedder saw.</p>
+  <div class=row><button class=s onclick="loadShop()">REFRESH</button></div>
+  <div id=shopout></div>
+</div>
+
+<div class=step>
+  <h3>3 &nbsp;Try it — a second photo</h3>
+  <p class=why>Upload a <i>different</i> photo, with the items somewhere else on the mat and
+  turned to another angle. Every item is measured, embedded and matched against the catalog.
+  Named items are priced and totalled; anything the gallery cannot place is AMBER with its
+  named reason and is left out of the total.</p>
+  <div class=row>
+    <label class=f>CHOOSE A PHOTO<input type=file id=r_file accept="image/*" onchange="tryIt()"></label>
+    <button class=s onclick="demoRecognise(true)">RECOGNISE A SIMULATED SCENE</button>
+    <button class=s onclick="demoRecognise(false)">…WITHOUT THE UNTAUGHT INTRUDER</button>
+  </div>
+  <div id=recout></div>
+</div>
+
+<hr>
 <h1>GAWAAH — drop an image in</h1>
-<div class=lead>Runs the real <code>PlaneEngine</code> and <code>PlacementDetector</code>.
-No camera, no printed mat, no phone needed. Uploaded bytes are measured and dropped —
-they are never stored and never sent back; only the rectified 840&times;1188 metric
-buffer leaves the process.</div>
+<div class=lead>The measurement tool on its own. Runs the real <code>PlaneEngine</code> and
+<code>PlacementDetector</code>. No camera, no printed mat, no phone needed. Uploaded bytes are
+measured and dropped — they are never stored and never sent back; only the rectified
+840&times;1188 metric buffer leaves the process.</div>
 <div class=row>
   <button onclick="runSample('')">TRY A SAMPLE</button>
   <label class=f>UPLOAD A PHOTO<input type=file id=f accept="image/*" onchange="send(this,'/analyse')"></label>
@@ -2246,6 +2561,310 @@ async function send(el,url){
   }
   render(r);
 }
+/* ==================================================== teach / catalog / try
+   The round trip. Every number rendered below came off the wire from the real
+   pipeline; nothing here recomputes a measurement or a price in the browser.  */
+
+const paiseFmt = p => (p==null ? '—' : '₹' + (Math.trunc(p/100)) + '.' + String(p%100).padStart(2,'0'));
+
+// Rupees -> integer paise, by STRING, never through a float. This mirrors
+// gawaah.money.from_rupees_str and exists only to preview what will be stored:
+// the server re-parses and is the authority, so a disagreement is a bug, not a
+// rounding difference. 214.507 fails the regex and is refused, never rounded.
+function toPaise(s){
+  s = String(s==null?'':s).trim();
+  if(!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  const [w, f=''] = s.split('.');
+  return parseInt(w||'0',10)*100 + parseInt((f+'00').slice(0,2),10);
+}
+
+function pricePreview(){
+  const raw = $('#t_price').value, p = toPaise(raw), el = $('#t_hint');
+  if(!raw){ el.className='sub'; el.textContent = fileName||'no file chosen'; return; }
+  if(p===null){ el.className='sub bad'; el.textContent = '"'+raw+'" is not an exact rupee amount — it will be REFUSED, not rounded'; return; }
+  if(p===0){ el.className='sub bad'; el.textContent = '0 paise is not a price'; return; }
+  el.className='sub ok'; el.textContent = 'stores as '+p+' paise ('+paiseFmt(p)+')';
+}
+
+let fileName = '';
+function teachPick(){
+  const f=$('#t_file').files[0];
+  fileName = f ? f.name : '';
+  if(f && !$('#t_sku').value) $('#t_sku').value = f.name.replace(/\.[^.]+$/,'').replace(/[^A-Za-z0-9_.-]+/g,'_').slice(0,64);
+  pricePreview();
+}
+
+// Whether an honest empty-mat background exists. Teaching REQUIRES one: without
+// it the mat's own printed scale patch is the largest blob on an empty mat and
+// would be taught as a product, then confidently priced.
+async function refState(){
+  let h='';
+  try{
+    const d = await (await fetch('/health')).json();
+    h = d.reference_loaded
+      ? '<div class=k><b>empty-mat reference</b><span class=ok>set at '+esc(d.reference_at)+' — teaching is enabled</span></div>'
+      : '<div class="card amb" style="margin-bottom:12px"><b>No empty-mat reference yet.</b> '
+        + 'Teaching is refused until there is one: without a photo of the bare mat the background is '
+        + 'synthesised from the printed design, it does not cancel exactly, and the mat&rsquo;s own scale '
+        + 'patch is the largest blob on an empty mat — it would be taught as a product and then priced. '
+        + '<button class=s style="margin-top:8px" onclick="demoRef()">USE A SIMULATED EMPTY MAT</button></div>';
+  }catch(e){ h=''; }
+  $('#refstate').innerHTML = h;
+}
+
+async function setRef(el){
+  if(!el.files||!el.files[0]) return;
+  const r = await post('/reference', el.files[0]);
+  el.value='';
+  $('#teachout').innerHTML = r.ok
+    ? '<div class="card ok">Empty-mat reference accepted at '+esc(r.reference_at)+'. You can teach now.</div>'
+    : refusalCard(r);
+  refState();
+}
+
+async function demoRef(){
+  const r = await post('/demo/reference', new FormData());
+  $('#teachout').innerHTML = r.ok
+    ? '<div class="card sim">A SIMULATED empty mat is now the reference. Teaching is enabled.</div>'
+    : refusalCard(r);
+  refState();
+}
+
+async function grabDemoPhoto(){
+  // Fetch a simulated enrolment photo and load it into the real file input, so
+  // the ordinary upload path can be exercised by someone with no mat at all.
+  // The matching simulated empty mat goes in as the reference too, because that
+  // is the step /enrol insists on and the point is a round trip that works.
+  await demoRef();
+  const sku = 'parle_g_biscuit';
+  const r = await fetch('/demo/photo?sku='+sku);
+  const b = await r.blob();
+  const dt = new DataTransfer();
+  dt.items.add(new File([b], sku+'_SIMULATED.png', {type:'image/png'}));
+  $('#t_file').files = dt.files;
+  $('#t_sku').value = sku; $('#t_name').value = 'Parle-G biscuit 100g';
+  $('#t_price').value = '10.00';
+  fileName = sku+'_SIMULATED.png';
+  pricePreview();
+  $('#teachout').innerHTML = '<div class="card sim">A SIMULATED photo is now in the form. '
+    + 'Press TEACH THIS PRODUCT to run the real enrol path on it.</div>';
+}
+
+function refusalCard(r){
+  const d = r.diagnosis||{};
+  let h = '<div class=card><div class="head amb">I DO NOT KNOW — '+esc(r.reason)+'</div>';
+  h += '<div>'+esc(r.detail||d.headline||'')+'</div>';
+  if(d.markers_found!=null)
+    h += '<div class=k style="margin-top:8px"><b>markers</b><span>'+d.markers_found+' of '+(d.markers_expected||4)+
+         (d.corners_missing&&d.corners_missing.length?' — missing '+esc(d.corners_missing.join(', ')):'')+'</span></div>';
+  if(d.fix&&d.fix.length){h+='<ul class=fix>';d.fix.forEach(f=>h+='<li>'+esc(f)+'</li>');h+='</ul>';}
+  h += '<div class=sub style="margin-top:10px">Nothing was stored and nothing was priced.</div></div>';
+  return h;
+}
+
+async function teach(){
+  const f = $('#t_file').files[0];
+  if(!f){ $('#teachout').innerHTML='<div class="card bad">Choose a photo first.</div>'; return; }
+  const fd = new FormData();
+  fd.append('image', f);
+  fd.append('sku_id', $('#t_sku').value);
+  fd.append('name', $('#t_name').value);
+  fd.append('price_rupees', $('#t_price').value);
+  $('#teachout').innerHTML = '<div class=card>locking the mat, measuring, embedding…</div>';
+  const r = await post('/enrol', fd);
+  if(!r.ok){ $('#teachout').innerHTML = refusalCard(r); loadShop(); return; }
+  const m=r.measured, s=r.stored, c=r.collision;
+  let h = '<div class=card><div class="head ok">TAUGHT — '+esc(s.sku_id)+'</div>';
+  h += '<div class=grid style="margin-top:10px">';
+  h += '<div><div class=k><b>measured long edge</b><span>'+m.long_edge_mm+' mm</span></div>'
+     + '<div class=k><b>short edge</b><span>'+m.short_edge_mm+' mm</span></div>'
+     + '<div class=k><b>angle on the mat</b><span>'+m.angle_deg+'°</span></div>'
+     + '<div class=k><b>candidates on the mat</b><span>'+m.candidates_considered+' (largest taken)</span></div>'
+     + '<div class=k><b>reference</b><span class="'+(r.reference_source==='empty_mat_photo_supplied'?'ok':'amb')+'">'+esc(r.reference_source)+'</span></div></div>';
+  h += '<div><div class=k><b>stored price</b><span class=ok>'+s.price_paise+' paise = ₹'+esc(s.price_rupees)+'</span></div>'
+     + '<div class=k><b>footprint stored</b><span>'+s.footprint_mm+' mm</span></div>'
+     + '<div class=k><b>vector</b><span>'+s.vector_dim+'-d, '+s.embed_ms+' ms</span></div>'
+     + '<div class=k><b>action</b><span>'+esc(s.store_action)+(s.replaced_existing?' (replaced)':'')+'</span></div>'
+     + '<div class=k><b>collision check</b><span class="'+(c.collides?'bad':'ok')+'">'+(c.collides?esc(c.message):'clear')+'</span></div></div>';
+  h += '</div>';
+  if(r.crop_png) h += '<div style="margin-top:12px"><div class=sub>the crop the embedder saw</div>'
+     + '<img class=thumb style="width:auto;height:120px;margin-top:6px" src="data:image/png;base64,'+r.crop_png+'"></div>';
+  h += '<div class=sub style="margin-top:10px">'+esc(r.money_note)+'</div></div>';
+  $('#teachout').innerHTML = h;
+  loadShop();
+}
+
+async function demoTeach(hard){
+  $('#teachout').innerHTML = '<div class=card>teaching from SIMULATED photos — running the real enrol path on each…</div>';
+  const fd = new FormData(); if(hard) fd.append('hard_pair','1');
+  const r = await post('/demo/teach', fd);
+  let h = '<div class="banner sim"><b>SIMULATED</b> — these scenes were rendered, not photographed. '
+        + 'The mat lock, the millimetres, the descriptor and the thresholds are the real ones.</div>';
+  h += '<div class=card><div class=scroll><table><tr><th>sku</th><th>result</th><th>truth</th>'
+     + '<th>measured</th><th>err</th><th>price</th></tr>';
+  (r.taught||[]).forEach(t=>{
+    if(t.ok){
+      h += '<tr><td>'+esc(t.sku_id)+'</td><td><span class="pill ok">TAUGHT</span></td>'
+         + '<td class=n>'+t.truth_long_mm+' mm</td><td class=n>'+t.measured_long_mm+' mm</td>'
+         + '<td class="n '+(t.err_long_mm<=1?'ok':'amb')+'">'+t.err_long_mm.toFixed(2)+'</td>'
+         + '<td class=n>'+paiseFmt(t.price_paise)+'</td></tr>';
+    } else {
+      h += '<tr><td>'+esc(t.sku_id)+'</td><td><span class="pill bad">REFUSED</span></td>'
+         + '<td colspan=4 class=bad>'+esc(t.reason)+' — '+esc(t.detail)+'</td></tr>';
+    }
+  });
+  h += '</table></div></div>';
+  $('#teachout').innerHTML = h;
+  loadShop();
+}
+
+async function loadShop(){
+  let r;
+  try{ r = await (await fetch('/shop')).json(); }
+  catch(e){ $('#shopout').innerHTML='<div class="card bad">catalog unreachable: '+esc(e)+'</div>'; return; }
+  if(!r.ok){ $('#shopout').innerHTML = refusalCard(r); return; }
+  if(!r.count){
+    $('#shopout').innerHTML = '<div class=card><div class=head>Nothing taught yet</div>'
+      + '<div class=sub>The catalog is empty, so recognition has nothing to compare against and '
+      + 'every item would be amber. Teach a product above.</div></div>';
+    return;
+  }
+  let h = '<div class=card><div class=scroll><table><tr><th></th><th>sku</th><th>name</th>'
+        + '<th>price</th><th>paise</th><th>footprint</th><th>views</th><th></th></tr>';
+  r.skus.forEach(s=>{
+    h += '<tr><td>'+(s.thumb_png?'<img class=thumb src="data:image/png;base64,'+s.thumb_png+'">':'—')+'</td>'
+       + '<td>'+esc(s.sku_id)+'</td><td>'+esc(s.name)+'</td>'
+       + '<td class=n>'+(s.price_rupees?'₹'+esc(s.price_rupees):'<span class=bad>none</span>')+'</td>'
+       + '<td class=n>'+(s.price_paise==null?'<span class=bad>—</span>':s.price_paise)+'</td>'
+       + '<td class=n>'+s.footprint_mm+' mm</td><td class=n>'+s.n_views+'</td>'
+       + '<td><button class=x onclick="removeSku(\''+esc(s.sku_id)+'\')">REMOVE</button></td></tr>';
+  });
+  h += '</table></div>';
+  h += '<div class=k style="margin-top:8px"><b>taught</b><span>'+r.count+' sku'+(r.count>1?'s':'')
+     + ', '+r.priced+' priced</span></div>';
+  h += '<div class=k><b>gates</b><span>φ '+r.gates.phi+' similarity · θ '+r.gates.theta
+     + ' margin · τ '+r.gates.tau_mm+' mm footprint</span></div></div>';
+  $('#shopout').innerHTML = h;
+}
+
+async function removeSku(sku){
+  await fetch('/shop/'+encodeURIComponent(sku), {method:'DELETE'});
+  loadShop();
+}
+
+function recogniseCard(r){
+  let h='';
+  if(r.simulated) h += '<div class="banner sim"><b>SIMULATED</b> — rendered, not photographed. '
+    + 'The lock, the millimetres, the descriptor, the thresholds and the total are all real.</div>';
+  if(!r.ok) return h + refusalCard(r);
+  h += '<div class=card><div class=scroll><table><tr><th>#</th><th>verdict</th><th>sku</th>'
+     + '<th>measured</th><th>top1</th><th>top2</th><th>margin</th><th>price</th></tr>';
+  (r.items||[]).forEach(it=>{
+    const named = it.sku_id!=null;
+    h += '<tr><td>'+it.id+'</td>'
+       + '<td><span class="pill '+(named?'ok':'amb')+'">'+(named?'NAMED':'AMBER')+'</span></td>'
+       + '<td>'+esc(named?it.sku_id:(it.top1_sku?it.top1_sku+' ?':'—'))+'</td>'
+       + '<td class=n>'+(it.measured.long_edge_mm==null?'—':it.measured.long_edge_mm+' mm')+'</td>'
+       + '<td class=n>'+(it.top1==null?'—':it.top1)+'</td>'
+       + '<td class=n>'+(it.top2==null?'—':it.top2)+'</td>'
+       + '<td class=n>'+(it.margin==null?'—':it.margin)+'</td>'
+       + '<td class="n '+(named?'ok':'amb')+'">'+(named?paiseFmt(it.price_paise):'excluded')+'</td></tr>';
+    if(!named) h += '<tr><td></td><td colspan=7 class=amb style="padding-top:0">'
+       + '<b>'+esc(it.reason)+'</b> — '+esc(it.explain||'')+'</td></tr>';
+  });
+  h += '</table></div>';
+  h += '<div class=total><b>total — named items only</b><span class=ok>'+paiseFmt(r.total_paise)+'</span></div>';
+  h += '<div class=k><b>integer paise</b><span>'+r.total_paise+'</span></div>';
+  h += '<div class=k><b>excluded</b><span class="'+(r.excluded_count?'amb':'ok')+'">'+r.excluded_count
+     + ' amber item'+(r.excluded_count===1?'':'s')
+     + (r.amber_reasons&&r.amber_reasons.length?' — '+esc(r.amber_reasons.join(', ')):'')+'</span></div>';
+  h += '<div class=k><b>catalog</b><span>'+r.catalog_size+' taught</span></div>';
+  h += '<div class=k><b>elapsed</b><span>'+r.elapsed_ms+' ms</span></div>';
+  h += '<div class=sub style="margin-top:10px">'+esc(r.money_note||'')+'</div></div>';
+  if(r.scoring){
+    // The demo marks its own homework and shows the marks, especially the bad
+    // ones. A MIS-NAMED untaught item is a confident wrong price and is the
+    // single worst thing this system can do, so it is stated first and in red.
+    const sc=r.scoring;
+    h += '<div class="card" style="border-color:'+(sc.honest?'#2a4a35':'#5a2a24')+'">'
+       + '<div class="head '+(sc.honest?'ok':'bad')+'">'
+       + (sc.honest?'HONEST — no untaught item was priced':'WRONG PRICE — an untaught item was named')
+       + '</div><div>'+esc(sc.headline)+'</div>';
+    h += '<div class=k style="margin-top:8px"><b>named correctly</b><span class=ok>'+sc.correct+'</span></div>';
+    h += '<div class=k><b>correctly abstained</b><span class=ok>'+sc.correctly_abstained+'</span></div>';
+    h += '<div class=k><b>mis-named untaught</b><span class="'+(sc.mis_named_untaught?'bad':'ok')+'">'
+       + sc.mis_named_untaught+'</span></div>';
+    if(sc.mis_priced_paise) h += '<div class=k><b>paise that should not be billed</b><span class=bad>'
+       + sc.mis_priced_paise+'</span></div>';
+    h += '<div class=scroll style="margin-top:10px"><table><tr><th>truth</th><th>taught?</th>'
+       + '<th>got</th><th>top1</th><th>verdict</th></tr>';
+    sc.rows.forEach(x=>{
+      const bad = x.verdict==='MIS_NAMED'||x.verdict==='mis_named';
+      h += '<tr><td>'+esc(x.truth_sku)+'</td><td class="'+(x.taught?'ok':'amb')+'">'+(x.taught?'yes':'no')+'</td>'
+         + '<td>'+esc(x.got_sku==null?'— (abstained)':x.got_sku)+'</td>'
+         + '<td class=n>'+(x.top1==null?'—':x.top1)+'</td>'
+         + '<td class="'+(bad?'bad':'ok')+'">'+esc(x.verdict)+'</td></tr>';
+    });
+    h += '</table></div></div>';
+  }
+  if(r.scene_truth){
+    h += '<div class=card><h2>what was actually on the mat (simulated scene)</h2><div class=scroll><table>'
+       + '<tr><th>sku</th><th>taught?</th><th>true long edge</th><th>placed at</th><th>turned</th></tr>';
+    r.scene_truth.forEach(t=>{
+      h += '<tr><td>'+esc(t.sku_id)+'</td><td class="'+(t.taught?'ok':'amb')+'">'+(t.taught?'yes':'NO — must be amber')+'</td>'
+         + '<td class=n>'+t.long_edge_mm+' mm</td><td class=n>'+t.centre_mm[0]+', '+t.centre_mm[1]+' mm</td>'
+         + '<td class=n>'+t.rotation_deg+'°</td></tr>';
+    });
+    h += '</table></div></div>';
+  }
+  if(r.overlay_png) h += '<div class=card><h2>rectified 840×1188 — green named, amber abstained</h2>'
+     + '<img src="data:image/png;base64,'+r.overlay_png+'"></div>';
+  return h;
+}
+
+async function tryIt(){
+  const f = $('#r_file').files[0];
+  if(!f) return;
+  $('#recout').innerHTML = '<div class=card>locking, measuring, embedding, matching…</div>';
+  const fd = new FormData(); fd.append('image', f);
+  $('#recout').innerHTML = recogniseCard(await post('/recognise', fd));
+  $('#r_file').value='';
+}
+
+async function demoRecognise(intruder){
+  $('#recout').innerHTML = '<div class=card>recognising a SIMULATED scene the counter has not seen before…</div>';
+  const r = await post('/demo/recognise?intruder='+(intruder?'1':'0'), new FormData());
+  $('#recout').innerHTML = recogniseCard(r);
+}
+
+async function loadDeps(){
+  let h;
+  try{
+    const d = await (await fetch('/health')).json();
+    const bad = Object.entries(d.dependencies||{}).filter(([k,v])=>!v.available);
+    if(!bad.length) return $('#deps').innerHTML='';
+    h = '<div class="card bad"><div class=head>This page cannot teach or recognise yet</div>'
+      + bad.map(([k,v])=>'<div class=k><b>'+esc(k)+'</b><span class=bad>'+esc(v.reason)+' — '+esc(v.detail||'')+'</span></div>').join('')
+      + '<div class=sub style="margin-top:8px">Measurement below still works. Nothing is guessed in the meantime.</div></div>';
+  }catch(e){
+    h = '<div class="card bad">/health is unreachable: '+esc(e)+'</div>';
+  }
+  $('#deps').innerHTML = h;
+}
+loadDeps(); loadShop(); refState();
+
+// /?demo performs the ENTIRE round trip on load -- set the reference, teach the
+// sample products, then recognise a scene none of them was taught from. It is a
+// link you can send someone who has no camera, no mat and no phone, and it is
+// how the browser end of this page is tested.
+async function autoDemo(){
+  await demoRef();
+  await demoTeach(/[?&]demo=hard/.test(location.search));
+  await demoRecognise(true);
+  document.body.setAttribute('data-demo-complete','1');
+}
+if(/[?&]demo/.test(location.search)) autoDemo();
+
 // /?auto lands straight on the measured sample -- a link you can send someone
 // who has no camera, no mat and no phone, and it shows them the real pipeline.
 // /?auto=tilt and /?auto=marker land on the corresponding real refusal.

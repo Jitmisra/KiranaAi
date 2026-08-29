@@ -61,6 +61,12 @@ never read back as truth — if it exists and disagrees with the catalog, that i
 a hand-edit that would price a sale differently from the gallery that
 recognised it, and loading raises instead of picking a winner.
 
+A ``shop.json`` with NO catalog beside it is somebody else's file — the legacy
+``results/shop.json`` this repo ships with four prices in it — and the first
+save REFUSES rather than overwriting four real prices with one enrolment.
+``write_sidecar=False`` is the escape hatch, and it leaves the legacy file
+untouched.
+
 SIZE COST OF JSON VECTORS, STATED PLAINLY
 =========================================
 Vectors are stored as JSON lists of floats. Python's ``repr`` for a float is the
@@ -148,7 +154,6 @@ PHOTO_INPUT_CAP_BYTES = 8 * 1024 * 1024  # refuse before decode
 ACTION_ADDED = "added"
 ACTION_REPLACED = "replaced"
 ACTION_REFUSED = "refused"
-ACTION_REMOVED = "removed"
 
 REASON_ADDED = "added"
 REASON_REPLACED = "replaced"
@@ -350,6 +355,7 @@ class ShopStore:
         if self.theta < 0.0 or self.tau_mm < 0.0:
             raise ShopError("theta and tau_mm must be >= 0")
         self._skus: dict[str, SkuRecord] = {}
+        self._sidecar_is_ours = True
         self.reload()
 
     # -- paths --------------------------------------------------------------
@@ -466,6 +472,7 @@ class ShopStore:
         deleting it, so correcting a price does not blank the picture. Pass
         ``clear_photo()`` to actually remove one.
         """
+        self._assert_writable()
         sku = _require_sku_id(sku_id)
         clean_name = _require_name(name)
         fp = _require_mm(footprint_mm)
@@ -559,9 +566,10 @@ class ShopStore:
         it.
         """
         sku = _require_sku_id(sku_id)
-        rec = self._skus.pop(sku, None)
-        if rec is None:
+        if sku not in self._skus:
             return False
+        self._assert_writable()
+        rec = self._skus.pop(sku)
         if rec.photo:
             _unlink_quietly(self.dir / rec.photo)
         self._save()
@@ -574,6 +582,7 @@ class ShopStore:
         rec = self._skus.get(sku)
         if rec is None or not rec.photo:
             return False
+        self._assert_writable()
         _unlink_quietly(self.dir / rec.photo)
         self._skus[sku] = SkuRecord(
             sku_id=rec.sku_id, name=rec.name, price_paise=rec.price_paise,
@@ -692,13 +701,40 @@ class ShopStore:
         payload["sha256"] = _digest(payload)
         return payload
 
+    def _assert_writable(self) -> None:
+        """Refuse a mutation that would destroy somebody else's price file.
+
+        Called BEFORE any work, not just before the write: a store whose memory
+        held a SKU its disk had never seen would be the exact kind of quiet
+        disagreement this module exists to prevent.
+
+        A shop.json with no catalog beside it is the legacy ``results/shop.json``
+        that live_app.py reads today. Overwriting it would delete real prices
+        that no catalog can give back, because they were never enrolled.
+        """
+        if not self.write_sidecar or self._sidecar_is_ours:
+            return
+        try:
+            n = len(json.loads(self.sidecar_path.read_text(encoding="utf-8")))
+            how_many = f"{n} price(s)"
+        except (OSError, ValueError, TypeError):
+            how_many = "prices"          # unreadable, but still not ours to eat
+        raise ShopError(
+            f"{self.sidecar_path} exists but {self.catalog_path} does not: that "
+            f"is a legacy price file this store did not write, and saving would "
+            f"overwrite {how_many} with a catalog that never enrolled them. Move "
+            f"it aside, or open the store with write_sidecar=False."
+        )
+
     def _save(self) -> None:
+        self._assert_writable()
         self.dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.catalog_path, canonical(self.to_json()) + b"\n")
         if self.write_sidecar:
             _atomic_write(
                 self.sidecar_path, canonical(self.price_map()) + b"\n"
             )
+        self._sidecar_is_ours = True
 
     def reload(self) -> None:
         """Read the catalog from disk, replacing whatever is in memory.
@@ -712,7 +748,11 @@ class ShopStore:
         path = self.catalog_path
         if not path.exists():
             self._skus = {}
+            # A sidecar with no catalog beside it was written by something else.
+            # Remember that, so the first save refuses to clobber it.
+            self._sidecar_is_ours = not self.sidecar_path.exists()
             return
+        self._sidecar_is_ours = True
         try:
             raw = path.read_text(encoding="utf-8")
         except OSError as e:
@@ -833,7 +873,15 @@ class ShopStore:
         theirs = {str(k): v for k, v in side.items()}
         bad = sorted(
             set(mine) ^ set(theirs)
-            | {k for k in set(mine) & set(theirs) if mine[k] != theirs[k]}
+            # `2000 != 2000.0` is False, so an int-vs-float difference would
+            # slip through a value comparison. Compare the TYPE too: a float in
+            # the sidecar is a money bug even when it equals the right number.
+            | {
+                k for k in set(mine) & set(theirs)
+                if mine[k] != theirs[k]
+                or isinstance(theirs[k], bool)
+                or not isinstance(theirs[k], int)
+            }
         )
         if bad:
             raise ShopError(
@@ -954,7 +1002,6 @@ def _unlink_quietly(path: Path) -> None:
 __all__ = [
     "ACTION_ADDED",
     "ACTION_REFUSED",
-    "ACTION_REMOVED",
     "ACTION_REPLACED",
     "CATALOG_FORMAT",
     "CATALOG_NAME",

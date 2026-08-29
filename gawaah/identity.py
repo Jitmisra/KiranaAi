@@ -55,7 +55,29 @@ from gawaah.ledger import canonical
 EmbedFn = Callable[[np.ndarray], Any]
 
 DEFAULT_THETA = 0.10      # required cosine gap between top1 and top2
-DEFAULT_PHI = 0.55        # required absolute cosine for top1
+DEFAULT_PHI = 0.90        # required absolute cosine for top1
+# RAISED 0.55 -> 0.90 on 2026-08-29, from measurement, not taste.
+#
+# 0.55 was chosen before an embedder existed, against a test double. With the
+# real classical embedder, cosines BETWEEN DIFFERENT PRODUCTS routinely reach
+# 0.7-0.86 (lifebuoy_red vs lux_rose 0.860; intruder_lookalike vs krack_jack
+# 0.807; clinic_sachet vs vatika_sachet 0.711 -- all same-size, so the footprint
+# gate cannot save them either). At 0.55 an untaught product was named and
+# PRICED as something else 61% of the time.
+#
+# tools/bench_recognise.py, held-out views disjoint from enrolment:
+#     phi    accuracy(decided)   abstain    FALSE-PRICE
+#     0.55       100.0%            1.2%        16.7%
+#     0.80       100.0%            3.6%        12.0%
+#     0.90       100.0%            7.1%         3.7%
+#
+# 4.5x fewer wrong prices for 6 points more abstention, and accuracy on taught
+# products does not move at all. A wrong price costs a shopkeeper money; an
+# abstention costs one tap. INVARIANT 7 makes that trade for us.
+#
+# This is a floor, not a ceiling: an operator may raise it further per shop.
+# Lowering it below 0.90 requires re-running the bench and stating the measured
+# false-price rate, because that is the number this gate exists to hold down.
 DEFAULT_TAU_MM = 4.0      # footprint tolerance, millimetres
 DEFAULT_EPS = 1e-9        # below this a top-2 gap is numerical noise, not signal
 
