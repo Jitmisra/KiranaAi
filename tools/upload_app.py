@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import struct
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import cv2
 import numpy as np
@@ -46,6 +48,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from gawaah.identity import (  # noqa: E402
+    DEFAULT_PHI,
+    DEFAULT_TAU_MM,
+    DEFAULT_THETA,
+    Gallery,
+    Identifier,
+    IdentityError,
+)
+from gawaah.money import MoneyError, from_rupees_str, paise  # noqa: E402
 from gawaah.placement import (  # noqa: E402
     MIN_AREA_MM2,
     REASON_BORDER,
@@ -85,6 +96,30 @@ R_UNSUPPORTED = "upload_unsupported_format"
 R_DEGENERATE = "upload_degenerate_image"
 R_NOT_RECTIFIED = "placement_buffer_mismatch"
 R_INTERNAL = "upload_internal_error"
+
+# Enrolment / recognition refusals. Same rule: every one is a state this tool
+# can honestly reach, and each is named so the page can say what to DO about it.
+R_NO_EMBEDDER = "embedder_unavailable"
+R_NO_STORE = "shop_store_unavailable"
+R_FIELD_MISSING = "form_field_missing"
+R_BAD_MULTIPART = "form_not_multipart"
+R_BAD_SKU = "sku_id_invalid"
+R_BAD_NAME = "name_invalid"
+R_BAD_PRICE = "price_not_integer_paise"
+R_NO_ITEM = "nothing_on_the_mat"
+R_COLLISION = "enrol_collision"
+R_EMPTY_GALLERY = "nothing_enrolled_yet"
+R_UNKNOWN_SKU = "sku_not_enrolled"
+R_IDENTITY = "identity_refused"
+R_NO_PRICE = "sku_matched_but_no_price"
+
+#: The gates identity uses. Named here so /health can publish them and so the
+#: page can show the number a refusal was measured against. INVARIANT 7 says
+#: these are never widened to make a demo look better, so they are read from
+#: gawaah.identity rather than retyped.
+THETA = DEFAULT_THETA
+PHI = DEFAULT_PHI
+TAU_MM = DEFAULT_TAU_MM
 
 # MARKER_IDS is (0, 1, 2, 3) == top-left, top-right, bottom-right, bottom-left.
 CORNER_NAMES = ("top-left", "top-right", "bottom-right", "bottom-left")
@@ -725,6 +760,561 @@ def run_sample(seed: int = 7, *, synthetic_reference: bool = False,
     return res
 
 
+# ============================================================== ENROLMENT ===
+#
+# From here down is the PHOTO -> PRODUCT path: a shopkeeper photographs an item,
+# types a name and a price, and the counter can price that item from then on.
+#
+# Three rules shape all of it and none of them bends for a demo:
+#   INVARIANT 1  money is integer paise; a rupee never becomes a float.
+#   INVARIANT 3  no model weights anywhere; the embedder is classical cv2.
+#   INVARIANT 7  abstain rather than guess; an item identity cannot place is
+#                AMBER with its named reason and is EXCLUDED from the total.
+# Nothing on this path settles money. Recognition proposes a price; only a
+# signature-verified webhook can ever turn a session GREEN (INVARIANT 2).
+
+
+# ------------------------------------------------------------- multipart
+
+@dataclass(frozen=True)
+class Part:
+    """One decoded part of a multipart/form-data body."""
+
+    name: str
+    filename: Optional[str]
+    content_type: str
+    data: bytes
+
+    @property
+    def text(self) -> str:
+        return self.data.decode("utf-8", "replace").strip()
+
+
+def _header_param(header: str, key: str) -> Optional[str]:
+    """Pull `key="value"` (or bare `key=value`) out of one header line."""
+    for chunk in header.split(";"):
+        chunk = chunk.strip()
+        if chunk.lower().startswith(key.lower() + "="):
+            return chunk[len(key) + 1:].strip().strip('"')
+    return None
+
+
+def parse_multipart(raw: bytes, content_type: str) -> dict[str, Part]:
+    """multipart/form-data -> {field name: Part}.
+
+    python-multipart is NOT installed in this venv, so fastapi's Form/File would
+    raise at import time. Rather than add a dependency for a demo tool, the body
+    is unwrapped here. This is the multi-FIELD sibling of _body_image, which
+    only ever needed the first part; /enrol needs image + sku_id + name + price
+    together, so it needs the names.
+
+    Later parts with a duplicate name win, which matches how a browser replays a
+    re-submitted form field.
+    """
+    ctype = (content_type or "").lower()
+    if "multipart/form-data" not in ctype or "boundary=" not in ctype:
+        raise UploadRefused(
+            R_BAD_MULTIPART,
+            "Expected multipart/form-data with a boundary. The page sends a "
+            "FormData; from a shell use curl -F image=@photo.jpg -F sku_id=... ")
+    boundary = ctype.split("boundary=", 1)[1].split(";")[0].strip().strip('"')
+    sep = b"--" + boundary.encode()
+
+    out: dict[str, Part] = {}
+    for chunk in raw.split(sep):
+        if chunk in (b"", b"--", b"--\r\n", b"\r\n"):
+            continue
+        if chunk.startswith(b"--"):          # the closing boundary and epilogue
+            continue
+        if chunk.startswith(b"\r\n"):
+            chunk = chunk[2:]
+        head_end = chunk.find(b"\r\n\r\n")
+        if head_end == -1:
+            continue
+        head = chunk[:head_end].decode("utf-8", "replace")
+        body = chunk[head_end + 4:]
+        if body.endswith(b"\r\n"):
+            body = body[:-2]
+
+        name = None
+        filename = None
+        part_ctype = "application/octet-stream"
+        for line in head.split("\r\n"):
+            low = line.lower()
+            if low.startswith("content-disposition:"):
+                name = _header_param(line, "name")
+                filename = _header_param(line, "filename")
+            elif low.startswith("content-type:"):
+                part_ctype = line.split(":", 1)[1].strip()
+        if name:
+            out[name] = Part(name, filename, part_ctype, body)
+    return out
+
+
+async def read_form(request: Request) -> dict[str, Any]:
+    """Accept a multipart form OR a JSON body, and say which arrived.
+
+    JSON exists so the endpoints are scriptable with curl and so a genuinely
+    float price can reach the money boundary and be REFUSED there. A multipart
+    field is always a string, so multipart alone could never prove that
+    float-is-not-money holds at the API.
+    """
+    raw = await request.body()
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        import json
+        try:
+            data = json.loads(raw or b"{}")
+        except ValueError as exc:
+            raise UploadRefused(R_BAD_MULTIPART, f"body is not valid JSON: {exc}")
+        if not isinstance(data, dict):
+            raise UploadRefused(R_BAD_MULTIPART, "JSON body must be an object")
+        return {"_kind": "json", **data}
+    return {"_kind": "multipart", "_parts": parse_multipart(raw, ctype)}
+
+
+def form_value(form: dict[str, Any], name: str) -> Any:
+    """One field, as whatever type it genuinely arrived as.
+
+    Multipart gives a str. JSON gives whatever the caller wrote — including a
+    float, which is the point: it must survive as a float all the way to the
+    money boundary so that boundary can refuse it.
+    """
+    if form.get("_kind") == "json":
+        return form.get(name)
+    part = form.get("_parts", {}).get(name)
+    return None if part is None else part.text
+
+
+def form_image(form: dict[str, Any], name: str = "image") -> bytes:
+    """The image bytes of a form, from a multipart file part or base64 JSON."""
+    if form.get("_kind") == "json":
+        b64 = form.get(name) or form.get(name + "_b64")
+        if not b64:
+            raise UploadRefused(
+                R_FIELD_MISSING,
+                f"no {name!r} in the JSON body. Send it as base64, or use "
+                f"multipart/form-data with a file part.")
+        try:
+            return base64.b64decode(str(b64), validate=True)
+        except Exception as exc:
+            raise UploadRefused(R_NOT_AN_IMAGE, f"{name!r} is not valid base64: {exc}")
+    part = form.get("_parts", {}).get(name)
+    if part is None or not part.data:
+        have = sorted(form.get("_parts", {}))
+        raise UploadRefused(
+            R_FIELD_MISSING,
+            f"no {name!r} file part in the form. Parts received: "
+            f"{have if have else 'none'}.")
+    return part.data
+
+
+# ------------------------------------------------------------------ money
+
+# The rupee->paise boundary. This is the ONE place a price enters this service,
+# and it is deliberately narrow: a str is parsed digit by digit and a float is
+# refused outright. 214.507 is refused, never rounded -- rounding a price is
+# how a shop loses half a paisa a thousand times and never finds out.
+def price_to_paise(rupees: Any = None, paise_value: Any = None) -> int:
+    """-> integer paise, or UploadRefused(R_BAD_PRICE) naming what was wrong."""
+    try:
+        if paise_value not in (None, ""):
+            if isinstance(paise_value, bool):
+                raise MoneyError(f"bool is not money: {paise_value!r}")
+            if isinstance(paise_value, float):
+                raise MoneyError(
+                    f"float is not money: {paise_value!r}. Paise are whole.")
+            if isinstance(paise_value, str):
+                s = paise_value.strip()
+                if not s.isdigit():
+                    raise MoneyError(
+                        f"price_paise must be whole digits, got {paise_value!r}")
+                v: int = int(s)
+            elif isinstance(paise_value, int):
+                v = paise_value
+            else:
+                raise MoneyError(
+                    f"price_paise must be an integer, got "
+                    f"{type(paise_value).__name__}")
+            total = int(paise(v))
+        elif rupees not in (None, ""):
+            if isinstance(rupees, bool):
+                raise MoneyError(f"bool is not money: {rupees!r}")
+            if isinstance(rupees, float):
+                raise MoneyError(
+                    f"float is not money: {rupees!r}. A rupee is not a float — "
+                    f"send it as a string, e.g. \"214.50\".")
+            if isinstance(rupees, int):
+                total = int(paise(rupees)) * 100
+            elif isinstance(rupees, str):
+                total = int(from_rupees_str(rupees))
+            else:
+                raise MoneyError(
+                    f"price_rupees must be a decimal string, got "
+                    f"{type(rupees).__name__}")
+        else:
+            raise UploadRefused(
+                R_FIELD_MISSING,
+                "no price. Send price_rupees (e.g. \"35.00\") or price_paise "
+                "(e.g. 3500).")
+    except MoneyError as exc:
+        raise UploadRefused(R_BAD_PRICE, str(exc)) from None
+    if total <= 0:
+        raise UploadRefused(
+            R_BAD_PRICE,
+            f"{total} paise is not a price. A zero or negative price at a till "
+            f"is a typo, and billing it would be worse than refusing it.")
+    return total
+
+
+def rupees_str(p: int) -> str:
+    """Integer paise -> a rupee string, without ever touching a float."""
+    p = int(p)
+    return f"{p // 100}.{p % 100:02d}"
+
+
+# ------------------------------------------------- the injected embedder
+
+_DEPS: dict[str, Any] = {"embed": None, "store": None, "store_dir": None}
+
+
+def store_dir() -> Path:
+    """Where the shopkeeper's catalog lives. Overridable for tests."""
+    if _DEPS["store_dir"] is None:
+        _DEPS["store_dir"] = Path(
+            os.environ.get(
+                "GAWAAH_SHOP_DIR",
+                str(Path(__file__).resolve().parent.parent / "results" / "shop"),
+            )
+        )
+    return Path(_DEPS["store_dir"])
+
+
+def set_store_dir(path: Any) -> None:
+    """Point the catalog at another directory and drop the cached store."""
+    _DEPS["store_dir"] = Path(path)
+    _DEPS["store"] = None
+
+
+def load_embedder() -> Callable[[np.ndarray], Any]:
+    """gawaah.embedder.embed, or a named refusal explaining its absence.
+
+    INVARIANT 3: this resolves a CLASSICAL descriptor built from cv2 primitives.
+    Nothing here downloads a checkpoint and nothing here ships weights. If the
+    module is missing the endpoint says so by name rather than falling back to
+    something that would quietly identify items by a worse rule.
+    """
+    if _DEPS["embed"] is None:
+        try:
+            from gawaah.embedder import embed  # noqa: WPS433
+        except Exception as exc:
+            raise UploadRefused(
+                R_NO_EMBEDDER,
+                f"gawaah.embedder is not importable ({type(exc).__name__}: "
+                f"{exc}). Recognition needs a descriptor and this service will "
+                f"not invent one.") from None
+        _DEPS["embed"] = embed
+    return _DEPS["embed"]
+
+
+def load_store() -> Any:
+    """gawaah.shop_store.ShopStore over store_dir(), or a named refusal."""
+    if _DEPS["store"] is None:
+        try:
+            from gawaah.shop_store import ShopStore  # noqa: WPS433
+        except Exception as exc:
+            raise UploadRefused(
+                R_NO_STORE,
+                f"gawaah.shop_store is not importable ({type(exc).__name__}: "
+                f"{exc}). There is nowhere to keep the catalog.") from None
+        d = store_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        _DEPS["store"] = ShopStore(d)
+    return _DEPS["store"]
+
+
+def deps_status() -> dict[str, Any]:
+    """Whether the two injected pieces are present, without raising."""
+    out: dict[str, Any] = {}
+    for key, fn in (("embedder", load_embedder), ("shop_store", load_store)):
+        try:
+            fn()
+            out[key] = {"available": True, "reason": None}
+        except UploadRefused as exc:
+            out[key] = {"available": False, "reason": exc.reason,
+                        "detail": exc.detail}
+    return out
+
+
+def _field(rec: Any, *names: str, default: Any = None) -> Any:
+    """Read one field off a store record, whether it is an object or a dict.
+
+    gawaah/shop_store.py is written by another pair of hands against a written
+    contract, and the contract fixes the METHODS but not whether .all() yields
+    dataclasses or dicts. Reading both ways here costs six lines and means a
+    reasonable choice on that side cannot break this page.
+    """
+    for n in names:
+        if isinstance(rec, dict):
+            if n in rec:
+                return rec[n]
+        elif hasattr(rec, n):
+            return getattr(rec, n)
+    return default
+
+
+# --------------------------------------------------------------- the crop
+
+def oriented_crop_bgr(rect: np.ndarray, placement: Any) -> np.ndarray:
+    """The oriented, upright COLOUR crop of one placement.
+
+    Geometry is Brain._crop's, deliberately: the embedder must see at the till
+    exactly what it saw at enrolment, and an axis-aligned crop of an item lying
+    at 30 degrees is mostly mat. The one difference is that colour SURVIVES
+    here. Brain._crop greys the buffer, and grey would throw away the hue and
+    saturation channels the classical descriptor leans on hardest -- a red
+    packet and a green packet of the same size and print are the same picture in
+    grey, and telling those apart is most of the job.
+    """
+    cx = float(placement.centre_mm[0]) * PX_PER_MM_X
+    cy = float(placement.centre_mm[1]) * PX_PER_MM_Y
+    w = max(2, int(round(float(placement.long_edge_mm or 0.0) * PX_PER_MM_X)))
+    h = max(2, int(round(float(placement.short_edge_mm or 0.0) * PX_PER_MM_Y)))
+    angle = float(placement.angle_deg or 0.0)
+
+    src = rect if rect.ndim == 3 else cv2.cvtColor(rect, cv2.COLOR_GRAY2BGR)
+    if abs(angle) < 1e-6 or abs(angle - 180.0) < 1e-6:
+        rot = src
+    else:
+        m = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        rot = cv2.warpAffine(src, m, (BUF_W, BUF_H), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REPLICATE)
+    return cv2.getRectSubPix(rot, (min(w, BUF_W), min(h, BUF_H)), (cx, cy))
+
+
+# ------------------------------------------------------- synthetic products
+#
+# There is no camera and no printed mat here, so the round trip -- teach it,
+# then show it -- has to be demonstrable from a mouse alone. These are the
+# stand-in products. They are RENDERED, never photographed, and every image and
+# every response built from them is stamped SIMULATED (INVARIANT 7).
+#
+# The set is chosen to make the demonstration honest rather than flattering:
+#   - three products a shopkeeper would plausibly stock, at three different
+#     footprints, so the metric tiebreak has something real to do;
+#   - a HARD PAIR: 'jeera_biscuit' is the same size and the same two colours as
+#     'parle_g_biscuit' and differs only in LAYOUT. A global colour histogram
+#     cannot separate those two at all. Whether the descriptor does is measured
+#     in the tests and reported, not assumed;
+#   - an INTRUDER, 'chai_masala_box', which is never enrolled and is the same
+#     size as parle_g_biscuit, so it survives the footprint filter and has to be
+#     refused on appearance. An intruder of an unusual size would be refused by
+#     the tape measure alone and would prove nothing about recognition.
+
+@dataclass(frozen=True)
+class SampleProduct:
+    sku_id: str
+    name: str
+    w_mm: float
+    h_mm: float
+    price_rupees: str
+    body: tuple[int, int, int]      # BGR
+    accent: tuple[int, int, int]    # BGR
+    layout: str                     # cap_top | cap_bottom | band_diag | dot
+
+    @property
+    def long_edge_mm(self) -> float:
+        return max(self.w_mm, self.h_mm)
+
+
+SAMPLE_PRODUCTS: tuple[SampleProduct, ...] = (
+    SampleProduct("parle_g_biscuit", "Parle-G biscuit 100g", 60.0, 95.0,
+                  "10.00", (60, 190, 235), (110, 60, 35), "cap_top"),
+    SampleProduct("lifebuoy_soap", "Lifebuoy soap 125g", 45.0, 70.0,
+                  "35.00", (55, 55, 200), (240, 240, 240), "band_diag"),
+    SampleProduct("shampoo_sachet", "Clinic shampoo sachet", 38.0, 38.0,
+                  "3.00", (85, 160, 65), (245, 245, 245), "dot"),
+)
+
+#: Same size and same palette as parle_g_biscuit; only the layout differs.
+HARD_PAIR_PRODUCT = SampleProduct(
+    "jeera_biscuit", "Jeera biscuit 100g", 60.0, 95.0,
+    "12.00", (60, 190, 235), (110, 60, 35), "cap_bottom")
+
+#: Never enrolled by the demo. Same footprint as parle_g_biscuit on purpose.
+INTRUDER_PRODUCT = SampleProduct(
+    "chai_masala_box", "Chai masala box (never taught)", 60.0, 95.0,
+    "0.00", (150, 60, 130), (40, 170, 240), "dot")
+
+PRODUCTS_BY_ID = {p.sku_id: p for p in
+                  SAMPLE_PRODUCTS + (HARD_PAIR_PRODUCT, INTRUDER_PRODUCT)}
+
+
+def render_product(p: SampleProduct, px_per_mm: float) -> np.ndarray:
+    """One product as a flat BGR patch of its true millimetre size.
+
+    Features are deliberately CHUNKY. The scene is rendered at 4 px/mm, warped
+    by a camera, noised, then rectified back to 2.83 px/mm -- fine print would
+    not survive that round trip, and a descriptor tuned on detail that the
+    pipeline destroys would look excellent here and fail on a real shelf.
+    """
+    w = max(4, int(round(p.w_mm * px_per_mm)))
+    h = max(4, int(round(p.h_mm * px_per_mm)))
+    img = np.zeros((h, w, 3), np.uint8)
+    img[:, :] = p.body
+
+    if p.layout == "cap_top":
+        img[: int(h * 0.28), :] = p.accent
+    elif p.layout == "cap_bottom":
+        img[int(h * 0.72):, :] = p.accent
+    elif p.layout == "band_diag":
+        cv2.line(img, (0, h), (w, 0), p.accent, max(3, int(min(w, h) * 0.22)),
+                 cv2.LINE_AA)
+    elif p.layout == "dot":
+        cv2.circle(img, (w // 2, h // 2), max(3, int(min(w, h) * 0.30)),
+                   p.accent, -1, cv2.LINE_AA)
+
+    # A dark rim: real packets have an edge, and it gives the segmenter a clean
+    # boundary so the measured millimetres are the packet's, not a soft halo's.
+    cv2.rectangle(img, (0, 0), (w - 1, h - 1), (35, 35, 40), max(1, int(px_per_mm)))
+    return img
+
+
+def _paste_rotated(scene: np.ndarray, patch: np.ndarray,
+                   cx_px: float, cy_px: float, rot_deg: float) -> None:
+    """Paste `patch` into `scene` centred at (cx, cy), rotated, in place."""
+    h, w = patch.shape[:2]
+    side = int(np.ceil(np.hypot(w, h))) + 4
+    canvas = np.zeros((side, side, 3), np.uint8)
+    mask = np.zeros((side, side), np.uint8)
+    y0, x0 = (side - h) // 2, (side - w) // 2
+    canvas[y0:y0 + h, x0:x0 + w] = patch
+    mask[y0:y0 + h, x0:x0 + w] = 255
+
+    m = cv2.getRotationMatrix2D((side / 2.0, side / 2.0), rot_deg, 1.0)
+    canvas = cv2.warpAffine(canvas, m, (side, side), flags=cv2.INTER_LINEAR)
+    mask = cv2.warpAffine(mask, m, (side, side), flags=cv2.INTER_NEAREST)
+
+    tx = int(round(cx_px - side / 2.0))
+    ty = int(round(cy_px - side / 2.0))
+    sx0, sy0 = max(0, tx), max(0, ty)
+    sx1 = min(scene.shape[1], tx + side)
+    sy1 = min(scene.shape[0], ty + side)
+    if sx1 <= sx0 or sy1 <= sy0:
+        return
+    sub = canvas[sy0 - ty:sy1 - ty, sx0 - tx:sx1 - tx]
+    sub_m = mask[sy0 - ty:sy1 - ty, sx0 - tx:sx1 - tx].astype(bool)
+    region = scene[sy0:sy1, sx0:sx1]
+    region[sub_m] = sub[sub_m]
+
+
+#: (product, centre_x_mm, centre_y_mm, rotation_deg)
+Pose = tuple[SampleProduct, float, float, float]
+
+
+def product_scene(poses: list[Pose], seed: int = 11,
+                  *, tilt: float = SAMPLE_TILT_FRAC
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """A synthetic 'photograph' of the real mat with products on it.
+
+    Returns (loaded, empty) shot from the same tilted camera with SEPARATE
+    noise, for the same reason sample_scene() does: sharing the noise would give
+    the detector a reference more perfect than any real empty-mat photo.
+    """
+    px = SAMPLE_RENDER_PX_PER_MM
+    base = cv2.cvtColor(render_takhti(px), cv2.COLOR_GRAY2BGR)
+    loaded = base.copy()
+    for p, cx_mm, cy_mm, rot in poses:
+        _paste_rotated(loaded, render_product(p, px), cx_mm * px, cy_mm * px, rot)
+
+    def shoot(img: np.ndarray, noise_seed: int) -> np.ndarray:
+        out = _warp_like_a_camera(img, tilt)
+        noise = np.random.default_rng(_seed32(noise_seed)).normal(
+            0, SAMPLE_NOISE_SIGMA, out.shape)
+        return np.clip(out.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+    return shoot(loaded, seed), shoot(base, seed + 1)
+
+
+def scene_png(poses: list[Pose], seed: int = 11) -> bytes:
+    """A simulated photo as PNG bytes, ready to POST at /enrol or /recognise."""
+    loaded, _ = product_scene(poses, seed)
+    ok, buf = cv2.imencode(".png", loaded)
+    if not ok:
+        raise UploadRefused(R_INTERNAL, "could not encode the simulated scene")
+    return buf.tobytes()
+
+
+def enrol_pose(p: SampleProduct, seed: int = 11) -> list[Pose]:
+    """One product alone, mid-mat, square on — an enrolment photograph."""
+    return [(p, MAT_W_MM / 2.0, MAT_H_MM / 2.0, 0.0)]
+
+
+# ------------------------------------------------------- measure the scene
+
+def _rectify_and_place(bgr: np.ndarray, *, settle_frames: int = 6
+                       ) -> tuple[np.ndarray, list[Any], dict[str, Any]]:
+    """Lock -> rectify -> placements. Raises UploadRefused with the diagnosis.
+
+    The refusal carries diagnose_lock()'s full answer, so a caller that could
+    not lock is told how many of the four markers were seen and what to
+    physically change — never just 'failed'.
+    """
+    eng = PlaneEngine()
+    lock = eng.detect(bgr)
+    if not lock.locked:
+        exc = UploadRefused(str(lock.reason),
+                            diagnose_lock(lock).get("headline", str(lock.reason)))
+        exc.diagnosis = diagnose_lock(lock)               # type: ignore[attr-defined]
+        exc.lock = lock                                   # type: ignore[attr-defined]
+        raise exc
+
+    rect = eng.rectify(bgr, lock.H)
+    ref = _REFERENCE["buffer"]
+    ref_source = "empty_mat_photo_supplied"
+    if ref is None:
+        ref = synthesised_reference(lock.H, bgr.shape)
+        ref_source = "synthesised_from_printed_design"
+
+    det = PlacementDetector(ref)
+    placements: list[Any] = []
+    for _ in range(max(1, settle_frames)):
+        placements = det.update(rect)
+    return rect, placements, {
+        "reference_source": ref_source,
+        "locked": True,
+        "reason": str(lock.reason),
+        "ids_found": [int(i) for i in lock.ids_found],
+        "diagnosis": diagnose_lock(lock),
+        "scale_err_pct": None if lock.scale_err is None else round(lock.scale_err * 100, 4),
+        "persp_index": None if lock.persp_index is None else round(lock.persp_index, 5),
+    }
+
+
+def _measured_row(p: Any) -> dict[str, Any]:
+    return {
+        "id": int(p.id),
+        "long_edge_mm": None if p.long_edge_mm is None else round(float(p.long_edge_mm), 2),
+        "short_edge_mm": None if p.short_edge_mm is None else round(float(p.short_edge_mm), 2),
+        "area_mm2": None if p.area_mm2 is None else round(float(p.area_mm2), 1),
+        "angle_deg": None if p.angle_deg is None else round(float(p.angle_deg), 1),
+        "centre_mm": [round(float(p.centre_mm[0]), 2), round(float(p.centre_mm[1]), 2)],
+        "stable": bool(p.stable),
+    }
+
+
+def _thumb_png(crop: np.ndarray, long_side: int = 96) -> Optional[str]:
+    """A small base64 PNG of the enrolled crop, so the catalog can show what was
+    actually taught. Capped deliberately: the catalog is JSON on disk and a full
+    crop per SKU would make it megabytes for no extra evidence."""
+    h, w = crop.shape[:2]
+    if max(h, w) > long_side:
+        k = long_side / float(max(h, w))
+        crop = cv2.resize(crop, (max(1, int(w * k)), max(1, int(h * k))),
+                          interpolation=cv2.INTER_AREA)
+    return _png_b64(crop)
+
+
 # --------------------------------------------------------------- endpoints
 
 def _body_image(raw: bytes, content_type: str) -> bytes:
@@ -754,6 +1344,19 @@ def _body_image(raw: bytes, content_type: str) -> bytes:
 
 
 def _refusal(exc: UploadRefused, status: int = 400) -> JSONResponse:
+    # A refusal raised after a failed mat lock carries the real diagnosis --
+    # which corners were missing and what to change. Passing it through is the
+    # difference between "no lock" and an instruction the user can act on.
+    carried = getattr(exc, "diagnosis", None)
+    if carried is not None:
+        return JSONResponse({
+            "ok": False, "locked": False, "reason": exc.reason,
+            "detail": exc.detail, "settles_money": False,
+            "ids_found": carried.get("ids_found", []),
+            "items": [], "refusals": [], "amber": [],
+            "total_paise": 0, "total_rupees": "0.00",
+            "diagnosis": carried,
+        }, status_code=status)
     return JSONResponse({
         "ok": False,
         "locked": False,
@@ -877,6 +1480,578 @@ def clear_reference_ep() -> JSONResponse:
     _REFERENCE["buffer"] = None
     _REFERENCE["at"] = None
     return JSONResponse({"ok": True, "reason": "reference_cleared"})
+
+
+# ------------------------------------------------------- enrol / recognise
+
+MONEY_NOTE = ("Nothing on this page settles money. Recognition PROPOSES a "
+              "price; only a signature-verified Razorpay webhook can mark a "
+              "session GREEN.")
+
+
+def _valid_sku(sku_id: str) -> str:
+    s = (sku_id or "").strip()
+    if not s:
+        raise UploadRefused(R_BAD_SKU, "sku_id is required and was empty.")
+    if len(s) > 64:
+        raise UploadRefused(R_BAD_SKU, f"sku_id is {len(s)} characters; cap is 64.")
+    ok = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+    bad = sorted(set(s) - ok)
+    if bad:
+        raise UploadRefused(
+            R_BAD_SKU,
+            f"sku_id may only contain letters, digits, '_', '-' and '.'; "
+            f"found {''.join(bad)!r}. It becomes a filename and a ledger key.")
+    return s
+
+
+def _valid_name(name: str) -> str:
+    s = (name or "").strip()
+    if not s:
+        raise UploadRefused(
+            R_BAD_NAME,
+            "name is required. The shopkeeper reads the name, not the sku_id.")
+    if len(s) > 120:
+        raise UploadRefused(R_BAD_NAME, f"name is {len(s)} characters; cap is 120.")
+    return s
+
+
+def do_enrol(raw: bytes, sku_id: str, name: str, price_paise: int,
+             *, force: bool = False) -> dict[str, Any]:
+    """One photo + a name + a price -> one SKU the counter can price.
+
+    The order is deliberate: the mat locks first, the item is MEASURED first,
+    and only then is it embedded. Identity is never attempted without a metric
+    footprint, and an enrolment with no millimetres would poison every later
+    identification -- the footprint filter would let it compete against
+    everything, because its declared size would be a guess.
+    """
+    embed = load_embedder()
+    store = load_store()
+
+    bgr, note = decode_upload(raw)
+    rect, placements, lock_info = _rectify_and_place(bgr)
+
+    usable = [p for p in placements
+              if p.measurable and p.long_edge_mm and p.area_mm2]
+    refused = [{"id": int(p.id), "reason": str(p.reason),
+                "centre_mm": [round(float(p.centre_mm[0]), 2),
+                              round(float(p.centre_mm[1]), 2)]}
+               for p in placements if not p.measurable]
+    if not usable:
+        raise UploadRefused(
+            R_NO_ITEM,
+            "The mat locked, but nothing measurable is on it. "
+            + (f"{len(refused)} blob(s) were found and refused "
+               f"({', '.join(sorted({r['reason'] for r in refused}))}) — put the "
+               f"WHOLE item well inside the mat, not touching the edge, and not "
+               f"touching another item."
+               if refused else
+               f"No blob above {MIN_AREA_MM2} mm² differed from the mat at all. "
+               f"Place the item on the mat and re-shoot."))
+
+    # The LARGEST measurable placement is the subject. An enrolment photo has
+    # one item on the mat; if a stray shadow or a fingertip also segmented, the
+    # product is the big one. Every candidate is reported either way, so the
+    # choice is visible rather than silent.
+    largest = max(usable, key=lambda p: float(p.area_mm2))
+    crop = oriented_crop_bgr(rect, largest)
+    footprint_mm = float(largest.long_edge_mm)
+
+    t0 = time.perf_counter()
+    try:
+        vector = np.asarray(embed(crop), dtype=np.float64).ravel()
+    except Exception as exc:
+        raise UploadRefused(
+            R_NO_EMBEDDER,
+            f"gawaah.embedder.embed failed on a "
+            f"{crop.shape[1]}x{crop.shape[0]} crop: "
+            f"{type(exc).__name__}: {exc}") from None
+    embed_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+    # The collision verdict is computed HERE, with identify()'s own thresholds,
+    # so it is reported whatever gawaah/shop_store.py chooses to do about it.
+    # A pair inside both the appearance margin and the footprint tolerance is
+    # permanently amber, and saying so now -- while the shopkeeper still has the
+    # item in his hand -- is free. Saying it at the till is a wrong price.
+    try:
+        gallery = store.to_gallery()
+        probe = gallery
+        if sku_id in gallery:
+            probe = Gallery.from_dict(gallery.to_dict())
+            probe.remove(sku_id)
+        ident = Identifier(probe, embed, theta=THETA, phi=PHI, tau_mm=TAU_MM)
+        collision = ident.check_collision([vector], footprint_mm)
+    except IdentityError as exc:
+        raise UploadRefused(R_IDENTITY, f"{exc}") from None
+
+    replaced = sku_id in gallery
+    verdict = collision.to_audit()
+    verdict["message"] = collision.message
+
+    if collision.collides and not force:
+        raise UploadRefused(
+            R_COLLISION,
+            f"Refusing to enrol {sku_id!r}: it is indistinguishable from "
+            f"{collision.sku_id!r} — cosine {collision.similarity:.4f} (bar "
+            f"{1.0 - THETA:.2f}) and footprint delta "
+            f"{collision.footprint_delta_mm:.2f} mm (tolerance {TAU_MM} mm). "
+            f"Identify would be permanently amber between these two. Take a "
+            f"disambiguating photo — a different face of the packet — or give "
+            f"them genuinely different sizes.")
+
+    try:
+        store.add_sku(sku_id, name, int(price_paise), [vector.tolist()],
+                      footprint_mm, photo_png=_thumb_png(crop))
+    except TypeError:
+        # The photo is a convenience, not a requirement. If the store's
+        # signature does not take one, the SKU is still worth storing.
+        store.add_sku(sku_id, name, int(price_paise), [vector.tolist()],
+                      footprint_mm)
+
+    return {
+        "ok": True,
+        "settles_money": False,
+        "money_note": MONEY_NOTE,
+        "locked": True,
+        **{k: lock_info[k] for k in
+           ("reason", "ids_found", "reference_source", "scale_err_pct",
+            "persp_index", "diagnosis")},
+        "measured": {
+            **_measured_row(largest),
+            "footprint_mm": round(footprint_mm, 2),
+            "candidates_considered": len(usable),
+            "other_candidates": [_measured_row(p) for p in usable
+                                 if p.id != largest.id],
+            "refused_blobs": refused,
+        },
+        "stored": {
+            "sku_id": sku_id,
+            "name": name,
+            "price_paise": int(price_paise),
+            "price_rupees": rupees_str(price_paise),
+            "footprint_mm": round(footprint_mm, 2),
+            "n_views": 1,
+            "vector_dim": int(vector.shape[0]),
+            "replaced_existing": bool(replaced),
+            "embed_ms": embed_ms,
+        },
+        "collision": verdict,
+        "forced": bool(force and collision.collides),
+        "crop_png": _thumb_png(crop, 220),
+        "catalog_size": len(store.to_gallery()),
+        "input": note,
+        "source_image_returned": False,
+        "gates": {"theta": THETA, "phi": PHI, "tau_mm": TAU_MM},
+    }
+
+
+def _draw_recognition(rect: np.ndarray, rows: list[dict[str, Any]]) -> np.ndarray:
+    """Green box + price for a named item, amber box + reason for an abstention.
+
+    Amber is drawn as prominently as green on purpose. An abstention is a
+    correct outcome, not an error to be tucked away, and the shopkeeper needs to
+    see the one line he must tap as clearly as the ones he need not.
+    """
+    vis = rect.copy() if rect.ndim == 3 else cv2.cvtColor(rect, cv2.COLOR_GRAY2BGR)
+    for r in rows:
+        m = r.get("measured") or {}
+        if m.get("long_edge_mm") is None:
+            continue
+        cx = float(m["centre_mm"][0]) * PX_PER_MM_X
+        cy = float(m["centre_mm"][1]) * PX_PER_MM_Y
+        w = float(m["long_edge_mm"]) * PX_PER_MM_X
+        h = float(m["short_edge_mm"]) * PX_PER_MM_Y
+        named = r.get("sku_id") is not None and r.get("price_paise") is not None
+        colour = (120, 220, 130) if named else (70, 175, 235)
+        box = cv2.boxPoints(((cx, cy), (w, h),
+                             float(m.get("angle_deg") or 0.0))).astype(np.int32)
+        cv2.drawContours(vis, [box], 0, colour, 3)
+        label = (f"{r['sku_id']}  Rs {r['price_rupees']}" if named
+                 else f"AMBER {r.get('reason')}")
+        cv2.putText(vis, label, (max(4, int(cx - w / 2)),
+                                 max(22, int(cy - h / 2) - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2, cv2.LINE_AA)
+    return vis
+
+
+def do_recognise(raw: bytes) -> dict[str, Any]:
+    """Every item on the mat, named or honestly refused, and a total.
+
+    The total is the sum of the items that were NAMED. Amber items are listed,
+    with their reason and their millimetres, and are not in it. That exclusion
+    is the whole product: a counter that guesses a price is worse than one that
+    asks for a tap.
+    """
+    embed = load_embedder()
+    store = load_store()
+
+    bgr, note = decode_upload(raw)
+    gallery = store.to_gallery()
+    rect, placements, lock_info = _rectify_and_place(bgr)
+
+    ident = Identifier(gallery, embed, theta=THETA, phi=PHI, tau_mm=TAU_MM)
+
+    rows: list[dict[str, Any]] = []
+    total = 0
+    t0 = time.perf_counter()
+
+    for p in placements:
+        base: dict[str, Any] = {
+            "id": int(p.id),
+            "measured": _measured_row(p),
+            "sku_id": None, "name": None,
+            "price_paise": None, "price_rupees": None,
+            "top1": None, "top2": None, "margin": None,
+            "top1_sku": None, "top2_sku": None, "n_candidates": 0,
+        }
+
+        # Not measurable -> not identifiable. A cropped or merged blob has no
+        # trustworthy long edge, and identity is never attempted without one.
+        if not p.measurable or p.long_edge_mm is None:
+            base["reason"] = str(p.reason)
+            base["explain"] = (
+                "Touches the buffer edge, so its true size is unknown — put the "
+                "whole item on the mat."
+                if p.reason == REASON_BORDER else
+                "Two or more items are touching, so one contour covers both — "
+                "separate them."
+                if p.reason == REASON_MERGED else
+                "Not measurable; see reason.")
+            rows.append(base)
+            continue
+
+        if len(gallery) == 0:
+            base["reason"] = R_EMPTY_GALLERY
+            base["explain"] = ("Nothing has been taught yet, so there is nothing "
+                               "to compare against. Enrol a product first.")
+            rows.append(base)
+            continue
+
+        crop = oriented_crop_bgr(rect, p)
+        try:
+            res = ident.identify(crop, float(p.long_edge_mm))
+        except IdentityError as exc:
+            base["reason"] = R_IDENTITY
+            base["explain"] = str(exc)
+            rows.append(base)
+            continue
+
+        base.update({
+            "reason": res.reason,
+            "top1": round(float(res.top1), 4),
+            "top2": round(float(res.top2), 4),
+            "margin": round(float(res.margin), 4),
+            "top1_sku": res.top1_sku,
+            "top2_sku": res.top2_sku,
+            "n_candidates": int(res.n_candidates),
+        })
+
+        if res.sku_id is None:
+            base["explain"] = ABSTAIN_EXPLAIN.get(
+                res.reason, "Abstained; see reason.")
+            rows.append(base)
+            continue
+
+        # Named. A price is still not guaranteed, and a named SKU with no price
+        # must go AMBER rather than bill zero.
+        try:
+            price = store.price_paise(res.sku_id)
+        except Exception:
+            price = None
+        if price is None:
+            base.update({"sku_id": None, "reason": R_NO_PRICE,
+                         "top1_sku": res.top1_sku})
+            base["explain"] = (
+                f"Recognised as {res.sku_id!r} but the catalog has no price for "
+                f"it, so it is amber rather than billed at zero.")
+            rows.append(base)
+            continue
+
+        rec = store.get(res.sku_id)
+        base.update({
+            "sku_id": res.sku_id,
+            "name": _field(rec, "name", default=res.sku_id),
+            "price_paise": int(price),
+            "price_rupees": rupees_str(int(price)),
+            "enrolled_footprint_mm": _field(rec, "footprint_mm"),
+        })
+        total += int(price)
+        rows.append(base)
+
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    named = [r for r in rows if r["sku_id"] is not None]
+    amber = [r for r in rows if r["sku_id"] is None]
+
+    return {
+        "ok": True,
+        "settles_money": False,
+        "money_note": MONEY_NOTE,
+        "locked": True,
+        **{k: lock_info[k] for k in
+           ("reason", "ids_found", "reference_source", "scale_err_pct",
+            "persp_index", "diagnosis")},
+        "items": rows,
+        "named": named,
+        "amber": amber,
+        "counts": {"placements": len(rows), "named": len(named),
+                   "amber": len(amber)},
+        "amber_reasons": sorted({str(r["reason"]) for r in amber}),
+        # INVARIANT 7, in one number: the total is what was NAMED. Amber items
+        # are excluded, listed above, and must be resolved by a human tap.
+        "total_paise": int(total),
+        "total_rupees": rupees_str(total),
+        "excluded_paise": 0,
+        "excluded_count": len(amber),
+        "catalog_size": len(gallery),
+        "gates": {"theta": THETA, "phi": PHI, "tau_mm": TAU_MM},
+        "elapsed_ms": elapsed_ms,
+        "overlay_png": _png_b64(cv2.resize(
+            _draw_recognition(rect, rows), (BUF_W // 2, BUF_H // 2),
+            interpolation=cv2.INTER_AREA)),
+        "input": note,
+        "source_image_returned": False,
+    }
+
+
+#: What each abstention MEANS, in the terms of what the shopkeeper does next.
+ABSTAIN_EXPLAIN = {
+    "no_candidate_in_footprint":
+        "Nothing taught is this SIZE. The tape measure ruled every SKU out "
+        "before appearance was even consulted — this is probably a new product.",
+    "below_similarity":
+        "Something taught is the right size, but nothing LOOKS like this. "
+        "Probably a new product: teach it.",
+    "ambiguous_pair":
+        "The top two are tied to within numerical noise, so which one is "
+        "'first' is an artefact of sort order and carries no information. "
+        "Both are named above; a human must pick.",
+    "below_margin":
+        "There is a leader, but not by enough to be safe. The leader is named "
+        "above as a SUGGESTION, never as a fact.",
+    R_EMPTY_GALLERY: "Nothing has been taught yet.",
+    R_NO_PRICE: "Recognised, but no price is stored for that SKU.",
+}
+
+
+@app.post("/enrol")
+async def enrol_ep(request: Request) -> JSONResponse:
+    """multipart: image + sku_id + name + price_rupees -> one taught product."""
+    try:
+        form = await read_form(request)
+        sku_id = _valid_sku(str(form_value(form, "sku_id") or ""))
+        name = _valid_name(str(form_value(form, "name") or ""))
+        price = price_to_paise(form_value(form, "price_rupees"),
+                               form_value(form, "price_paise"))
+        force = str(form_value(form, "force") or "").lower() in ("1", "true", "yes")
+        res = do_enrol(form_image(form), sku_id, name, price, force=force)
+        res["simulated"] = False
+        return JSONResponse(res)
+    except UploadRefused as exc:
+        return _refusal(exc)
+    except Exception as exc:                                  # never a 500
+        return JSONResponse({"ok": False, "locked": False, "reason": R_INTERNAL,
+                             "detail": f"{type(exc).__name__}: {exc}",
+                             "ids_found": [], "items": [], "refusals": []},
+                            status_code=400)
+
+
+@app.post("/recognise")
+async def recognise_ep(request: Request) -> JSONResponse:
+    """multipart: image -> every item, named or amber, and an integer total."""
+    try:
+        form = await read_form(request)
+        res = do_recognise(form_image(form))
+        res["simulated"] = False
+        return JSONResponse(res)
+    except UploadRefused as exc:
+        return _refusal(exc)
+    except Exception as exc:                                  # never a 500
+        return JSONResponse({"ok": False, "locked": False, "reason": R_INTERNAL,
+                             "detail": f"{type(exc).__name__}: {exc}",
+                             "ids_found": [], "items": [], "refusals": [],
+                             "amber": [], "total_paise": 0},
+                            status_code=400)
+
+
+def catalog() -> dict[str, Any]:
+    store = load_store()
+    gallery = store.to_gallery()
+    prices = store.price_book()
+    rows = []
+    for sku_id in gallery.skus():
+        rec = store.get(sku_id)
+        price = _field(rec, "price_paise", "price", default=None)
+        if price is None:
+            try:
+                price = prices[sku_id]
+            except Exception:
+                price = None
+        rows.append({
+            "sku_id": sku_id,
+            "name": _field(rec, "name", default=sku_id),
+            "price_paise": None if price is None else int(price),
+            "price_rupees": None if price is None else rupees_str(int(price)),
+            "footprint_mm": round(float(gallery.footprint(sku_id)), 2),
+            "n_views": int(gallery.get(sku_id).n_views),
+            "vector_dim": int(gallery.get(sku_id).dim),
+            "thumb_png": _field(rec, "photo_png", "thumb_png", "photo"),
+        })
+    return {
+        "ok": True,
+        "settles_money": False,
+        "money_note": MONEY_NOTE,
+        "count": len(rows),
+        "skus": rows,
+        "store_dir": str(store_dir()),
+        "gates": {"theta": THETA, "phi": PHI, "tau_mm": TAU_MM},
+        "priced": sum(1 for r in rows if r["price_paise"] is not None),
+    }
+
+
+@app.get("/shop")
+def shop_ep() -> JSONResponse:
+    """The taught catalog: names, integer paise, footprints, thumbnails."""
+    try:
+        return JSONResponse(catalog())
+    except UploadRefused as exc:
+        return _refusal(exc)
+    except Exception as exc:                                  # never a 500
+        return JSONResponse({"ok": False, "reason": R_INTERNAL,
+                             "detail": f"{type(exc).__name__}: {exc}",
+                             "count": 0, "skus": []}, status_code=400)
+
+
+@app.delete("/shop/{sku_id}")
+def shop_delete_ep(sku_id: str) -> JSONResponse:
+    try:
+        store = load_store()
+        if sku_id not in store.to_gallery():
+            raise UploadRefused(
+                R_UNKNOWN_SKU,
+                f"{sku_id!r} is not in the catalog. Nothing was removed.")
+        store.remove(sku_id)
+        return JSONResponse({"ok": True, "reason": "sku_removed",
+                             "sku_id": sku_id, "settles_money": False,
+                             "count": len(store.to_gallery())})
+    except UploadRefused as exc:
+        return _refusal(exc, status=404 if exc.reason == R_UNKNOWN_SKU else 400)
+    except Exception as exc:                                  # never a 500
+        return JSONResponse({"ok": False, "reason": R_INTERNAL,
+                             "detail": f"{type(exc).__name__}: {exc}"},
+                            status_code=400)
+
+
+# ------------------------------------------------------------ the demo path
+#
+# Everything below runs the SAME do_enrol/do_recognise as a real upload. Only
+# the photograph is synthetic, and it is stamped as such on the image, in the
+# JSON, and on the page. Without these a visitor with no mat and no camera could
+# not perform the round trip at all, and the round trip is the whole argument.
+
+SIM_NOTE = ("SIMULATED. These scenes were rendered, not photographed. The mat "
+            "lock, the millimetres, the descriptor, the thresholds and the "
+            "total are all the real ones. " + MONEY_NOTE)
+
+
+@app.post("/demo/teach")
+async def demo_teach_ep(request: Request) -> JSONResponse:
+    """Teach the sample products from simulated photos, one real enrol each."""
+    try:
+        form = await read_form(request) if await request.body() else {"_kind": "json"}
+    except UploadRefused:
+        form = {"_kind": "json"}
+    hard = str(form_value(form, "hard_pair") or "").lower() in ("1", "true", "yes")
+    products = list(SAMPLE_PRODUCTS) + ([HARD_PAIR_PRODUCT] if hard else [])
+
+    taught: list[dict[str, Any]] = []
+    for p in products:
+        png = scene_png(enrol_pose(p))
+        try:
+            r = do_enrol(png, p.sku_id, p.name,
+                         price_to_paise(p.price_rupees), force=False)
+            taught.append({
+                "sku_id": p.sku_id, "ok": True,
+                "truth_long_mm": round(p.long_edge_mm, 2),
+                "measured_long_mm": r["measured"]["long_edge_mm"],
+                "err_long_mm": round(abs(r["measured"]["long_edge_mm"]
+                                         - p.long_edge_mm), 2),
+                "price_paise": r["stored"]["price_paise"],
+                "collision": r["collision"],
+                "crop_png": r["crop_png"],
+            })
+        except UploadRefused as exc:
+            taught.append({"sku_id": p.sku_id, "ok": False,
+                           "reason": exc.reason, "detail": exc.detail})
+    return JSONResponse({
+        "ok": any(t["ok"] for t in taught),
+        "simulated": True, "simulated_note": SIM_NOTE,
+        "settles_money": False, "money_note": MONEY_NOTE,
+        "taught": taught,
+        "catalog": catalog(),
+    })
+
+
+#: A DIFFERENT scene from the enrolment photos: every item is somewhere else on
+#: the mat and turned to a different angle, and an untaught intruder is present.
+#: Recognising the enrolment photo back would prove only that a hash works.
+DEMO_SCENE: tuple[tuple[str, float, float, float], ...] = (
+    ("parle_g_biscuit", 85.0, 105.0, 24.0),
+    ("lifebuoy_soap", 205.0, 118.0, -31.0),
+    ("shampoo_sachet", 96.0, 268.0, 47.0),
+    ("chai_masala_box", 208.0, 300.0, -12.0),
+)
+
+
+@app.post("/demo/recognise")
+@app.get("/demo/recognise")
+def demo_recognise_ep(intruder: str = "1", seed: int = 23) -> JSONResponse:
+    """Recognise a simulated scene the counter has never seen before."""
+    try:
+        poses: list[Pose] = [
+            (PRODUCTS_BY_ID[sku], x, y, r) for sku, x, y, r in DEMO_SCENE
+            if sku != INTRUDER_PRODUCT.sku_id
+            or str(intruder).lower() in ("1", "true", "yes")
+        ]
+        png = scene_png(poses, seed=int(seed))
+        res = do_recognise(png)
+        res["simulated"] = True
+        res["simulated_note"] = SIM_NOTE
+        res["scene_truth"] = [
+            {"sku_id": p.sku_id, "name": p.name,
+             "long_edge_mm": round(p.long_edge_mm, 2),
+             "centre_mm": [x, y], "rotation_deg": r,
+             "taught": p.sku_id != INTRUDER_PRODUCT.sku_id}
+            for p, x, y, r in poses
+        ]
+        if res.get("overlay_png"):
+            buf = cv2.imdecode(np.frombuffer(
+                base64.b64decode(res["overlay_png"]), np.uint8), cv2.IMREAD_COLOR)
+            res["overlay_png"] = _png_b64(_stamp_simulated(buf))
+        return JSONResponse(res)
+    except UploadRefused as exc:
+        return _refusal(exc)
+    except Exception as exc:                                  # never a 500
+        return JSONResponse({"ok": False, "locked": False, "reason": R_INTERNAL,
+                             "detail": f"{type(exc).__name__}: {exc}",
+                             "items": [], "amber": [], "total_paise": 0},
+                            status_code=400)
+
+
+@app.get("/demo/photo")
+def demo_photo_ep(sku: str = "parle_g_biscuit", seed: int = 11):
+    """A simulated enrolment photograph, so the file-upload path can be tried
+    with a real file by someone who has no mat and no camera."""
+    from fastapi.responses import Response
+    p = PRODUCTS_BY_ID.get(sku)
+    if p is None:
+        return JSONResponse({"ok": False, "reason": R_UNKNOWN_SKU,
+                             "detail": f"no sample product {sku!r}; have "
+                                       f"{sorted(PRODUCTS_BY_ID)}"},
+                            status_code=404)
+    return Response(scene_png(enrol_pose(p), seed=int(seed)),
+                    media_type="image/png",
+                    headers={"X-Gawaah-Simulated": "true"})
 
 
 PAGE = """<!doctype html><meta charset=utf-8>

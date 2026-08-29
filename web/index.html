@@ -40,6 +40,23 @@
      The alternative -- moving rectification to the brain -- would send UNMASKED
      frames off the phone and break INVARIANT 4, which is a far worse trade.
 
+     'unsafe-inline' on STYLE-SRC only, and it is a real concession with a real
+     reason. Panel modules ship their own CSS via an injected <style> element so
+     each capability is a self-contained file; plain style-src 'self' blocks
+     that outright:
+       "Applying inline style violates the following Content Security Policy
+        directive 'style-src 'self''"  (enrol.js:1020, seen in a real console)
+     and the panel then renders unstyled, which reads as broken.
+
+     This is NOT the same concession as script 'unsafe-inline'. Inline CSS
+     cannot execute code; the realistic risk is CSS-based exfiltration of
+     attribute values, which needs an injection point, and this page takes no
+     user-authored text into markup. SCRIPT-src stays without 'unsafe-inline'.
+
+     DEBT, stated rather than hidden: the correct fix is to move panel CSS into
+     style.css and drop this back to 'self'. Two files inject today --
+     web/panels/enrol.js and web/panels/demo.js.
+
      connect-src stays at 'self' and the SOCKET moved instead. It used to name
      one literal host, so opening the page on the loopback IP rather than the
      name localhost -- a different origin to the browser -- had its WebSocket
@@ -54,7 +71,7 @@
      INVARIANT 3 (zero model weights in the browser) is enforced by the browser
      itself and not merely by our good intentions. -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <title>GAWAAH — counter</title>
 <link rel="stylesheet" href="./style.css">
 </head>

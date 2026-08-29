@@ -1573,8 +1573,36 @@ export function panelRegistry() { return PANEL_REGISTRY; }
  */
 export function drainPanelQueue(queue, register) {
   const out = { attached: [], skipped: [], refused: [] };
-  if (!Array.isArray(queue) || typeof register !== 'function') return out;
-  for (const d of queue) {
+  if (typeof register !== 'function') return out;
+
+  // THE PANEL MODULES DISAGREE ABOUT WHAT GAWAAH_PANELS IS, and this drain used
+  // to take a side silently.
+  //
+  //   mudra.js / peel.js  ->  an OBJECT keyed by id:
+  //       g.GAWAAH_PANELS = Object.assign({}, g.GAWAAH_PANELS, { [ID]: panel })
+  //   chilla.js / saaf.js / ledger.js  ->  an ARRAY of descriptors:
+  //       (globalThis.GAWAAH_PANELS ||= []).push(DESCRIPTOR)
+  //
+  // Whichever module the shell loads FIRST decides the type. The old guard was
+  // `if (!Array.isArray(queue)) return out`, so the instant mudra rewrote the
+  // global as an object this function returned empty and attached NOTHING --
+  // including the three descriptors that had already been pushed as array
+  // entries. MUDRA and PEEL appeared to work only because they ALSO call
+  // registerPanel directly; CHILLA, SAAF and LEDGER rely on the drain and so
+  // sat on their static abstentions for ever, while the brain was demonstrably
+  // sending them real messages (a 64-hex audit head, 42 lines, MATCHED, a
+  // stacked burst). A load-order-dependent type is a coin flip, and the cost
+  // of losing it was three dead panels.
+  //
+  // Accept BOTH shapes rather than legislating one, because both are already
+  // shipped and each panel's own tests pass against its own half. The seam is
+  // what was untested, so the seam is what gets widened.
+  const items = Array.isArray(queue)
+    ? queue
+    : (queue && typeof queue === 'object' ? Object.values(queue) : null);
+  if (!items) return out;
+
+  for (const d of items) {
     if (!d || typeof d !== 'object') {
       out.refused.push({ id: null, message: `not_a_descriptor:${String(d)}` });
       continue;
@@ -2035,7 +2063,34 @@ function boot() {
       const whyEl = document.getElementById(`why-${id}`);
       if (whyEl && s.why) whyEl.textContent = s.why;
       const abstainEl = document.getElementById(`abstain-${id}`);
-      if (abstainEl) abstainEl.hidden = s.status === PanelStatus.OK;
+      if (abstainEl) {
+        abstainEl.hidden = s.status === PanelStatus.OK;
+
+        // THE COLD PROSE MUST NOT OUTLIVE THE COLD STATE.
+        //
+        // Each abstention block is hardcoded cold-start prose plus a live
+        // reason chip. Hiding the block only on OK was right, but it left the
+        // PROSE on screen for every not-OK status -- so once the brain started
+        // reporting, PEEL displayed "Nothing has been enrolled, so there is no
+        // registered sticker to compare a crop against" directly above "the
+        // brain REGISTERED this sticker · TAMPERED · ignited 0.060882". Both
+        // cannot be true, and a panel that contradicts itself is worse than one
+        // that stays quiet: it makes the honest abstention look like a bug.
+        //
+        // So once a panel has SPOKEN at all, the cold paragraph goes and the
+        // live reason chip stays. The abstention itself is untouched -- PEEL
+        // reporting TAMPERED is genuinely not OK, and the block correctly
+        // remains. What changes is that it now says the CURRENT reason instead
+        // of the opening one.
+        const hasSpoken = registry.declaredFor(id) !== null;
+        // querySelectorAll is guarded because the selftest's DOM stub does not
+        // implement it on elements, and a shell that only runs under a real
+        // browser is a shell whose logic is untested.
+        if (typeof abstainEl.querySelectorAll === 'function') {
+          for (const para of abstainEl.querySelectorAll('p')) para.hidden = hasSpoken;
+        }
+        abstainEl.dataset.cold = hasSpoken ? 'no' : 'yes';
+      }
     }
   }
 
