@@ -42,6 +42,20 @@ WHAT THIS MODULE MAY NOT DO
   A stale mirror is AMBER. Two matching payments is AMBER (AMBIGUOUS).
 * It never returns pixels. `ScreenDetection` carries geometry and scalars only,
   so the customer's screen contents cannot leak through this API.
+
+WHAT THE SCREEN DETECTOR CAN AND CANNOT TELL APART
+--------------------------------------------------
+`DETECTION_REASONS` is the complete list of things `ScreenFinder.detect()` can
+say, `REASON_NOTES` explains each one, and `LIMITATIONS` states where the gates
+stop working. The test suite parses this module's AST and fails unless the
+published list is exactly the set of reasons the code emits AND every one of
+them is produced by a real frame — so an abstention reason cannot be advertised
+here unless it can actually fire.
+
+The reflective/emissive question is answered by illumination coupling (see
+MAX_ILLUM_COUPLING), not by brightness. Brightness alone is measured by
+MIN_BRIGHTNESS_DELTA, which is named for what it computes because a sheet of
+white paper under the counter lamp clears it.
 """
 from __future__ import annotations
 
@@ -157,7 +171,6 @@ def read_screen_timestamp(*_a: Any, **_k: Any) -> NoReturn:
 
 # All thresholds are named so a refusal can quote the one that fired.
 DELTA_FLOOR = 25          # grey levels; below this a "difference" is just noise
-MIN_EMISSIVE_DELTA = 18.0  # mean (screen - reference) inside the quad
 MIN_AREA_MM2 = 2500.0     # ~50x50 mm; smaller is a coin, a note corner, a shadow
 MAX_AREA_MM2 = 26000.0    # ~125x208 mm; larger is a tablet or the whole mat
 MIN_RECTANGULARITY = 0.80  # contour area / minAreaRect area
@@ -168,6 +181,125 @@ MAX_MASK_FRACTION = 0.35  # more changed than this is a re-baseline, not a phone
 MAX_MEDIAN_SHIFT = 12.0   # grey levels of global AE/AWB drift we tolerate
 CLOSE_MM = 4.0            # morphological close, in mm, to bridge glyph gaps
 AMBIGUITY_RATIO = 0.70    # second candidate this close in area -> abstain
+
+#: Noise floor for the contour pre-filter, and NOT the same number as
+#: MIN_AREA_MM2. It used to be: detect() dropped every contour below
+#: MIN_AREA_MM2 before _evaluate() ran, and since a minAreaRect can never be
+#: smaller than the contour it encloses, _evaluate()'s own `too_small` branch was
+#: unsatisfiable — a published abstention reason that could not fire. The
+#: pre-filter's real job is only to throw away specks, so it now says so, and the
+#: size decision is taken where the measured rect can be reported with it.
+MIN_CONTOUR_AREA_MM2 = 100.0   # ~10x10 mm; below this it is a highlight, not an object
+
+# -- photometry ---------------------------------------------------------------
+#: Mean (quad - reference) grey levels. THIS MEASURES BRIGHTNESS, NOT EMISSION.
+#: It was once called MIN_EMISSIVE_DELTA, which was a claim the arithmetic does
+#: not support: a sheet of white paper under the counter lamp clears 18 grey
+#: levels easily. The name now states what is computed; the emission question is
+#: asked separately, below.
+MIN_BRIGHTNESS_DELTA = 18.0
+
+#: The actual reflective/emissive discriminator, and it is physics rather than
+#: threshold-picking. A diffuse reflector's luminance is MULTIPLICATIVE in the
+#: light field: paper of albedo a under illumination I(x,y) returns a*I(x,y),
+#: and the mat beneath it returns a_mat*I(x,y). So the two carry the SAME
+#: spatial gradient and the patch correlates with the reference at r ~ +1. An
+#: emissive panel sets its own luminance from its backlight; it does not know
+#: where the lamp is, so it correlates at r ~ 0. We pool to ~10 mm cells first so
+#: that UI furniture and printed mat texture average away and only the
+#: low-frequency illumination survives.
+POOL_MM = 10.0                 # side of one pooling cell, millimetres
+MIN_COUPLING_CELLS = 12        # fewer cells than this and the correlation is noise
+MIN_COUPLING_CONTRAST = 0.60   # pooled reference std, grey levels, to call it measurable
+MAX_ILLUM_COUPLING = 0.60      # r at or above this -> reflective, abstain
+
+#: Every reason `ScreenFinder.detect()` can return. The test suite reads the
+#: module's own AST and refuses to pass unless this tuple is exactly the set of
+#: reasons the code emits AND every one of them is produced by a real frame.
+DETECTION_REASONS: tuple[str, ...] = (
+    "no_reference",
+    "buffer_shape_mismatch",
+    "global_illumination_shift",
+    "no_bright_region",
+    "diff_saturated",
+    "all_regions_too_small",
+    "too_small",
+    "too_large",
+    "not_rectangular",
+    "aspect_out_of_range",
+    "touches_mat_edge",
+    "not_brighter_than_mat",
+    "reflective_not_emissive",
+    "ambiguous_two_bright_quads",
+    "screen_found",
+)
+
+#: The abstention list proper: everything except the one success reason.
+ABSTENTION_REASONS: tuple[str, ...] = tuple(
+    r for r in DETECTION_REASONS if r != "screen_found"
+)
+
+REASON_NOTES: dict[str, str] = {
+    "no_reference": "no REF_EMPTY_MAT has been pushed, or it was cleared after "
+                    "takePhoto() muted the track and AE/AWB reconverged.",
+    "buffer_shape_mismatch": "the frame is not the rectified mat buffer; CHILLA "
+                             "only ever sees the rectified crop (invariant 4).",
+    "global_illumination_shift": "the whole scene changed brightness, so every "
+                                 "pixel 'differs'. That is a re-baseline, not a phone.",
+    "no_bright_region": "less changed than the noise floor "
+                        f"({MIN_CONTOUR_AREA_MM2:.0f} mm2). Nothing was put down.",
+    "diff_saturated": f"more than {MAX_MASK_FRACTION:.0%} of the mat changed. "
+                      "Re-baseline; a phone does not cover a third of an A3 sheet.",
+    "all_regions_too_small": "the mat changed, but every individual blob is under "
+                             "the noise floor: specks, highlights, foil.",
+    "too_small": f"a real candidate whose measured rect is under {MIN_AREA_MM2:.0f} "
+                 "mm2. Reported WITH the rect, so the operator sees the miss.",
+    "too_large": f"measured rect over {MAX_AREA_MM2:.0f} mm2: a tablet, a sheet, "
+                 "or the mat itself.",
+    "not_rectangular": f"fill ratio under {MIN_RECTANGULARITY}: the bright region "
+                       "is not a quadrilateral, so its rect is a fiction.",
+    "aspect_out_of_range": f"long/short outside [{MIN_ASPECT}, {MAX_ASPECT}]: not "
+                           "a handset silhouette.",
+    "touches_mat_edge": f"within {EDGE_MARGIN_MM} mm of the mat border, so the "
+                        "quad may be clipped and its size cannot be trusted.",
+    "not_brighter_than_mat": f"mean brightness delta under {MIN_BRIGHTNESS_DELTA} "
+                             "grey levels. NOTE: this gate measures BRIGHTNESS "
+                             "ONLY. Passing it does not establish emission — see "
+                             "reflective_not_emissive and LIMITATIONS.",
+    "reflective_not_emissive": f"illumination coupling r >= {MAX_ILLUM_COUPLING}: "
+                               "the patch tracks the reference's own light "
+                               "gradient, which is what a diffuse reflector does "
+                               "and an emissive panel does not.",
+    "ambiguous_two_bright_quads": "two plausible screens on the mat; abstain "
+                                  "rather than pick one (invariant 7).",
+    "screen_found": "a phone-sized, phone-shaped, brighter-than-mat quad that "
+                    "does not track the lamp. Geometry only — never pixels.",
+}
+
+#: Published next to the reasons, because a gate whose limits are only in a
+#: designer's head is a claim, not a measurement.
+LIMITATIONS = """\
+1. BRIGHTNESS IS NOT EMISSION. `min_brightness_delta` measures exactly one
+   thing: how many grey levels brighter than the empty mat the quad is. A sheet
+   of white paper under the counter lamp passes it. It is a necessary condition,
+   never a sufficient one, and it is named for what it measures.
+2. THE COUPLING TEST NEEDS A LIGHT GRADIENT. The reflective/emissive
+   discriminator works by correlating the patch against the reference's own
+   illumination falloff. Under a FLAT, uniform light field there is no gradient
+   to correlate with, the correlation is undefined, and CHILLA reports
+   `coupling_measurable=False` rather than pretending the test ran. The honest
+   cost is explicit: under uniform light, paper is NOT rejected. The synthetic
+   flat-field mat in the test suite is exactly this case, and the suite asserts
+   the limitation instead of hiding it.
+3. THE FAILURE DIRECTION IS ABSTENTION. A spurious coupling makes CHILLA refuse
+   a real screen (amber), never accept a fake one. A glossy phone reflecting the
+   room, or a phone lying in the lamp's own specular lobe, can be refused this
+   way. Under invariant 7 that is the correct direction to be wrong in.
+4. NONE OF THIS IS ANTI-SPOOF. A second phone playing a video of a payment
+   screen is emissive, phone-shaped and uncorrelated with the lamp. CHILLA does
+   not claim to detect it; that is what the ledger match and the webhook
+   predicate are for. CHILLA corroborates, it never decides.
+"""
 
 #: The printed placement box (ROKO). Advisory only: reported, never gating.
 PLACEMENT_BOX_MM = (68.5, 105.0, 228.5, 315.0)   # x0, y0, x1, y1
@@ -223,6 +355,16 @@ class ScreenDetection:
     threshold_used: int = 0
     n_candidates: int = 0
     in_placement_box: bool = False
+    #: Pearson r between the pooled quad and the pooled reference beneath it.
+    #: ~+1 = the patch obeys the lamp (diffuse reflector); ~0 = it does not
+    #: (emissive panel). None when the correlation is undefined.
+    illum_coupling: float | None = None
+    #: Pooled reference std inside the quad, grey levels: how much illumination
+    #: gradient there was to correlate against in the first place.
+    ref_contrast: float = 0.0
+    #: False means the light field was too flat to run the test at all. It does
+    #: NOT mean the object is emissive — see LIMITATIONS.
+    coupling_measurable: bool = False
 
     def as_dict(self) -> dict:
         """Auditable summary. Deliberately contains no pixels."""
@@ -238,6 +380,10 @@ class ScreenDetection:
             "threshold_used": int(self.threshold_used),
             "n_candidates": int(self.n_candidates),
             "in_placement_box": bool(self.in_placement_box),
+            "illum_coupling": (None if self.illum_coupling is None
+                               else round(self.illum_coupling, 4)),
+            "ref_contrast": round(self.ref_contrast, 4),
+            "coupling_measurable": bool(self.coupling_measurable),
         }
 
 
@@ -292,6 +438,56 @@ def _rect_from_quad_mm(q: np.ndarray) -> MmRect:
     return MmRect(float(cx), float(cy), short, long_, ang)
 
 
+def _illumination_coupling(
+    cur: np.ndarray, ref: np.ndarray, quad_buf: np.ndarray
+) -> tuple[float | None, float, int]:
+    """Does this patch obey the reference's light field?
+
+    Returns ``(r, ref_contrast, n_cells)``.
+
+    Both images are mean-pooled into ~POOL_MM cells inside the quad, which
+    destroys UI furniture and printed mat texture (both high frequency) and keeps
+    the illumination falloff (low frequency). Then:
+
+      * diffuse reflector  ->  patch = albedo * I(x,y), ref = albedo_mat * I(x,y)
+                               => r ~ +1
+      * emissive panel     ->  patch = backlight, independent of I(x,y)
+                               => r ~ 0
+
+    `r` is None when the correlation is undefined: either side flat, or too few
+    whole cells inside the quad. `ref_contrast` reports how much gradient there
+    was to test against, so a caller can tell "emissive" from "unmeasurable".
+    """
+    x0, y0 = np.floor(quad_buf.min(axis=0)).astype(int)
+    x1, y1 = np.ceil(quad_buf.max(axis=0)).astype(int)
+    x0, y0 = max(int(x0), 0), max(int(y0), 0)
+    x1, y1 = min(int(x1), ref.shape[1]), min(int(y1), ref.shape[0])
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None, 0.0, 0
+
+    m = np.zeros(ref.shape, np.uint8)
+    cv2.fillConvexPoly(m, quad_buf.astype(np.int32), 255)
+    cell_px = POOL_MM * PX_PER_MM
+    gw = max(2, int(round((x1 - x0) / cell_px)))
+    gh = max(2, int(round((y1 - y0) / cell_px)))
+
+    def pool(a: np.ndarray) -> np.ndarray:
+        return cv2.resize(a[y0:y1, x0:x1].astype(np.float64), (gw, gh),
+                          interpolation=cv2.INTER_AREA)
+
+    # keep only cells lying wholly inside the quad, so the mat outside a rotated
+    # phone cannot leak its own gradient into the correlation
+    keep = pool(m) >= 250.0
+    a, b = pool(cur)[keep], pool(ref)[keep]
+    n_cells = int(a.size)
+    if n_cells < MIN_COUPLING_CELLS:
+        return None, 0.0, n_cells
+    contrast = float(b.std())
+    if contrast < 1e-6 or float(a.std()) < 1e-6:
+        return None, contrast, n_cells
+    return float(np.corrcoef(a, b)[0, 1]), contrast, n_cells
+
+
 def _in_placement_box(q: np.ndarray) -> bool:
     x0, y0, x1, y1 = PLACEMENT_BOX_MM
     return bool(
@@ -314,10 +510,12 @@ class ScreenFinder:
         *,
         min_area_mm2: float = MIN_AREA_MM2,
         max_area_mm2: float = MAX_AREA_MM2,
+        min_contour_area_mm2: float = MIN_CONTOUR_AREA_MM2,
         min_rectangularity: float = MIN_RECTANGULARITY,
         min_aspect: float = MIN_ASPECT,
         max_aspect: float = MAX_ASPECT,
-        min_emissive_delta: float = MIN_EMISSIVE_DELTA,
+        min_brightness_delta: float = MIN_BRIGHTNESS_DELTA,
+        max_illum_coupling: float = MAX_ILLUM_COUPLING,
         delta_floor: int = DELTA_FLOOR,
     ) -> None:
         self._ref: np.ndarray | None = None
@@ -325,10 +523,20 @@ class ScreenFinder:
             self.set_reference(reference)
         self.min_area_mm2 = float(min_area_mm2)
         self.max_area_mm2 = float(max_area_mm2)
+        # the speck floor, deliberately far below min_area_mm2 so that the size
+        # gate in _evaluate() is reachable and can report the rect that failed it
+        self.min_contour_area_mm2 = float(min_contour_area_mm2)
+        if self.min_contour_area_mm2 > self.min_area_mm2:
+            raise ChillaError(
+                f"min_contour_area_mm2 ({self.min_contour_area_mm2}) must not "
+                f"exceed min_area_mm2 ({self.min_area_mm2}); a pre-filter above "
+                "the size gate makes the 'too_small' reason unreachable"
+            )
         self.min_rectangularity = float(min_rectangularity)
         self.min_aspect = float(min_aspect)
         self.max_aspect = float(max_aspect)
-        self.min_emissive_delta = float(min_emissive_delta)
+        self.min_brightness_delta = float(min_brightness_delta)
+        self.max_illum_coupling = float(max_illum_coupling)
         self.delta_floor = int(delta_floor)
 
     # -- reference ---------------------------------------------------------
@@ -371,8 +579,12 @@ class ScreenFinder:
         mask = np.where(diff >= thr, np.uint8(255), np.uint8(0))
 
         frac = float(np.count_nonzero(mask)) / float(mask.size)
-        min_area_px = self.min_area_mm2 * PX_PER_MM_X * PX_PER_MM_Y
-        if np.count_nonzero(mask) < min_area_px:
+        # NOISE FLOOR, not the size gate. Using min_area_mm2 here is what made
+        # _evaluate()'s `too_small` branch unreachable: minAreaRect area is never
+        # smaller than the contour it encloses, so anything that survived a
+        # min_area_mm2 pre-filter necessarily passed the min_area_mm2 gate too.
+        floor_px = self.min_contour_area_mm2 * PX_PER_MM_X * PX_PER_MM_Y
+        if np.count_nonzero(mask) < floor_px:
             return ScreenDetection(False, "no_bright_region", mask_fraction=frac,
                                    threshold_used=thr)
         if frac > MAX_MASK_FRACTION:
@@ -384,17 +596,21 @@ class ScreenFinder:
             mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
         )
 
+        # No `no_contours` branch: morphological closing is extensive (the
+        # structuring element contains its anchor), so the mask can only grow,
+        # and the check above already proved it has nonzero pixels. findContours
+        # therefore cannot come back empty. That reason was published but
+        # unreachable, so it is gone rather than left as a false claim.
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return ScreenDetection(False, "no_contours", mask_fraction=frac,
-                                   threshold_used=thr)
 
         sized = sorted(
             ((float(cv2.contourArea(c)), c) for c in contours),
             key=lambda t: t[0], reverse=True,
         )
-        sized = [(a, c) for a, c in sized if a >= min_area_px]
+        sized = [(a, c) for a, c in sized if a >= floor_px]
         if not sized:
+            # the mat changed by more than the floor in total, but no single blob
+            # did: scattered specks, highlights, foil. Distinct from "nothing".
             return ScreenDetection(False, "all_regions_too_small",
                                    mask_fraction=frac, threshold_used=thr,
                                    n_candidates=len(contours))
@@ -457,20 +673,34 @@ class ScreenFinder:
                 or quad_mm[:, 1].max() > MAT_H_MM - EDGE_MARGIN_MM):
             return ScreenDetection(False, "touches_mat_edge", **common)
 
-        # photometry, measured inside the filled quad only
+        # Photometry, measured inside the filled quad only.
+        # No `empty_quad` branch: the size and aspect gates above already
+        # guarantee a rect of >= min_area_mm2 with sides in a bounded ratio, so
+        # its shortest side is tens of pixels and fillConvexPoly cannot come back
+        # empty. That reason was published but unreachable, so it is gone.
         m = np.zeros(cur.shape, np.uint8)
         cv2.fillConvexPoly(m, quad_buf.astype(np.int32), 255)
         inside = m > 0
-        if not inside.any():
-            return ScreenDetection(False, "empty_quad", **common)
         mean_luma = float(cur[inside].mean())
         delta = float(cur[inside].astype(np.float64).mean()
                       - ref[inside].astype(np.float64).mean())
         common["mean_luma"] = mean_luma
         common["delta_luma"] = delta
-        if delta < self.min_emissive_delta:
-            # darker than, or the same as, the empty mat: an object, not a screen
-            return ScreenDetection(False, "not_emissive", **common)
+        if delta < self.min_brightness_delta:
+            # darker than, or the same as, the empty mat: an object, not a screen.
+            # NOTE the name: this is a BRIGHTNESS test. Passing it proves the quad
+            # is bright, not that it emits. See LIMITATIONS.
+            return ScreenDetection(False, "not_brighter_than_mat", **common)
+
+        # Emission proper: does this patch obey the reference's light field?
+        r, contrast, _n = _illumination_coupling(cur, ref, quad_buf)
+        measurable = r is not None and contrast >= MIN_COUPLING_CONTRAST
+        common["illum_coupling"] = r
+        common["ref_contrast"] = contrast
+        common["coupling_measurable"] = measurable
+        if measurable and r >= self.max_illum_coupling:
+            # tracks the lamp -> a diffuse reflector (paper, a card, a wrapper)
+            return ScreenDetection(False, "reflective_not_emissive", **common)
         return ScreenDetection(True, "screen_found", **common)
 
 

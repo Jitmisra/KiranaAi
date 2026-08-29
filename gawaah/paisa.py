@@ -29,6 +29,14 @@ Four rules this module is built around
 4. INVARIANT 7 — an item the price book does not know is AMBER: it is recorded,
    excluded from the total, and never guessed at.
 
+5. PRD 9 — the customer's identity is not ours to keep. A Razorpay payment
+   carries a vpa, an email, a contact, an rrn and (on a card payment) a whole
+   card object. GAWAAH needs none of them to know that the right amount arrived
+   for the right session, so `strip_pii` drops them at the one boundary where a
+   gateway document enters this process, before it is stored, audited or
+   returned. The webhook path never stores the body at all: only its sha256
+   reaches the ledger, which identifies a delivery without preserving it.
+
 Running it
 ----------
     RZP_MODE=sim uvicorn --factory gawaah.paisa:create_app
@@ -94,8 +102,78 @@ REFUSAL_CODES = frozenset(
         "basket_locked",
         "gateway_error",
         "bad_amount",
+        "bad_price_book",
     }
 )
+
+#: Keys that carry the customer rather than the transaction. Dropped from every
+#: gateway document before it is stored, audited or returned.
+#:
+#: `name` is here because the only names a payment document carries are the
+#: cardholder's and the customer's; GAWAAH's own item names travel in the
+#: request, never in a gateway response. `acquirer_data` is here because it
+#: holds the rrn/UTR, which is a lookup key into the customer's bank statement.
+PII_FIELDS: frozenset[str] = frozenset(
+    {
+        "vpa",
+        "email",
+        "contact",
+        "phone",
+        "mobile",
+        "name",
+        "customer",
+        "customer_id",
+        "customer_details",
+        "card",
+        "card_id",
+        "bank_transaction_id",
+        "acquirer_data",
+        "rrn",
+        "utr",
+        "upi",
+        "upi_transaction_id",
+        "billing_address",
+        "shipping_address",
+        "ip",
+        "user_agent",
+    }
+)
+
+#: Marker left behind so an operator can see the scrub ran. Field NAMES only —
+#: "this document had an email on it" is not itself an email.
+PII_DROPPED_KEY = "_pii_dropped"
+
+
+def strip_pii(document: Any) -> Any:
+    """Return a copy of `document` with every PII-bearing key removed.
+
+    Recursive, because Razorpay nests: `payment_links[].payments[].email`,
+    `payment.acquirer_data.rrn`, `payment.card.last4`. Non-destructive, because
+    the caller may still be holding the gateway's own object.
+
+    This is a drop, not a redaction: a redacted placeholder still records that a
+    particular customer transacted here, and the point is that this process has
+    nothing to lose in the first place.
+    """
+    dropped: set[str] = set()
+    cleaned = _scrub(document, dropped)
+    if dropped and isinstance(cleaned, dict):
+        cleaned[PII_DROPPED_KEY] = sorted(dropped)
+    return cleaned
+
+
+def _scrub(node: Any, dropped: set[str]) -> Any:
+    if isinstance(node, Mapping):
+        out: dict[Any, Any] = {}
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() in PII_FIELDS:
+                dropped.add(key.lower())
+                continue
+            out[key] = _scrub(value, dropped)
+        return out
+    if isinstance(node, (list, tuple)):
+        return [_scrub(v, dropped) for v in node]
+    return node
 
 
 class PaisaConfigError(RuntimeError):
@@ -148,7 +226,15 @@ class PriceBook(Protocol):
 
 
 class DictPriceBook:
-    """A price book backed by a mapping. Rejects a float price at the door."""
+    """A price book backed by a mapping. Rejects a float price at the door.
+
+    The `paise()` calls below are the whole of INVARIANT 1 at this boundary and
+    they are load-bearing, not decorative. Without them `int(214.507)` is 214
+    paise: two rupees fourteen for a two-hundred-fourteen rupee bag of rice, a
+    99% discount that no wire model, no lint rule and no downstream check would
+    catch, because by the time the number is in the book it IS an int.
+    See tests/test_paisa.py::test_a_truncating_price_book_would_be_caught_not_silently_billed
+    """
 
     def __init__(self, prices: Mapping[str, int] | None = None) -> None:
         self._prices: dict[str, int] = {}
@@ -163,6 +249,21 @@ class DictPriceBook:
 
     def __len__(self) -> int:
         return len(self._prices)
+
+
+def book_price_paise(book: PriceBook, item_id: str) -> Optional[int]:
+    """Ask a price book for a price, and insist the answer is integer paise.
+
+    `PriceBook` is a Protocol, so the implementation is whatever a deployment
+    plugs in: a CSV loader, a spreadsheet export, an HTTP call whose JSON
+    numbers arrive as floats. `DictPriceBook` guards its own door; this guards
+    every other door, so a float from a third-party book is refused with a named
+    code instead of truncated into a discount.
+    """
+    price = book.price_paise(item_id)
+    if price is None:
+        return None
+    return int(paise(price))
 
 
 # ---------------------------------------------------------------- config
@@ -640,7 +741,22 @@ def rerun_geometry(
     for c in geo.crossings:
         if c.item_id not in set(server_committed):
             continue
-        price = book.price_paise(c.item_id)
+        try:
+            price = book_price_paise(book, c.item_id)
+        except MoneyError as exc:
+            # INVARIANT 1 at the price-book boundary. A book that answers with
+            # 214.507 is refused whole; there is no partial total to report,
+            # because the number that would anchor it is not money.
+            return refuse(
+                "bad_price_book",
+                f"the price book answered for {c.item_id!r} with a value that is "
+                f"not integer paise ({exc}); this counter will not truncate a "
+                "price into a discount",
+                amber=tuple(amber),
+                priced=tuple(priced),
+                total=0,
+                **common,
+            )
         if price is None:
             amber.append(c.item_id)
             if c.price_paise is not None:
@@ -655,7 +771,7 @@ def rerun_geometry(
                     **common,
                 )
             continue
-        server_price = int(paise(price))
+        server_price = int(price)  # already through paise() in book_price_paise
         if c.price_paise is not None and int(c.price_paise) != server_price:
             return refuse(
                 "price_disagreement",
@@ -783,10 +899,51 @@ class PaisaService:
     # -- audit ----------------------------------------------------------
 
     def _audit(self, event: str, **fields: Any) -> str:
-        """One ledger line. Never the secret, the signature or the raw body."""
+        """One ledger line. Never the secret, the signature or the raw body.
+
+        Routed through the kernel when they share a ledger, because the kernel
+        holds the cross-process file lock: `Ledger` caches its chain head in
+        memory, so a service that appended around that lock would break the
+        chain the moment a second process (a reconcile worker, a second uvicorn
+        worker) touched the same file. Falls back to a direct append only when
+        the two are demonstrably not the same ledger and clock.
+        """
+        kern = getattr(self, "kernel", None)
+        if (
+            kern is not None
+            and getattr(kern, "ledger", None) is self.ledger
+            and getattr(kern, "clock", None) is self.clock
+            and hasattr(kern, "audit_append")
+        ):
+            return kern.audit_append(MODULE, event=event, **fields)
         return self.ledger.append(
             ts=self.clock.now_iso(), module=MODULE, event=event, **fields
         )
+
+    # -- gateway documents ------------------------------------------------
+
+    def stored_link(self, nonce: str) -> dict[str, Any]:
+        """The minted link as this counter kept it: scrubbed, never the original.
+
+        Exposed so the PII guarantee is testable from outside the class. If this
+        ever returns a vpa, an email or a card, the scrub at the gateway
+        boundary has regressed.
+        """
+        with self._lock:
+            return json.loads(json.dumps(self._links.get(nonce) or {}))
+
+    def _server_price(self, item_id: str) -> Optional[int]:
+        """Price one item, insisting on integer paise (INVARIANT 1)."""
+        try:
+            return book_price_paise(self.price_book, item_id)
+        except MoneyError as exc:
+            raise PaisaRefusal(
+                409,
+                "bad_price_book",
+                f"the price book answered for {item_id!r} with a value that is "
+                f"not integer paise ({exc})",
+                item_id=item_id,
+            ) from exc
 
     # -- kernel adapters -------------------------------------------------
 
@@ -875,7 +1032,7 @@ class PaisaService:
                     Placement(
                         item_id=c.item_id,
                         name=c.name,
-                        price_paise=self.price_book.price_paise(c.item_id),
+                        price_paise=self._server_price(c.item_id),
                     )
                 )
                 sess.on_exit(c.item_id)
@@ -957,6 +1114,19 @@ class PaisaService:
                         session_id=req.session_id,
                         nonce=intent.nonce,
                     ) from exc
+                if not isinstance(link, Mapping):
+                    raise PaisaRefusal(
+                        502,
+                        "gateway_error",
+                        f"the gateway returned {type(link).__name__}, not a "
+                        "payment-link document; nothing is minted.",
+                        session_id=req.session_id,
+                        nonce=intent.nonce,
+                    )
+                # PRD 9. The ONE boundary where a gateway document enters this
+                # process. Everything below stores, audits or returns `link`, so
+                # the customer is dropped here or not at all.
+                link = strip_pii(link)
                 self._links[intent.nonce] = link
 
             body = {
@@ -1148,6 +1318,10 @@ class PaisaService:
                 "webhook_secret_configured": self.config.webhook_secret_configured,
                 "sessions": len(self._sessions),
                 "intents": self.kernel.count(),
+                # An escalated intent is a person's job, so it has to be visible
+                # to a person. A number nobody can see is not an escalation.
+                "intents_needing_human": len(self.kernel.intents_needing_human()),
+                "intents_escalated": len(self.kernel.escalated_intents()),
                 "payment_links": len(self._links),
                 "ledger_lines": self.ledger.count,
                 "ledger_head": self.ledger.head,
@@ -1249,9 +1423,12 @@ __all__ = [
     "PaisaConfigError",
     "PaisaRefusal",
     "PaisaService",
+    "PII_DROPPED_KEY",
+    "PII_FIELDS",
     "PriceBook",
     "ReplayResult",
     "REFUSAL_CODES",
+    "book_price_paise",
     "build_gateway",
     "build_service",
     "check_homography",
@@ -1259,4 +1436,5 @@ __all__ = [
     "expected_marker_points",
     "replay_crossings",
     "rerun_geometry",
+    "strip_pii",
 ]

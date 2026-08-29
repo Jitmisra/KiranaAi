@@ -23,7 +23,8 @@ import pytest
 
 from gawaah.clock import VirtualClock
 from gawaah.placement import (
-    BORDER_PX, MIN_AREA_MM2, REASON_BORDER, REASON_OK, STABLE_FRAMES,
+    BORDER_PX, CLOSE_PX, MERGED_MIN_FILL, MIN_AREA_MM2, OPEN_PX,
+    REASON_BORDER, REASON_MERGED, REASON_OK, STABLE_FRAMES,
     PlacementDetector, PlacementError, px_to_mm,
 )
 from gawaah.takhti import (
@@ -77,6 +78,76 @@ def noisy(img: np.ndarray, sigma: float, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     return np.clip(img.astype(np.float32) + rng.normal(0, sigma, img.shape),
                    0, 255).astype(np.uint8)
+
+
+def paste_disc(ref: np.ndarray, cx: float, cy: float, d_mm: float,
+               val: int = DARK) -> np.ndarray:
+    """A round item — a tin of ghee, a jar seen from above — with the same
+    coverage compositing. It matters because pi/4 = 0.785 is the worst oriented-
+    box fill any SINGLE object can have, so it is what bounds the merged-contour
+    gate from below."""
+    c = mm_to_buffer(np.array([[cx, cy]], np.float64))[0]
+    big = np.zeros((BUF_H * SS, BUF_W * SS), np.uint8)
+    cv2.ellipse(big, (int(round(c[0] * SS)), int(round(c[1] * SS))),
+                (int(round(d_mm / 2 * PX_PER_MM_X * SS)),
+                 int(round(d_mm / 2 * PX_PER_MM_Y * SS))), 0, 0, 360, 255, -1)
+    cov = cv2.resize(big, (BUF_W, BUF_H),
+                     interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    out = ref.astype(np.float32) * (1.0 - cov) + float(val) * cov
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+
+
+def salt_pepper(img: np.ndarray, density: float, seed: int) -> np.ndarray:
+    """Impulse noise: single pixels slammed to 0 or 255. NOT gaussian grain —
+    this is the dust, crumb and specular-pinhole population that morphological
+    opening exists for, and a gaussian model does not produce it."""
+    rng = np.random.default_rng(seed)
+    out = img.copy()
+    m = rng.random(img.shape)
+    out[m < density / 2.0] = 0
+    out[m > 1.0 - density / 2.0] = 255
+    return out
+
+
+def crumb_trail(img: np.ndarray, x0_mm: float, x1_mm: float, y_mm: float,
+                step_mm: float = 0.7) -> np.ndarray:
+    """A line of isolated dark pixels — spilled dal, a thread — between two
+    objects. Each speck is one pixel and could never be goods on its own."""
+    out = img.copy()
+    n = int(round((x1_mm - x0_mm) / step_mm)) + 1
+    xs = np.linspace(x0_mm, x1_mm, n)
+    pts = np.rint(mm_to_buffer(np.stack([xs, np.full(n, y_mm)], 1))).astype(int)
+    for x, y in pts:
+        out[y, x] = 0
+    return out
+
+
+def scratch(img: np.ndarray, x0_mm: float, x1_mm: float, y_mm: float,
+            val: int) -> np.ndarray:
+    """A one-pixel-wide faint mark on the mat: a pencil line, a crease shadow."""
+    out = img.copy()
+    p = np.rint(mm_to_buffer(np.array([[x0_mm, y_mm], [x1_mm, y_mm]]))).astype(int)
+    cv2.line(out, tuple(p[0]), tuple(p[1]), int(val), 1)
+    return out
+
+
+def detector_without(ref: np.ndarray, *, opening: bool = True,
+                     closing: bool = True) -> PlacementDetector:
+    """A detector with a named morphology stage DELETED from the mask cleanup.
+
+    PlacementDetector keeps that cleanup as an ordered list precisely so this is
+    a deletion and not a simulation of one: the stage is removed from the
+    pipeline, nothing else moves, and `_refine`'s own kernels are untouched so
+    the only variable is the segmentation step under test.
+    """
+    det = PlacementDetector(ref)
+    drop = set()
+    if not opening:
+        drop.add(cv2.MORPH_OPEN)
+    if not closing:
+        drop.add(cv2.MORPH_CLOSE)
+    det._morph = tuple((op, k) for op, k in det._morph if op not in drop)
+    return det
 
 
 def one(det: PlacementDetector, frame: np.ndarray):
@@ -196,6 +267,237 @@ def test_ACCEPTANCE_survives_sensor_noise():
             worst = max(worst, abs(p.long_edge_mm - L))
     print(f"\nMEASURED noisy(sigma=5) worst long-edge error {worst:.3f} mm")
     assert worst < 3.0
+
+
+# ------------------------------------------ THE MORPHOLOGY IS LOAD-BEARING
+# PRD 3.4 names morphologyEx OPEN and CLOSE by hand. Naming a step is not the
+# same as needing it, so this section builds ONE counter scene in which each
+# step is the only thing standing between the pipeline and a wrong bill, and
+# runs it four ways: shipped, OPEN deleted, CLOSE deleted, both deleted.
+
+# Two 90 x 55 mm packets 15 mm apart, with a trail of single-pixel crumbs and a
+# 1 px scratch across the gap; and a pale sachet whose printed band reads within
+# 2 grey levels of the paper, so the threshold cuts the sachet in half.
+PACK_A = (75.0, 130.0)
+PACK_B = (180.0, 130.0)
+PACK_MM = (90.0, 55.0)
+SACHET = (148.5, 300.0)
+SACHET_MM = (140.0, 70.0)
+SACHET_VAL = 240          # a pale wrapper: 40 grey levels off the paper
+SACHET_BAND_VAL = 226     # its printed band: 26 off the paper, under DIFF_THRESH
+SACHET_BAND_MM = 1.0
+
+
+def counter_scene() -> np.ndarray:
+    """Two packets bridged by crumbs, plus a glossy sachet, plus impulse noise."""
+    ref = empty_mat()
+    img = paste(ref, *PACK_A, *PACK_MM, 0.0, DARK)
+    img = paste(img, *PACK_B, *PACK_MM, 0.0, DARK)
+    img = paste(img, *SACHET, *SACHET_MM, 0.0, SACHET_VAL)
+    img = paste(img, *SACHET, SACHET_MM[1], SACHET_BAND_MM, 90.0, SACHET_BAND_VAL)
+    img = crumb_trail(img, 121.0, 134.0, PACK_A[1])
+    img = scratch(img, 118.0, 137.0, PACK_A[1], 115)
+    return salt_pepper(img, 0.004, seed=7)
+
+
+def _by_position(ps):
+    return sorted(ps, key=lambda p: (round(p.centre_mm[1] / 50.0), p.centre_mm[0]))
+
+
+def test_MORPHOLOGY_open_and_close_both_change_the_measured_answer(capsys):
+    """Delete either morphology stage and the till is wrong. Measured, not asserted.
+
+    shipped        three items, all measured, all within 1.6 mm of truth
+    OPEN deleted   the crumbs and the scratch survive, CLOSE welds them into a
+                   bridge, and the two packets arrive as ONE contour — two
+                   prices collapsed into one refusal
+    CLOSE deleted  the sachet's printed band is never healed, so one wrapper
+                   arrives as TWO measurable halves and is billed twice
+    both deleted   both failures at once
+
+    Every row of the table below is printed by this test.
+    """
+    ref = empty_mat()
+    img = counter_scene()
+    rows = {}
+    for label, kw in (("shipped", {}),
+                      ("no OPEN", {"opening": False}),
+                      ("no CLOSE", {"closing": False}),
+                      ("neither", {"opening": False, "closing": False})):
+        rows[label] = _by_position(detector_without(ref, **kw).update(img))
+
+    print("\nMEASURED morphology ablation on one counter scene")
+    for label, ps in rows.items():
+        print(f"  {label:>9}: {len(ps)} placements  " + "  ".join(
+            f"[{p.reason} "
+            + ("-" if p.long_edge_mm is None else f"{p.long_edge_mm:.1f}x{p.short_edge_mm:.1f}mm")
+            + f" fill={'-' if p.fill_ratio is None else format(p.fill_ratio, '.3f')}]"
+            for p in ps))
+
+    # --- shipped: three separate goods, all measured -------------------------
+    ship = rows["shipped"]
+    assert len(ship) == 3, [p.reason for p in ship]
+    assert all(p.measurable and p.reason == REASON_OK for p in ship)
+    truth = [PACK_MM[0], PACK_MM[0], SACHET_MM[0]]
+    errs = [abs(p.long_edge_mm - t) for p, t in zip(ship, truth)]
+    print(f"  shipped long-edge errors {[round(e, 2) for e in errs]} mm")
+    assert max(errs) < 3.0, errs
+    assert ship[0].centre_mm[0] < ship[1].centre_mm[0]   # the two packets
+    # The impulse noise is really there, and none of it became goods. Measured
+    # on this scene: OPEN leaves 33 contours of which 30 are dropped as grain;
+    # without OPEN there are 1542, of which 1540 are dropped. The min-area floor
+    # is what stops a speck being priced; OPEN is what stops it being GLUED to
+    # something that is.
+    det = PlacementDetector(ref)
+    det.update(img)
+    speckle, _ = cv2.findContours(det.last_mask, cv2.RETR_EXTERNAL,
+                                  cv2.CHAIN_APPROX_SIMPLE)
+    raw = detector_without(ref, opening=False)
+    raw.update(img)
+    unopened, _ = cv2.findContours(raw.last_mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    print(f"  contours in the mask: {len(speckle)} with OPEN, {len(unopened)} "
+          f"without; grain dropped {det.last_rejected_small} / "
+          f"{raw.last_rejected_small}")
+    assert len(unopened) > 10 * len(speckle), (
+        "the scene has stopped carrying impulse noise, so OPEN is not under test"
+    )
+    assert det.last_rejected_small >= len(speckle) - len(ship)
+
+    # --- OPEN deleted: the two packets stop being two ------------------------
+    no_open = rows["no OPEN"]
+    assert len(no_open) == 2, (
+        "deleting morphologyEx OPEN left the crumb bridge alone; this scene no "
+        "longer exercises the step it exists to test"
+    )
+    welded = [p for p in no_open if p.centre_mm[1] < 200.0]
+    assert len(welded) == 1, [p.centre_mm for p in no_open]
+    assert not welded[0].measurable and welded[0].reason == REASON_MERGED, (
+        f"two packets welded by speckle were reported as one measurable item: "
+        f"{welded[0]}"
+    )
+    # and the sachet next to it is untouched by the ablation
+    assert [p.reason for p in no_open].count(REASON_OK) == 1
+
+    # --- CLOSE deleted: one sachet becomes two billable halves ---------------
+    no_close = rows["no CLOSE"]
+    assert len(no_close) == 4, [p.reason for p in no_close]
+    halves = [p for p in no_close if p.centre_mm[1] > 200.0]
+    assert len(halves) == 2 and all(p.measurable for p in halves), halves
+    assert all(abs(p.long_edge_mm - SACHET_MM[1]) < 3.0 for p in halves), halves
+    over = sum(p.area_mm2 for p in halves) / (SACHET_MM[0] * SACHET_MM[1])
+    print(f"  CLOSE deleted: one {SACHET_MM[0]:.0f}x{SACHET_MM[1]:.0f} mm sachet "
+          f"billed as {len(halves)} items covering {100 * over:.0f}% of its footprint")
+    assert 0.85 < over < 1.15, over
+
+    # --- both deleted: both failures ----------------------------------------
+    both = rows["neither"]
+    assert len(both) == 3
+    assert sum(p.reason == REASON_MERGED for p in both) == 1
+    assert sum(p.measurable for p in both) == 2
+
+    # the shipped answer is the only one of the four that is right
+    assert [p.reason for p in ship] != [p.reason for p in no_open]
+    assert [round(p.long_edge_mm or -1, 1) for p in ship] != \
+           [round(p.long_edge_mm or -1, 1) for p in no_close]
+
+
+def test_MORPHOLOGY_kernel_reach_measured_in_millimetres(capsys):
+    """What the two kernels actually do to a mask, in mm on the plane.
+
+    Sizes in pixels mean nothing on their own; what matters is the smallest
+    real thing OPEN destroys and the largest real gap CLOSE welds shut. Both are
+    measured here by feeding the module's OWN structuring elements synthetic
+    masks, so the numbers move if the constants do.
+    """
+    det = PlacementDetector(empty_mat())
+    k_open = [k for op, k in det._morph if op == cv2.MORPH_OPEN][0]
+    k_close = [k for op, k in det._morph if op == cv2.MORPH_CLOSE][0]
+
+    survives = []
+    for w in range(1, 9):
+        m = np.zeros((60, 60), np.uint8)
+        m[10:50, 20:20 + w] = 255
+        if cv2.morphologyEx(m, cv2.MORPH_OPEN, k_open).any():
+            survives.append(w)
+    thinnest = min(survives)
+
+    bridged = []
+    for g in range(0, 9):
+        m = np.zeros((60, 80), np.uint8)
+        m[10:50, 5:30] = 255
+        m[10:50, 30 + g:70] = 255
+        cs, _ = cv2.findContours(cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_close),
+                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(cs) == 1:
+            bridged.append(g)
+    widest = max(bridged)
+
+    print(f"\nMEASURED kernel reach: OPEN erases anything under {thinnest} px "
+          f"({thinnest / PX_PER_MM_X:.2f} mm) thick; CLOSE welds gaps up to "
+          f"{widest} px ({widest / PX_PER_MM_X:.2f} mm)")
+
+    # OPEN has to destroy a crumb trail and keep a packet's corner.
+    assert thinnest / PX_PER_MM_X < 1.5, (
+        f"opening now eats {thinnest / PX_PER_MM_X:.2f} mm of a real object"
+    )
+    assert thinnest >= 2, "an opening that erases nothing is not an opening"
+    # CLOSE has to heal a wrapper and NOT weld two packets a couple of mm apart.
+    assert widest >= thinnest, (
+        "a closing that cannot span what the opening erased heals nothing"
+    )
+    assert widest / PX_PER_MM_X < 2.0, (
+        f"closing now welds a {widest / PX_PER_MM_X:.2f} mm gap; two packets "
+        f"laid that far apart would become one price"
+    )
+    # ...and that mm claim is the same one test_objects_placed_apart_are_two_prices
+    # relies on when it puts 2 mm of daylight between two packets.
+    assert OPEN_PX <= CLOSE_PX
+
+
+def test_MORPHOLOGY_impulse_noise_alone_is_never_goods():
+    """Salt and pepper on an empty mat, with and without OPEN. Neither may
+    produce a placement — OPEN is for what the noise does NEXT TO an object,
+    and the min-area floor is what stops it being goods on its own."""
+    ref = empty_mat()
+    for density in (0.002, 0.004, 0.01):
+        img = salt_pepper(ref, density, seed=int(density * 10000))
+        assert PlacementDetector(ref).update(img) == [], density
+        assert detector_without(ref, opening=False).update(img) == [], density
+
+
+def test_the_refit_may_correct_an_edge_but_may_not_lose_the_object(capsys):
+    """_refine promises a sub-pixel correction. It has to keep that promise.
+
+    Found by sweeping 400 randomly posed single objects: a pale 55 x 23 mm strip
+    at 128 deg under sigma=3 sensor noise segments as ONE coarse blob of the
+    right area, and then the 50 %-amplitude refit shatters it and returns its
+    largest crumb — 20.2 x 17.3 mm, published as a confident OK. That is a 35 mm
+    undermeasurement on a correctly detected object, in the undercharging
+    direction, with no refusal attached.
+
+    The refit is allowed to move an edge. It is not allowed to return a quarter
+    of the object. Measured on the same sweep, a healthy refit lands between
+    0.93 and 1.06 of the coarse oriented-box area; this case landed at 0.27.
+    """
+    ref = empty_mat()
+    cases = [
+        # (cx, cy, long, short, deg, val, sigma, ref_seed, img_seed)
+        (130.4, 92.6, 55.1, 22.5, 127.7, BRIGHT, 3.0, 1, 0),
+        (130.4, 92.6, 55.1, 22.5, 127.7, BRIGHT, 3.0, 5000, 0),
+    ]
+    print("\nMEASURED the refit's floor")
+    for cx, cy, L, S, deg, val, sigma, rs, ims in cases:
+        det = PlacementDetector(noisy(ref, sigma, rs))
+        p = one(det, noisy(paste(ref, cx, cy, L, S, deg, val), sigma, ims))
+        print(f"  {L}x{S}mm @{deg}deg val={val} sigma={sigma} ref_seed={rs} -> "
+              f"{p.reason} {p.long_edge_mm:.1f}x{p.short_edge_mm:.1f}mm")
+        assert p.measurable, p.reason
+        assert abs(p.long_edge_mm - L) < 3.0, (
+            f"the refit lost the object: measured {p.long_edge_mm:.1f} mm of a "
+            f"{L} mm strip"
+        )
+        assert abs(p.short_edge_mm - S) < 3.0, p.short_edge_mm
 
 
 # --------------------------------------------------- ORIENTED, NOT AXIS-ALIGNED
@@ -412,6 +714,313 @@ def test_a_measurable_and_a_refused_object_coexist():
     assert len(good) == 1 and len(bad) == 1
     assert abs(good[0].long_edge_mm - 100.0) < 3.0
     assert bad[0].reason == REASON_BORDER
+
+
+# ------------------------------------------- MERGED CONTOUR: "alag alag rakhiye"
+# One contour is one price. Two goods that touch segment as ONE contour, so
+# unless the detector refuses them the shopkeeper is billed for one item and the
+# till is short. This is the only refusal in the module whose absence LOSES
+# MONEY rather than reporting an unknown, so it is measured hardest.
+
+# (label, packet A, packet B) with each packet (cx, cy, long, short, deg).
+MERGES = [
+    ("flush side by side",  (148.5, 200.0, 100.0, 60.0, 0.0),
+                            (148.5, 261.0, 100.0, 60.0, 0.0)),
+    ("end to end",          (148.5, 180.0, 120.0, 50.0, 0.0),
+                            (148.5, 231.0, 120.0, 50.0, 0.0)),
+    ("corner to corner",    (110.0, 200.0, 100.0, 60.0, 0.0),
+                            (190.0, 261.0, 100.0, 60.0, 0.0)),
+    ("L",                   (110.0, 200.0, 100.0, 60.0, 0.0),
+                            (190.0, 230.0, 60.0, 100.0, 0.0)),
+    ("T",                   (148.5, 200.0, 140.0, 50.0, 0.0),
+                            (148.5, 285.0, 50.0, 120.0, 0.0)),
+    ("crossed",             (148.5, 240.0, 140.0, 45.0, 0.0),
+                            (148.5, 240.0, 140.0, 45.0, 90.0)),
+    ("X at 30 deg",         (148.5, 240.0, 150.0, 45.0, 30.0),
+                            (148.5, 240.0, 150.0, 45.0, -30.0)),
+    ("shoulder to shoulder", (110.0, 200.0, 90.0, 60.0, 0.0),
+                             (180.0, 245.0, 90.0, 60.0, 0.0)),
+    ("half stacked",        (120.0, 200.0, 120.0, 60.0, 0.0),
+                            (180.0, 258.0, 120.0, 60.0, 0.0)),
+]
+
+
+def merged_scene(a, b, val: int = DARK) -> np.ndarray:
+    ref = empty_mat()
+    img = paste(ref, a[0], a[1], a[2], a[3], a[4], val)
+    return paste(img, b[0], b[1], b[2], b[3], b[4], val)
+
+
+@pytest.mark.parametrize("case", MERGES, ids=[m[0] for m in MERGES])
+def test_ACCEPTANCE_two_touching_objects_are_refused_not_billed_as_one(case):
+    """Nine ways to put two packets down touching. None of them may produce a
+    measurable placement, because a measurable placement is a price."""
+    label, a, b = case
+    ref = empty_mat()
+    ps = PlacementDetector(ref).update(merged_scene(a, b))
+    assert len(ps) == 1, (
+        f"{label}: the segmentation separated them after all, so this case no "
+        f"longer tests the merge it was chosen for ({len(ps)} contours)"
+    )
+    p = ps[0]
+    assert p.measurable is False, (
+        f"{label}: two goods were billed as one item of "
+        f"{p.long_edge_mm:.0f}x{p.short_edge_mm:.0f} mm"
+    )
+    assert p.reason == REASON_MERGED
+    for field in ("long_edge_mm", "short_edge_mm", "area_mm2", "angle_deg"):
+        assert getattr(p, field) is None, f"{label}: {field} was measured anyway"
+    # the evidence that caused the refusal is published, not swallowed
+    assert p.fill_ratio is not None and p.components is not None
+    assert (p.components >= 2) or (p.fill_ratio < MERGED_MIN_FILL), (
+        f"{label}: refused with neither signal tripped "
+        f"(fill {p.fill_ratio:.3f}, components {p.components})"
+    )
+    assert p.centre_mm is not None       # enough to draw the hint on, no more
+
+
+def test_ACCEPTANCE_the_money_the_merge_refusal_saves(monkeypatch, capsys):
+    """What the till would say with the refusal lifted. Two goods, one price.
+
+    Every abstention costs the shopkeeper a re-place, so the gate has to earn
+    its keep with a number. The nine scenes are run three ways:
+
+      shipped        refused, nothing billed
+      no merge gate  ONE measurable item where TWO goods are on the mat, with a
+                     footprint 2 % to 83 % wrong
+      no merge gate  the same, and with REFINE_MIN_KEEP lifted too: the refit
+      and no refit   keeps its largest crumb, so a flush pair is billed as ONE
+      floor          packet of exactly one packet's size — the item is not just
+                     mispriced, it is gone
+
+    The item COUNT is the bug in every row. The footprint error is how badly the
+    one surviving item is priced.
+    """
+    import gawaah.placement as mod
+    ref = empty_mat()
+    truths = {label: (a[2] * a[3] + b[2] * b[3], max(a[2], b[2]))
+              for label, a, b in MERGES}
+
+    def bill(label, a, b):
+        ps = PlacementDetector(ref).update(merged_scene(a, b))
+        assert len(ps) == 1, (label, [p.reason for p in ps])
+        assert ps[0].measurable, (label, ps[0].reason)
+        return ps[0]
+
+    monkeypatch.setattr(PlacementDetector, "_is_merged",
+                        lambda self, fill, box, parts: False)
+    lifted = {label: bill(label, a, b) for label, a, b in MERGES}
+    monkeypatch.setattr(mod, "REFINE_MIN_KEEP", 0.0)
+    no_floor = {label: bill(label, a, b) for label, a, b in MERGES}
+
+    print("\nMEASURED what a merged contour is billed as when the gate is lifted")
+    print(f"  {'placement':>21} {'goods':>6} {'billed':>7} {'footprint':>10} "
+          f"{'vs truth':>9} {'long edge':>10}   without the refit floor")
+    for label, a, b in MERGES:
+        truth_area, longest = truths[label]
+        p, q = lifted[label], no_floor[label]
+        print(f"  {label:>21} {2:>6} {1:>7} {p.area_mm2:8.0f}mm2 "
+              f"{100 * (p.area_mm2 - truth_area) / truth_area:+8.0f}% "
+              f"{p.long_edge_mm:8.0f}mm   "
+              f"{q.long_edge_mm:.0f}x{q.short_edge_mm:.0f}mm "
+              f"({100 * (q.area_mm2 - truth_area) / truth_area:+.0f}%)")
+
+    # 1. The count. Two goods went down, one price came back, every time.
+    assert len(lifted) == len(MERGES)
+
+    # 2. The price. At least one merge is billed grossly oversized...
+    errs = [(lifted[l].area_mm2 - truths[l][0]) / truths[l][0] for l, _, _ in MERGES]
+    assert max(errs) > 0.25, (
+        f"no merge overcharged by more than {100 * max(errs):.0f}%; the angled "
+        f"cases have stopped merging and this scene needs re-choosing"
+    )
+    # ...and with the refit floor also lifted, at least one is billed as a
+    # single packet — the second item simply vanishes from the till.
+    gone = [l for l, _, _ in MERGES
+            if (no_floor[l].area_mm2 - truths[l][0]) / truths[l][0] < -0.40]
+    assert gone, (
+        "no merge undercharged even with REFINE_MIN_KEEP lifted; the flush "
+        "cases have stopped merging"
+    )
+    print(f"  worst overcharge {100 * max(errs):+.0f}%; billed as one packet "
+          f"instead of two on {gone}")
+
+    # 3. With the gate back in place not one of them is billed at all.
+    monkeypatch.undo()
+    for label, a, b in MERGES:
+        ps = PlacementDetector(ref).update(merged_scene(a, b))
+        assert not any(p.measurable for p in ps), label
+
+
+def test_the_two_merge_signals_each_catch_what_the_other_cannot(capsys):
+    """Why there are two. fill_ratio cannot see a flush pair — two rectangles
+    laid edge to edge fill their oriented box perfectly — and the component
+    count cannot see a pair that stays connected at half amplitude. Measured,
+    per scene, so neither signal can be quietly deleted."""
+    ref = empty_mat()
+    rows = []
+    for label, a, b in MERGES:
+        p = PlacementDetector(ref).update(merged_scene(a, b))[0]
+        rows.append((label, p.fill_ratio, p.components,
+                     p.fill_ratio < MERGED_MIN_FILL, p.components >= 2))
+    print("\nMEASURED which signal fires on which merge")
+    print(f"  {'placement':>21} {'fill':>7} {'parts':>6} {'by fill':>8} {'by parts':>9}")
+    for label, fill, parts, by_fill, by_parts in rows:
+        print(f"  {label:>21} {fill:7.3f} {parts:6d} {str(by_fill):>8} "
+              f"{str(by_parts):>9}")
+
+    fill_only = [r[0] for r in rows if r[3] and not r[4]]
+    parts_only = [r[0] for r in rows if r[4] and not r[3]]
+    assert fill_only, (
+        "every merge is now caught by the component count, so MERGED_MIN_FILL "
+        "is dead weight and should be deleted rather than documented"
+    )
+    assert parts_only, (
+        "every merge is now caught by fill_ratio, so the component count is "
+        "dead weight and should be deleted rather than documented"
+    )
+    assert all(r[3] or r[4] for r in rows)
+    # the flush pair is specifically the one fill cannot see
+    flush = [r for r in rows if r[0] == "flush side by side"][0]
+    assert flush[1] > 0.95, (
+        f"two packets laid flush filled only {flush[1]:.3f} of their box; the "
+        f"stated reason for the second signal has changed"
+    )
+
+
+def test_merged_gate_is_bracketed_by_measurement(capsys):
+    """MERGED_MIN_FILL has to sit under the worst-filling SINGLE object and over
+    the best-filling MERGE. Both populations are re-derived here, so the
+    constant cannot drift away from the evidence that chose it.
+
+    The binding case on the single side is a ROUND item: pi/4 = 0.785 is the
+    least any one convex object can fill its own oriented box, and refusing a
+    tin of ghee is a false abstention that costs a re-place for nothing.
+    """
+    ref = empty_mat()
+    singles = []
+    for L, S in SIZES:
+        for deg in (0.0, 12.0, 45.0, 67.0):
+            for val in (DARK, BRIGHT):
+                singles.append(one(PlacementDetector(ref),
+                                   paste(ref, *CENTRE, L, S, deg, val)).fill_ratio)
+    round_items = []
+    for d in (30.0, 45.0, 60.0, 80.0, 100.0, 130.0):
+        for val in (DARK, BRIGHT):
+            p = one(PlacementDetector(ref), paste_disc(ref, *CENTRE, d, val))
+            assert p.measurable, f"a {d:.0f} mm round item was refused: {p.reason}"
+            round_items.append(p.fill_ratio)
+    merges = [PlacementDetector(ref).update(merged_scene(a, b))[0].fill_ratio
+              for _, a, b in MERGES]
+    by_fill = [f for f in merges if f < MERGED_MIN_FILL]
+
+    print(f"\nMEASURED fill_ratio populations (gate {MERGED_MIN_FILL})")
+    print(f"  rectangles n={len(singles):<3} {min(singles):.3f} .. {max(singles):.3f}"
+          "   -> measure")
+    print(f"  round items n={len(round_items):<3} {min(round_items):.3f} .. "
+          f"{max(round_items):.3f}   -> measure")
+    print(f"  merges caught by fill n={len(by_fill):<3} {min(by_fill):.3f} .. "
+          f"{max(by_fill):.3f}   -> refuse")
+    print(f"  headroom above the gate {min(round_items) - MERGED_MIN_FILL:+.3f} "
+          f"(round items), below it {MERGED_MIN_FILL - max(by_fill):+.3f} (merges)")
+
+    assert max(by_fill) < MERGED_MIN_FILL < min(round_items) < min(singles)
+    assert min(round_items) - MERGED_MIN_FILL < 0.10, (
+        "the round-item margin is documented as thin (a tin fills 0.785 of its "
+        "box and the gate is 0.75); if it has widened, say so with the new "
+        "number instead of leaving the old caveat standing"
+    )
+
+
+@pytest.mark.parametrize("chip_mm", [12.0, 15.0, 20.0, 30.0, 45.0])
+def test_a_small_item_flush_against_a_big_one_is_still_two_prices(chip_mm):
+    """The unequal merge, which is the one a counter actually produces: a sachet
+    leaning on a carton. It must be caught down to the smallest thing this
+    detector will admit as goods at all.
+
+    This is why "goods-sized" in _refine is MIN_AREA_MM2 and not a fraction of
+    the blob. Measured on the 12 mm chip: the refit pieces are 77815 px and 1088
+    px, so an absolute floor of 800 px (100 mm^2) sees two components, while a
+    20 %-of-the-blob floor sits at 15781 px and sees one — the sachet is free.
+    """
+    ref = empty_mat()
+    img = paste(ref, 148.5, 200.0, 140.0, 70.0, 0.0, DARK)       # y 165..235
+    img = paste(img, 148.5, 235.5 + chip_mm / 2, chip_mm, chip_mm, 0.0, DARK)
+    ps = PlacementDetector(ref).update(img)
+    assert len(ps) == 1, [p.reason for p in ps]
+    assert chip_mm * chip_mm > MIN_AREA_MM2, "the chip must be admissible goods"
+    assert ps[0].reason == REASON_MERGED, (
+        f"a {chip_mm:.0f} mm item flush against a 140 mm carton was billed as "
+        f"one {ps[0].long_edge_mm:.0f} mm item"
+    )
+    assert ps[0].components >= 2
+
+
+def test_merged_refusal_never_fires_on_a_single_object():
+    """The false-abstention control. Every single object in the acceptance sweep,
+    with and without sensor noise, must still be MEASURED — an abstention is
+    cheap for the doctrine and expensive for the shopkeeper."""
+    ref = empty_mat()
+    for L, S in SIZES:
+        for deg in ANGLES:
+            for val in (DARK, BRIGHT):
+                p = one(PlacementDetector(ref), paste(ref, *CENTRE, L, S, deg, val))
+                assert p.reason == REASON_OK, f"{L}x{S}@{deg} val={val}: {p.reason}"
+                assert p.components == 1, (L, S, deg, val, p.components)
+    for i, (L, S) in enumerate(SIZES):
+        for deg in (0.0, 37.0, 45.0):
+            det = PlacementDetector(noisy(ref, 5.0, seed=900 + i))
+            p = one(det, noisy(paste(ref, *CENTRE, L, S, deg, DARK), 5.0,
+                               seed=i * 7 + 1))
+            assert p.reason == REASON_OK, f"noisy {L}x{S}@{deg}: {p.reason}"
+
+
+def test_objects_placed_apart_are_two_prices():
+    """The other half of "alag alag rakhiye": once they ARE apart, both are
+    measured. 2 mm of daylight is enough."""
+    ref = empty_mat()
+    img = merged_scene((148.5, 200.0, 100.0, 60.0, 0.0),
+                       (148.5, 263.0, 100.0, 60.0, 0.0))
+    ps = PlacementDetector(ref).update(img)
+    assert len(ps) == 2, [p.reason for p in ps]
+    assert all(p.measurable and p.reason == REASON_OK for p in ps)
+    assert all(abs(p.long_edge_mm - 100.0) < 3.0 for p in ps), ps
+
+
+def test_a_merged_blob_never_becomes_stable():
+    """Same rule as the border refusal: an item we will not measure can never
+    accumulate the stability a downstream stage prices on."""
+    ref = empty_mat()
+    det = PlacementDetector(ref)
+    img = merged_scene(*MERGES[0][1:])
+    for i in range(15):
+        p = one(det, img)
+        assert p.reason == REASON_MERGED
+        assert not p.stable and p.stable_run == 0, f"frame {i}"
+    assert p.frames_seen == 15           # still tracked, just never trusted
+
+
+def test_HONEST_LIMIT_a_wrapper_the_threshold_cuts_in_two_is_also_refused(capsys):
+    """The cost of the merge refusal, stated rather than hidden.
+
+    A specular band across a single pack severs its blob exactly the way a
+    flush pair does, and nothing in a silhouette can tell the two apart. The
+    module abstains — an amber card and a re-place — instead of guessing. This
+    test exists so that cost is a measured fact and not a surprise in the shop.
+    """
+    ref = empty_mat()
+    img = paste(ref, *CENTRE, 140.0, 70.0, 0.0, DARK)
+    img = paste(img, CENTRE[0], CENTRE[1], 70.0, 1.4, 90.0, PAPER)  # glare band
+    p = one(PlacementDetector(ref), img)
+    print(f"\nMEASURED one 140x70 mm pack with a 1.4 mm specular band across it: "
+          f"{p.reason}, fill {p.fill_ratio:.3f}, components {p.components}")
+    assert p.reason == REASON_MERGED and not p.measurable
+    assert p.components >= 2, (
+        "the band no longer severs the blob, so this limit has stopped being "
+        "real and the docstring must be rewritten"
+    )
+    # the direction matters: an abstention, never a reading, never a red
+    assert p.long_edge_mm is None
 
 
 # --------------------------------------------------- REFERENCE MAINTENANCE
@@ -640,8 +1249,91 @@ def test_border_refusal_survives_the_real_rectification():
         [(p.reason, p.long_edge_mm) for p in ps]
 
 
-def test_border_px_constant_is_a_real_margin_not_a_disguised_one():
-    """Pins BORDER_PX small: a blanket margin would silently refuse legitimate
-    placements near the edge and look like a border test."""
-    assert 0 <= BORDER_PX <= 4
-    assert BORDER_PX / PX_PER_MM_X < 2.0
+def test_border_refusal_is_a_real_edge_test_not_a_blanket_margin(capsys):
+    """BEHAVIOUR, not the constant. Nothing here reads BORDER_PX to decide what
+    to expect, so inflating the constant into a fat no-go strip fails the test
+    instead of moving its goalposts.
+
+    Two facts, both in absolute millimetres:
+
+      straddling   an object hanging off the mat is REFUSED, and the reading it
+                   would otherwise have produced is measured here so the size of
+                   the averted mistake is on the record: 5 / 10 / 20 / 30 mm of
+                   overhang read 55.2 / 50.2 / 40.0 / 30.1 mm across a 60 mm
+                   packet — an undercharge of up to half the item.
+
+      just inside  an object clearing the buffer edge by 1.4 mm is MEASURED, to
+                   0.11 mm. A margin wide enough to be comfortable would have
+                   refused it, and refusing a legitimately placed packet is the
+                   failure this test exists to make impossible.
+    """
+    ref = empty_mat()
+    x_mm, y_mm = 60.0, 90.0          # 60 mm across the border, 90 mm along it
+
+    print("\nMEASURED border behaviour, 60 mm packet against the left edge")
+    for hang_mm in (5.0, 10.0, 20.0, 30.0):
+        det = PlacementDetector(ref)
+        p = one(det, paste(ref, -hang_mm + x_mm / 2, MAT_H_MM / 2,
+                           y_mm, x_mm, 90.0, DARK))
+        cnts, _ = cv2.findContours(det.last_mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+        w, h = cv2.minAreaRect(max(cnts, key=cv2.contourArea))[1]
+        would_be = min(w, h) / PX_PER_MM_X
+        print(f"  overhang {hang_mm:>4.0f} mm -> {p.reason:<15} "
+              f"(a measurement here would have read {would_be:5.2f} mm "
+              f"of a {x_mm:.0f} mm packet)")
+        assert p.measurable is False, f"a clipped object was measured at {hang_mm} mm"
+        assert p.reason == REASON_BORDER
+        assert p.long_edge_mm is None and p.area_mm2 is None
+        assert would_be < x_mm - 3.0, (
+            "the clipped blob no longer reads short, so this scene has stopped "
+            "demonstrating the error the refusal prevents"
+        )
+
+    # Walk the object in from the edge one buffer pixel at a time and record
+    # where the answer flips. `edge_px` is the left-most column the mask
+    # actually occupies, read off last_mask — a fact about the image, not about
+    # the constant.
+    ladder = []
+    for left_px in range(0, 13):
+        det = PlacementDetector(ref)
+        p = one(det, paste(ref, left_px / PX_PER_MM_X + x_mm / 2, MAT_H_MM / 2,
+                           y_mm, x_mm, 90.0, DARK))
+        cnts, _ = cv2.findContours(det.last_mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+        big = max(cnts, key=cv2.contourArea).reshape(-1, 2)
+        ladder.append((left_px, int(big[:, 0].min()), p.measurable,
+                       p.short_edge_mm))
+    print("  (left edge px, mask starts at col, measured, mm across)")
+    for row in ladder:
+        print(f"    {row[0]:>3}  {row[1]:>3}  {str(row[2]):>5}  "
+              + ("-" if row[3] is None else f"{row[3]:.2f}"))
+
+    refused = [r for r in ladder if not r[2]]
+    measured = [r for r in ladder if r[2]]
+    assert refused and measured, "the ladder never crossed the refusal boundary"
+
+    # 1. Anything the mat clipped — the mask running into column 0 — is refused.
+    assert all(not r[2] for r in ladder if r[1] == 0), (
+        "an object whose contour reaches the buffer edge was measured"
+    )
+    # 2. Once the mask clears the edge at all, the object is measured. The first
+    #    such sample sits 3 px (1.06 mm) in, so the refusal cannot be a margin
+    #    any wider than that.
+    first = measured[0]
+    assert first[1] <= 3, (
+        f"the nearest measured object had to clear the edge by {first[1]} px "
+        f"({first[1] / PX_PER_MM_X:.2f} mm); that is a blanket margin, not a "
+        f"border test"
+    )
+    assert abs(first[3] - x_mm) < 3.0, (
+        f"the object nearest the edge measured {first[3]:.2f} mm, not {x_mm}"
+    )
+    # 3. And the flip happens once, in the right direction.
+    assert [r[2] for r in ladder] == sorted(r[2] for r in ladder), \
+        "measurability is not monotone as the object moves inward"
+
+    # The constant may only take values this behaviour can actually justify.
+    assert 0 <= BORDER_PX <= first[1], (
+        f"BORDER_PX={BORDER_PX} is outside the window the ladder pins it to"
+    )

@@ -6,9 +6,9 @@ not a mint, not a render, not an OCR read, not a timer, not a confident model.
     GREEN  ==  valid HMAC-SHA256 over the RAW BYTES
            AND event in GREEN_EVENTS
            AND notes.session_id names an OPEN intent
-           AND amount == intent.amount_paise   (exact integer compare)
+           AND the SETTLED amount == intent.amount_paise  (exact integer compare)
 
-Four properties this module is built to guarantee, each pinned by a test:
+Six properties this module is built to guarantee, each pinned by a test:
 
   1. The signature is checked over the bytes that arrived on the wire, BEFORE
      json.loads is ever called. A body that re-serialises to different bytes is
@@ -18,14 +18,34 @@ Four properties this module is built to guarantee, each pinned by a test:
   2. Every failure has its own machine-readable code from a closed vocabulary
      (REASON_CODES). A bare False tells an operator nothing at 11pm.
 
-  3. The replay key is derived from the SIGNED bytes, never from the
-     `X-Razorpay-Event-Id` header alone. The header is not covered by the HMAC,
-     so an attacker replaying a captured body could simply vary it. The header
-     id is checked as an *additional* key, never as a substitute.
+  3. The replay key is derived ONLY from HMAC-VERIFIED content: the event id
+     inside the signed envelope, or the sha256 of the signed bytes when the
+     envelope carries none. The `X-Razorpay-Event-Id` HEADER is never a key,
+     not even an extra one. It is outside the HMAC, so anything on the request
+     path — a proxy, a sidecar, an attacker — can rewrite it while leaving the
+     signed body byte-identical. A header that can write into the replay store
+     is a denial-of-green primitive: seed it with the id of a webhook that has
+     not arrived yet and the genuine delivery is later refused as a duplicate.
+     The money lands and the counter never turns. The header is recorded on the
+     verdict as `untrusted_header_event_id` and used for nothing else.
 
   4. Only a GREEN verdict marks an event as seen. A webhook that fails for a
      transient reason (intent not yet visible, mirror stale) must still be able
      to succeed when Razorpay retries it — that is what retries are for.
+
+  5. The number compared against the intent is the amount that SETTLED, not the
+     amount that was ASKED FOR. On a `payment_link` entity those are different
+     fields: `amount` is the ask and keeps reporting the full sum for ever,
+     while `amount_paid` is the money that actually arrived. A part-paid link
+     therefore reads as a full one if you compare `amount`, and when the
+     envelope carries no nested payment entity there is nothing left to
+     contradict it. See `_SETTLED_FIELD`.
+
+  6. Every gate fails CLOSED. An entity that does not state its currency has
+     not told us the unit, and an amount without a unit is not money; an entity
+     that does not state its status has not told us money moved. Absence is
+     AMBER, never a pass — otherwise deleting a field is cheaper than forging
+     one, and the cheapest edit wins.
 
 Deliberately absent: any function that signs a body. This module verifies; it
 never produces a signature, and it never constructs a payment payload.
@@ -55,6 +75,25 @@ GREEN_EVENTS: frozenset[str] = frozenset({"payment_link.paid", "payment.captured
 #: contradiction, not a payment.
 _ENTITY_STATUS: dict[str, str] = {"payment": "captured", "payment_link": "paid"}
 
+#: Which field on each entity reports the money that ACTUALLY SETTLED — which
+#: is not always the field called `amount`.
+#:
+#:   payment.entity.amount
+#:       The captured amount. On a `payment.captured` the ask and the
+#:       settlement are the same number: a capture that did not happen is not a
+#:       `payment.captured`. (`amount_refunded` is still subtracted below —
+#:       money that has gone back to the customer has not settled with us.)
+#:
+#:   payment_link.entity.amount
+#:       The ASK. A link created for ₹214.37 reports 21437 here for ever,
+#:       whether ₹214.37 arrived, ₹5 arrived, or nothing did. Comparing this
+#:       against the intent proves only that we asked for the right number.
+#:
+#:   payment_link.entity.amount_paid
+#:       The SETTLED total across every payment made against the link. This is
+#:       the money, and this is what the intent is compared against.
+_SETTLED_FIELD: dict[str, str] = {"payment": "amount", "payment_link": "amount_paid"}
+
 CURRENCY = "INR"
 
 REASON_CODES: frozenset[str] = frozenset(
@@ -67,24 +106,34 @@ REASON_CODES: frozenset[str] = frozenset(
         "missing_event",
         "event_not_green",
         "no_entity",
+        "entity_status_missing",
         "entity_status_not_paid",
+        "currency_missing",
         "wrong_currency",
         "missing_session_id",
         "session_id_conflict",
         "unknown_session",
         "intent_not_open",
         "amount_missing",
+        "amount_paid_missing",
         "amount_not_integer",
         "amount_conflict",
+        "partial_payment",
         "amount_mismatch",
         "intent_amount_invalid",
     }
 )
 
-#: The only verdict that is allowed to be RED without a human in the loop.
-#: A mismatch is a positive contradiction — we hold and a person resolves it.
-#: Everything else is absence of evidence, which is AMBER (INVARIANT 7).
-_RED_REASONS: frozenset[str] = frozenset({"amount_mismatch", "amount_conflict"})
+#: The only verdicts that are allowed to be RED without a human in the loop.
+#: Each one is a positive contradiction — money moved, and it is the wrong
+#: money — so we hold and a person resolves it. Everything else is absence of
+#: evidence, which is AMBER (INVARIANT 7). `partial_payment` belongs here: a
+#: link that reports a settlement smaller than its own ask is not an unknown,
+#: it is a shortfall, and a shortfall is exactly the thing a shopkeeper must be
+#: told about rather than have silently rounded up to green.
+_RED_REASONS: frozenset[str] = frozenset(
+    {"amount_mismatch", "amount_conflict", "partial_payment"}
+)
 
 GREEN, AMBER, RED = "GREEN", "AMBER", "RED"
 
@@ -196,6 +245,11 @@ class GreenVerdict:
     body_sha256: str = ""
     mirror_stale: bool = False
     downgraded_from_red: bool = False
+    #: The `X-Razorpay-Event-Id` header exactly as it arrived. It is outside the
+    #: HMAC, so it is evidence of nothing and decides nothing — it is carried
+    #: here only so that a rewriting proxy shows up in the audit trail as a
+    #: disagreement with `event_id`. The name is deliberately unmistakable.
+    untrusted_header_event_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.reason not in REASON_CODES:
@@ -273,8 +327,11 @@ class GreenPredicate:
         """Run the four-part green predicate over one webhook delivery.
 
         `header_event_id` is the untrusted `X-Razorpay-Event-Id` header. It is
-        used only as an extra replay key; it can never make a body green and it
-        can never change which body was verified.
+        recorded on the verdict and used for NOTHING: not as a replay key, not
+        as an identity, not as a tie-break. It is not covered by the HMAC, so
+        every party on the request path can choose its value, and a value an
+        attacker chooses must not be able to write into the replay store — that
+        write is a denial of green (see the module docstring, property 3).
 
         `mirror_stale` is the caller's report that our Razorpay mirror has not
         been refreshed recently. It never blocks green — a verified webhook is
@@ -304,6 +361,11 @@ class GreenPredicate:
                 f"raw_body must be bytes, got {type(raw_body).__name__}"
             )
         body_sha = hashlib.sha256(raw_body).hexdigest()
+        header_id = (
+            header_event_id
+            if isinstance(header_event_id, str) and header_event_id
+            else None
+        )
 
         def deny(reason: str, detail: str, **extra: Any) -> GreenVerdict:
             severity = RED if reason in _RED_REASONS else AMBER
@@ -318,6 +380,7 @@ class GreenPredicate:
                 body_sha256=body_sha,
                 mirror_stale=mirror_stale,
                 downgraded_from_red=downgraded,
+                untrusted_header_event_id=header_id,
                 **extra,
             )
 
@@ -349,24 +412,40 @@ class GreenPredicate:
 
         ok: dict[str, Any] = {"signature_valid": True}
 
-        # GATE 2 — replay. Keyed on the signed bytes; the header id is an extra
-        # key only, because the header is outside the HMAC.
+        # GATE 2 — replay. The key comes ONLY from HMAC-verified content: the
+        # event id inside the signed envelope, or the sha256 of the signed
+        # bytes when the envelope carries none. Razorpay retries a delivery by
+        # re-sending the identical signed body, so byte identity is exactly the
+        # equivalence we want.
+        #
+        # The `X-Razorpay-Event-Id` header is deliberately NOT consulted here.
+        # It is outside the HMAC. If it were a key — even an extra one — then
+        # anyone who can set a header on one genuine delivery could seed this
+        # store with the id of a webhook that has not happened yet, and the
+        # genuine delivery would later be refused as a duplicate: money in,
+        # counter never green. A store that untrusted input can write to is not
+        # a replay defence, it is a denial-of-service surface.
         body_event_id = parsed.get("id")
-        primary_id = body_event_id if isinstance(body_event_id, str) and body_event_id else body_sha
-        keys = [primary_id]
-        if isinstance(header_event_id, str) and header_event_id:
-            keys.append(header_event_id)
-        for k in keys:
-            if k in self._seen:
-                return deny(
-                    "replay",
-                    f"event id {k[:24]}… has already been settled; not re-greening",
-                    event_id=primary_id,
-                    event=parsed.get("event") if isinstance(parsed.get("event"), str) else None,
-                    **ok,
-                )
+        replay_key = (
+            body_event_id
+            if isinstance(body_event_id, str) and body_event_id
+            else body_sha
+        )
+        if replay_key in self._seen:
+            return deny(
+                "replay",
+                f"event id {replay_key[:24]}… has already been settled; "
+                "not re-greening",
+                event_id=replay_key,
+                event=(
+                    parsed.get("event")
+                    if isinstance(parsed.get("event"), str)
+                    else None
+                ),
+                **ok,
+            )
 
-        ok["event_id"] = primary_id
+        ok["event_id"] = replay_key
 
         # GATE 3 — event type.
         event = parsed.get("event")
@@ -389,18 +468,36 @@ class GreenPredicate:
                 **ok,
             )
 
-        # GATE 3b — the entity must agree that money moved, and in rupees.
+        # GATE 3b — the entity must SAY that money moved, and say in what unit.
+        # Both halves fail CLOSED: a field that is absent has not been asserted,
+        # and an unasserted field is not a passing one. Failing open here would
+        # make omitting `currency` strictly weaker than sending "USD", which is
+        # a gate you get through by deleting something.
         for key, ent in entities.items():
-            status = ent.get("status")
             want = _ENTITY_STATUS[key]
-            if isinstance(status, str) and status != want:
+            status = ent.get("status")
+            if not isinstance(status, str) or not status:
+                return deny(
+                    "entity_status_missing",
+                    f"{key}.entity carries no 'status' string "
+                    f"(got {status!r}); it never asserted that money moved",
+                    **ok,
+                )
+            if status != want:
                 return deny(
                     "entity_status_not_paid",
                     f"{key}.entity.status is {status!r}, expected {want!r}",
                     **ok,
                 )
             currency = ent.get("currency")
-            if currency is not None and currency != CURRENCY:
+            if not isinstance(currency, str) or not currency:
+                return deny(
+                    "currency_missing",
+                    f"{key}.entity carries no 'currency' string "
+                    f"(got {currency!r}); an amount without a unit is not money",
+                    **ok,
+                )
+            if currency != CURRENCY:
                 return deny(
                     "wrong_currency",
                     f"{key}.entity.currency is {currency!r}, not {CURRENCY}; "
@@ -457,51 +554,115 @@ class GreenPredicate:
             )
         ok["expected_paise"] = expected
 
-        # GATE 5 — exact integer amount.
-        amounts = _collect(entities, lambda e: e.get("amount"))
-        if not amounts:
-            return deny("amount_missing", "no 'amount' field on any entity", **ok)
-        typed: dict[str, int] = {}
-        for key, value in amounts.items():
+        # GATE 5 — exact integer amount, and it must be the amount that SETTLED.
+        #
+        # The field read here is chosen by `_SETTLED_FIELD`, not by whichever
+        # one happens to be called `amount`. On a payment_link, `amount` is the
+        # ask and `amount_paid` is the money; a link part-paid ₹5.00 against a
+        # ₹214.37 ask still reports `amount: 21437` for ever, so reading
+        # `amount` greens a sale that did not happen. When the envelope carries
+        # no nested payment entity — a shape Razorpay is free to send, since
+        # `contains` is a list — there is nothing left to contradict the ask.
+        settled: dict[str, int] = {}
+        for key, ent in entities.items():
+            field = _SETTLED_FIELD[key]
+            raw_settled = ent.get(field)
+            if raw_settled is None:
+                if field == "amount":
+                    return deny(
+                        "amount_missing",
+                        f"{key}.entity has no 'amount' field",
+                        **ok,
+                    )
+                return deny(
+                    "amount_paid_missing",
+                    f"{key}.entity reports no {field!r}, so how much of its "
+                    f"{ent.get('amount')!r} ask actually settled is unknown; "
+                    "an unknown amount abstains rather than guesses",
+                    **ok,
+                )
             try:
-                typed[key] = int(paise(value))
+                value = int(paise(raw_settled))
             except MoneyError as exc:
                 return deny(
                     "amount_not_integer",
-                    f"{key}.entity.amount is not integer paise: {exc}",
+                    f"{key}.entity.{field} is not integer paise: {exc}",
                     **ok,
                 )
-        if len(set(typed.values())) > 1:
-            # e.g. a partially-paid link whose payment is smaller than the link.
+
+            # Money already handed back has not settled with us. A retried
+            # `payment.captured` delivered after a refund still reports the
+            # full `amount`; `amount_refunded` is the part that left again.
+            refunded_raw = ent.get("amount_refunded")
+            if refunded_raw is not None:
+                try:
+                    refunded = int(paise(refunded_raw))
+                except MoneyError as exc:
+                    return deny(
+                        "amount_not_integer",
+                        f"{key}.entity.amount_refunded is not integer paise: {exc}",
+                        **ok,
+                    )
+                value = value - refunded
+
+            # The ask must have been met exactly. A settlement that is not the
+            # ask is a part payment (or an over payment); either way the entity
+            # is contradicting itself and no green can come out of it.
+            if field != "amount":
+                asked_raw = ent.get("amount")
+                if asked_raw is not None:
+                    try:
+                        asked = int(paise(asked_raw))
+                    except MoneyError as exc:
+                        return deny(
+                            "amount_not_integer",
+                            f"{key}.entity.amount is not integer paise: {exc}",
+                            **ok,
+                        )
+                    if asked != value:
+                        return deny(
+                            "partial_payment",
+                            f"{key}.entity.{field} is {value} but its amount is "
+                            f"{asked}: the link is not settled in full "
+                            f"(short by {asked - value} paise)",
+                            **ok,
+                        )
+            settled[key] = value
+
+        if len(set(settled.values())) > 1:
+            # e.g. a link settled in full but carrying only the last of several
+            # payments. Two numbers that both claim to be the settlement and
+            # disagree is a contradiction, not a choice to make.
             return deny(
                 "amount_conflict",
-                f"entities disagree on amount: {typed}",
+                f"entities disagree on the settled amount: {settled}",
                 **ok,
             )
-        amount = next(iter(typed.values()))
+        amount = next(iter(settled.values()))
         ok["amount_paise"] = amount
 
         if amount != expected:
             return deny(
                 "amount_mismatch",
-                f"webhook amount {amount} != intent.amount_paise {expected} "
+                f"settled amount {amount} != intent.amount_paise {expected} "
                 f"(off by {amount - expected} paise)",
                 **ok,
             )
 
         # All four hold. This is the only construction of green in the system.
-        for k in keys:
-            self._seen.add(k)
+        # One key goes in, and it is the HMAC-verified one.
+        self._seen.add(replay_key)
         return GreenVerdict(
             green=True,
             reason="green",
             severity=GREEN,
             detail=(
                 f"signature verified over {len(raw_body)} raw bytes; {event}; "
-                f"session {session_id}; amount {amount} == intent {expected}"
+                f"session {session_id}; settled {amount} == intent {expected}"
             ),
             body_sha256=body_sha,
             mirror_stale=mirror_stale,
+            untrusted_header_event_id=header_id,
             **ok,
         )
 
@@ -526,6 +687,9 @@ class GreenPredicate:
             body_sha256=v.body_sha256,
             mirror_stale=v.mirror_stale,
             downgraded_from_red=v.downgraded_from_red,
+            # Recorded, never trusted. A value here that differs from event_id
+            # is the signature of something on the path rewriting headers.
+            untrusted_header_event_id=v.untrusted_header_event_id,
         )
 
 
@@ -582,7 +746,10 @@ def _collect(entities: dict[str, dict], get: Callable[[dict], Any]) -> dict[str,
 
     Both entities are consulted on purpose: if a payment_link.paid carries both
     a link and a payment, they must agree. Trusting whichever one happens to be
-    convenient is how a partial payment becomes a green counter.
+    convenient is how a partial payment becomes a green counter — and note that
+    agreement alone is not enough, because an envelope may carry ONE entity and
+    have nothing to agree with. That is why GATE 5 reads `_SETTLED_FIELD`
+    per entity instead of collecting whatever is called `amount`.
     """
     found: dict[str, Any] = {}
     for key, entity in entities.items():

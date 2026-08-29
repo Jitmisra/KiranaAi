@@ -51,6 +51,44 @@ def _sign(raw: bytes, secret: str = SECRET) -> str:
     return hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
 
 
+def payment_link_only(
+    *,
+    session_id: str = SESSION,
+    amount: int = AMOUNT,
+    amount_paid: int | None = None,
+    **overrides,
+) -> dict:
+    """A `payment_link.paid` envelope carrying ONLY the link entity.
+
+    This shape is real: `contains` is a list, and Razorpay is free to send
+    `["payment_link"]` with no nested payment entity. It is also the shape in
+    which the ask/settlement distinction has nothing to cross-check it —
+    `amount` is what the link ASKED FOR and keeps reporting for ever;
+    `amount_paid` is what actually arrived.
+    """
+    link = {
+        "id": "plink_Fo48rl281ENAg9",
+        "entity": "payment_link",
+        "amount": amount,
+        "amount_paid": amount if amount_paid is None else amount_paid,
+        "currency": "INR",
+        "status": "paid",
+        "accept_partial": True,
+        "first_min_partial_amount": 100,
+        "notes": {"session_id": session_id},
+        "short_url": "https://rzp.io/i/XQiMe4w",
+    }
+    link.update(overrides)
+    return {
+        "entity": "event",
+        "account_id": "acc_H3kYHQ635sBwXG",
+        "event": "payment_link.paid",
+        "contains": ["payment_link"],
+        "payload": {"payment_link": {"entity": link}},
+        "created_at": 1602522351,
+    }
+
+
 def payment_captured(
     *, session_id: str = SESSION, amount: int = AMOUNT, **overrides
 ) -> dict:
@@ -382,6 +420,118 @@ def test_partial_payment_cannot_green_a_full_link(predicate):
     assert v.green is False and v.reason == "amount_conflict"
 
 
+# ------------------------------------------------- DEFECT 1: ask vs settlement
+#
+# `test_partial_payment_cannot_green_a_full_link` above only holds because that
+# envelope happens to carry BOTH entities, so the two disagree and the conflict
+# gate catches it. Delete the payment entity — a shape Razorpay is free to send,
+# since `contains` is a list — and there is nothing left to disagree with. The
+# gate was comparing `payment_link.entity.amount`, which is the ASK and equals
+# the intent no matter how little money arrived.
+
+def test_a_part_paid_link_alone_cannot_green_a_full_intent(predicate):
+    """DEFECT 1. ₹5.00 arrives against a ₹214.37 intent and the counter greens.
+
+    The link entity reports `amount: 21437` (what we asked for, unchanged for
+    ever) and `amount_paid: 500` (what actually settled). Comparing `amount`
+    against `intent.amount_paise` proves only that we asked for the right
+    number — it says nothing about money moving.
+    """
+    raw = wire(payment_link_only(amount=AMOUNT, amount_paid=500))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False, "₹5.00 greened a ₹214.37 intent"
+    assert v.reason == "partial_payment"
+    assert "500" in v.detail and str(AMOUNT) in v.detail
+
+
+def test_a_status_less_part_paid_link_alone_cannot_green(predicate):
+    """The same attack with `status` omitted, which used to fail the gate OPEN."""
+    body = payment_link_only(amount=AMOUNT, amount_paid=1)
+    del body["payload"]["payment_link"]["entity"]["status"]
+    raw = wire(body)
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason in {"entity_status_missing", "partial_payment"}
+
+
+def test_a_link_that_never_reports_amount_paid_abstains(predicate):
+    """Unknown settled amount -> AMBER, excluded, never green (INVARIANT 7)."""
+    body = payment_link_only()
+    del body["payload"]["payment_link"]["entity"]["amount_paid"]
+    raw = wire(body)
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason == "amount_paid_missing"
+    assert v.severity == AMBER  # absence of evidence is not fraud
+    assert v.amount_paise is None
+
+
+def test_a_link_paid_in_full_alone_still_greens(predicate):
+    """The fix must not cost the honest case: one entity, fully settled."""
+    raw = wire(payment_link_only(amount=AMOUNT, amount_paid=AMOUNT))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is True and v.amount_paise == AMOUNT
+
+
+def test_a_link_paid_in_full_across_two_payments_still_greens(predicate):
+    """accept_partial link, ₹5.00 then ₹209.37. `amount_paid` is the running
+    total, so the final `payment_link.paid` settles in full and greens."""
+    raw = wire(payment_link_only(amount=AMOUNT, amount_paid=AMOUNT))
+    assert predicate.evaluate(raw, _sign(raw), SECRET).green is True
+
+
+@pytest.mark.parametrize(
+    "paid", [0, 1, 500, AMOUNT - 1, AMOUNT, AMOUNT + 1, AMOUNT * 2]
+)
+def test_only_a_link_settled_in_full_greens(paid):
+    p = GreenPredicate(lookup_of(Intent(SESSION, AMOUNT)))
+    raw = wire(payment_link_only(amount=AMOUNT, amount_paid=paid))
+    v = p.evaluate(raw, _sign(raw), SECRET)
+    assert v.green == (paid == AMOUNT)
+    if not v.green:
+        assert v.reason == "partial_payment"
+
+
+def test_an_over_asking_link_cannot_green_on_a_coincidence(predicate):
+    """The link asks 99999 and 21437 arrives. 21437 happens to equal the
+    intent, but the ask does not — that is a contradiction, not a sale."""
+    raw = wire(payment_link_only(amount=99999, amount_paid=AMOUNT))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False and v.reason == "partial_payment"
+
+
+def test_a_non_integer_amount_paid_is_rejected_not_coerced(predicate):
+    raw = (
+        '{"event":"payment_link.paid","payload":{"payment_link":{"entity":'
+        '{"amount":21437,"amount_paid":214.37,"currency":"INR","status":"paid",'
+        '"notes":{"session_id":"s_0042"}}}}}'
+    ).encode()
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False and v.reason == "amount_not_integer"
+
+
+def test_a_refunded_capture_is_not_a_settlement(predicate):
+    """`amount` still says 21437; the money is back with the customer."""
+    raw = wire(payment_captured(amount_refunded=AMOUNT))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False and v.reason == "amount_mismatch"
+    assert v.amount_paise == 0
+
+
+def test_a_partly_refunded_capture_is_not_a_settlement(predicate):
+    raw = wire(payment_captured(amount_refunded=37))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False and v.reason == "amount_mismatch"
+    assert v.amount_paise == AMOUNT - 37
+
+
+def test_the_settled_field_is_not_the_ask_for_a_link():
+    """Pin the mapping itself: nothing may quietly repoint a link at `amount`."""
+    from gawaah.webhook import _SETTLED_FIELD
+
+    assert _SETTLED_FIELD == {"payment": "amount", "payment_link": "amount_paid"}
+
+
 def test_foreign_currency_cannot_green(predicate):
     """21437 USD-cents is not 21437 paise. An amount without a unit is not money."""
     raw = wire(payment_captured(currency="USD"))
@@ -393,6 +543,79 @@ def test_entity_status_must_agree_with_the_event(predicate):
     raw = wire(payment_captured(status="failed"))
     v = predicate.evaluate(raw, _sign(raw), SECRET)
     assert v.green is False and v.reason == "entity_status_not_paid"
+
+
+# ------------------------------------------------- the currency / status gates
+#
+# DECISION: both gates FAIL CLOSED. An absent field is not a passing field.
+#
+# The reasoning, pinned by the four tests below so it cannot drift:
+#
+#   * INVARIANT 7 says abstain rather than guess. `currency` absent means we do
+#     not know the unit, and an amount without a unit is not money — 21437 is
+#     ₹214.37 or $214.37 depending on a field we did not read. `status` absent
+#     means the entity never asserted that money moved.
+#   * Failing open makes an OMISSION strictly weaker than a WRONG VALUE:
+#     `"currency":"USD"` is refused but no currency at all sails through. Any
+#     gate with that shape is bypassed by deletion, which is the cheapest edit
+#     there is.
+#   * The cost of failing closed on genuine traffic is zero: every real
+#     Razorpay payment/payment_link entity carries both fields, and so does
+#     every body `rzp_sim` emits. If one ever does not, the verdict is AMBER —
+#     Razorpay retries, and a shopkeeper sees "waiting", not a false green.
+#   * The failure is safe in the right direction. Failing closed can only ever
+#     withhold a green (recoverable: retry, or reconcile by hand). Failing open
+#     hands out a green for money that may not exist (not recoverable: the
+#     goods have left the shop).
+
+def test_an_entity_with_no_currency_fails_closed(predicate):
+    """Deleting the field must not be cheaper than getting it wrong."""
+    body = payment_captured()
+    del body["payload"]["payment"]["entity"]["currency"]
+    raw = wire(body)
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason == "currency_missing"
+    assert v.severity == AMBER  # unknown unit is an absence, not an accusation
+
+
+def test_an_entity_with_no_status_fails_closed(predicate):
+    body = payment_captured()
+    del body["payload"]["payment"]["entity"]["status"]
+    raw = wire(body)
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason == "entity_status_missing"
+    assert v.severity == AMBER
+
+
+@pytest.mark.parametrize("junk", [None, 1, True, ["INR"], {"code": "INR"}, ""])
+def test_a_non_string_currency_fails_closed(predicate, junk):
+    raw = wire(payment_captured(currency=junk))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason in {"currency_missing", "wrong_currency"}
+
+
+@pytest.mark.parametrize("junk", [None, 1, True, ["captured"], ""])
+def test_a_non_string_status_fails_closed(predicate, junk):
+    raw = wire(payment_captured(status=junk))
+    v = predicate.evaluate(raw, _sign(raw), SECRET)
+    assert v.green is False
+    assert v.reason in {"entity_status_missing", "entity_status_not_paid"}
+
+
+def test_deleting_a_gate_field_is_never_better_than_getting_it_wrong(predicate):
+    """The general shape of the decision, asserted over every gated field:
+    for each one, absence must be at least as fatal as a wrong value."""
+    for field in ("currency", "status", "amount", "notes"):
+        wrong = payment_captured(**{field: {"session_id": "s_nope"} if field == "notes" else "XXX"})
+        absent = payment_captured()
+        del absent["payload"]["payment"]["entity"][field]
+        for body in (wrong, absent):
+            raw = wire(body)
+            v = predicate.evaluate(raw, _sign(raw), SECRET)
+            assert v.green is False, f"{field}: {body} greened"
 
 
 def test_no_entity_is_distinct(predicate):
@@ -456,13 +679,154 @@ def test_replay_key_survives_a_changed_event_id_header(predicate):
     assert v.reason == "replay"
 
 
-def test_header_event_id_is_an_additional_key(predicate):
-    """Two different bodies sharing one header event id: the second is a dup."""
+# ------------------------------------------- DEFECT 2: replay-store poisoning
+#
+# The previous version of this file asserted the opposite of the test below —
+# "two different bodies sharing one header event id: the second is a dup" — and
+# so pinned the defect in place. `X-Razorpay-Event-Id` is NOT covered by the
+# HMAC. Any party that can touch the request in flight (a proxy, a sidecar, a
+# TLS-terminating load balancer, an attacker on the path) can rewrite it while
+# leaving the signed body byte-identical. Treating it as a replay key hands that
+# party a write into the replay store, and a write into the replay store is a
+# denial of green: the money lands and the counter never turns.
+
+def test_the_untrusted_header_cannot_poison_the_replay_store():
+    """DEFECT 2, end to end. Two genuine, correctly signed webhooks.
+
+    Delivery 1 is a real ₹1.00 payment for some other session. On the way in,
+    its `X-Razorpay-Event-Id` header is rewritten to the id of a webhook that
+    has not happened yet — the header is outside the HMAC, so the body and its
+    signature are untouched and still verify.
+
+    Delivery 2 is the shopkeeper's real ₹214.37 sale, carrying that id inside
+    its SIGNED envelope. It must green. If the poisoned header made it into the
+    store, it is refused as a replay: the customer has paid, the goods are
+    gone, and the counter never goes green.
+    """
+    p = GreenPredicate(lookup_of(Intent("s_attacker", 100), Intent(SESSION, AMOUNT)))
+
+    attacker = payment_captured(session_id="s_attacker", amount=100)
+    attacker["id"] = "evt_attackers_own_payment"
+    raw_a = wire(attacker)
+    first = p.evaluate(raw_a, _sign(raw_a), SECRET, header_event_id="evt_GUESSED")
+    assert first.green is True  # a genuine payment; it is entitled to green
+
+    genuine = payment_captured()
+    genuine["id"] = "evt_GUESSED"
+    raw_g = wire(genuine)
+    v = p.evaluate(raw_g, _sign(raw_g), SECRET)
+    assert v.green is True, (
+        f"DENIAL OF GREEN: a genuine ₹214.37 webhook was refused as {v.reason!r} "
+        "because an unauthenticated header pre-seeded the replay store"
+    )
+    assert v.event_id == "evt_GUESSED"
+
+
+def test_a_rewriting_proxy_cannot_stop_every_later_green():
+    """The same bug without an attacker: one broken intermediary that stamps a
+    constant event id on every request bricks the counter after the first sale."""
+    p = GreenPredicate(lookup_of(*[Intent(f"s_{i}", 10000 + i) for i in range(5)]))
+    greens = 0
+    for i in range(5):
+        raw = wire(payment_captured(session_id=f"s_{i}", amount=10000 + i))
+        if p.evaluate(raw, _sign(raw), SECRET, header_event_id="evt_same_every_time").green:
+            greens += 1
+    assert greens == 5, f"only {greens}/5 genuine sales greened"
+
+
+def test_two_different_bodies_sharing_a_header_event_id_both_green(predicate):
+    """The header is not a key. Different signed bodies are different events."""
     raw1 = wire(payment_captured())
     assert predicate.evaluate(raw1, _sign(raw1), SECRET, header_event_id="evt_9").green
     raw2 = wire(payment_link_paid())
     v = predicate.evaluate(raw2, _sign(raw2), SECRET, header_event_id="evt_9")
-    assert v.reason == "replay"
+    assert v.green is True and v.reason == "green"
+
+
+def test_the_replay_store_only_ever_holds_hmac_verified_keys():
+    """Structural: whatever the header says, the store gains exactly one key and
+    that key is derived from the SIGNED bytes."""
+    store: set[str] = set()
+    p = GreenPredicate(lookup_of(Intent(SESSION, AMOUNT)), seen=store)
+    raw = wire(payment_captured())
+    p.evaluate(raw, _sign(raw), SECRET, header_event_id="evt_attacker_chosen")
+    assert store == {hashlib.sha256(raw).hexdigest()}
+
+    # and when the SIGNED envelope names an id, that id is the key
+    store2: set[str] = set()
+    p2 = GreenPredicate(lookup_of(Intent(SESSION, AMOUNT)), seen=store2)
+    body = payment_captured()
+    body["id"] = "evt_inside_the_signature"
+    raw2 = wire(body)
+    p2.evaluate(raw2, _sign(raw2), SECRET, header_event_id="evt_attacker_chosen")
+    assert store2 == {"evt_inside_the_signature"}
+
+
+def test_the_header_is_recorded_but_never_trusted(predicate):
+    """It is still useful forensics — a rewriting proxy shows up as a mismatch —
+    so it is reported on the verdict under a name nobody can misread."""
+    body = payment_captured()
+    body["id"] = "evt_real"
+    raw = wire(body)
+    v = predicate.evaluate(raw, _sign(raw), SECRET, header_event_id="evt_rewritten")
+    assert v.green is True
+    assert v.event_id == "evt_real"
+    assert v.untrusted_header_event_id == "evt_rewritten"
+
+
+def test_no_header_value_can_change_any_verdict(predicate):
+    """Sweep the header over hostile values; the verdict is byte-for-byte the
+    same each time apart from the field that merely records what arrived."""
+    raw = wire(payment_captured(session_id="s_not_ours"))
+    sig = _sign(raw)
+    baseline = predicate.evaluate(raw, sig, SECRET)
+    for header in ("", "evt_1", "evt_2", hashlib.sha256(raw).hexdigest(), "x" * 400):
+        v = predicate.evaluate(raw, sig, SECRET, header_event_id=header)
+        assert (v.green, v.reason, v.severity, v.event_id, v.session_id) == (
+            baseline.green,
+            baseline.reason,
+            baseline.severity,
+            baseline.event_id,
+            baseline.session_id,
+        )
+
+
+def test_the_replay_key_is_never_built_from_the_header_in_source():
+    """Belt and braces at the AST level: inside `_evaluate`, no statement that
+    reaches `self._seen` may mention ANY header-derived name.
+
+    Matching on the substring "header" rather than the exact parameter name is
+    deliberate — the obvious way to reintroduce this bug is to normalise the
+    parameter into a local first and key on that.
+    """
+    src = inspect.getsource(GreenPredicate._evaluate)
+    tree = ast.parse(src.replace("\n    ", "\n").lstrip())
+
+    def names(node) -> set[str]:
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+    def touches_seen(node) -> bool:
+        return any(
+            isinstance(n, ast.Attribute) and n.attr == "_seen" for n in ast.walk(node)
+        )
+
+    assert touches_seen(tree), "expected the replay store to be used somewhere"
+
+    header_names = {n for n in names(tree) if "header" in n.lower()}
+    assert header_names, "expected the header to be named at least once"
+
+    offenders = [
+        (stmt.lineno, sorted(names(stmt) & header_names))
+        for stmt in ast.walk(tree)
+        if isinstance(stmt, ast.stmt)
+        and not isinstance(stmt, (ast.FunctionDef, ast.Return))
+        and touches_seen(stmt)
+        and names(stmt) & header_names
+    ]
+    assert offenders == [], (
+        "the unauthenticated X-Razorpay-Event-Id header reaches the replay "
+        f"store at {offenders} inside _evaluate"
+    )
 
 
 def test_envelope_id_is_used_as_the_replay_key_when_present(predicate):
@@ -579,6 +943,64 @@ def test_green_events_is_exactly_the_two():
     assert GREEN_EVENTS == {"payment_link.paid", "payment.captured"}
 
 
+# --------------------------------------------------- M12: parse_float=str pin
+#
+# The mutation testing run found that deleting `parse_float=str` from the
+# json.loads call killed ZERO tests. It survived because every existing test
+# that feeds a decimal asserts a REASON CODE, and `money.paise` rejects a float
+# with the same code it uses for the string "21437.0". The behaviour is
+# identical; what changes is that a float object now exists inside the process,
+# holding a number that came off the wire and is one careless int() away from
+# being money. These two tests assert the property directly, so the mutation is
+# no longer silent.
+
+def test_a_bare_decimal_never_becomes_a_float():
+    """`214.50` in the body must arrive as the STRING "214.50" (INVARIANT 1)."""
+    from gawaah.webhook import _parse_body
+
+    parsed = _parse_body(b'{"amount":214.50,"amount_paid":0.1}')
+    assert parsed is not None
+    assert parsed["amount"] == "214.50", (
+        "parse_float=str is load-bearing: the decimal was materialised as a "
+        f"{type(parsed['amount']).__name__}"
+    )
+    assert isinstance(parsed["amount"], str)
+    assert not isinstance(parsed["amount"], float)
+    # exact, not 0.1 == 0.1 + 0.0 luck: the digits that arrived are preserved
+    assert parsed["amount_paid"] == "0.1"
+
+
+def test_no_float_object_is_constructed_anywhere_in_a_parsed_body():
+    """Walk the whole parsed structure. Not one float, at any depth."""
+    from gawaah.webhook import _parse_body
+
+    raw = wire(
+        {
+            "event": "payment_link.paid",
+            "payload": {"payment_link": {"entity": {"amount": 21437}}},
+            "decimals": [1.5, {"deep": [[2.25]]}, 3e10, -0.0],
+        }
+    )
+    parsed = _parse_body(raw)
+    assert parsed is not None
+
+    floats: list[object] = []
+
+    def walk(node):
+        if isinstance(node, float):
+            floats.append(node)
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+
+    walk(parsed)
+    assert floats == [], f"float objects materialised from the wire: {floats}"
+    print(f"\n[measured] floats materialised from a decimal-laden body: {len(floats)}")
+
+
 def test_webhook_module_has_no_float_in_the_money_path():
     """Reuse the repo's own AST lint rather than a second, weaker copy of it."""
     root = Path(__file__).resolve().parent.parent
@@ -681,7 +1103,7 @@ def test_every_reason_code_is_reachable():
         assert got == expected, f"expected {expected}, got {got}"
         seen.add(got)
 
-    # the remaining seven need their own little scenarios
+    # the rest need their own little scenarios
     for event in ("payment.failed",):
         b = payment_captured()
         b["event"] = event
@@ -693,6 +1115,24 @@ def test_every_reason_code_is_reachable():
     b = wire(payment_captured(amount=AMOUNT + 7))
     seen.add(open_intent.evaluate(b, _sign(b), SECRET).reason)
     b = wire(payment_link_paid(payment_amount=1))
+    seen.add(open_intent.evaluate(b, _sign(b), SECRET).reason)
+
+    # the four codes added by the ask-vs-settlement and fail-closed fixes
+    no_status = payment_captured()
+    del no_status["payload"]["payment"]["entity"]["status"]
+    seen.add(open_intent.evaluate(wire(no_status), _sign(wire(no_status)), SECRET).reason)
+
+    no_currency = payment_captured()
+    del no_currency["payload"]["payment"]["entity"]["currency"]
+    seen.add(
+        open_intent.evaluate(wire(no_currency), _sign(wire(no_currency)), SECRET).reason
+    )
+
+    no_paid = payment_link_only()
+    del no_paid["payload"]["payment_link"]["entity"]["amount_paid"]
+    seen.add(open_intent.evaluate(wire(no_paid), _sign(wire(no_paid)), SECRET).reason)
+
+    b = wire(payment_link_only(amount=AMOUNT, amount_paid=500))
     seen.add(open_intent.evaluate(b, _sign(b), SECRET).reason)
     b = b'{"event":"payment.captured","payload":{"payment":{"entity":{"amount":"21437","currency":"INR","status":"captured","notes":{"session_id":"s_0042"}}}}}'
     seen.add(open_intent.evaluate(b, _sign(b), SECRET).reason)
@@ -778,6 +1218,65 @@ def test_ten_thousand_forged_signatures_produce_zero_greens():
     assert greens == 0
     assert len(p.seen) == 0
     print(f"\n[measured] forged signatures rejected: {n}/{n}, greens: {greens}")
+
+
+def test_MEASURED_a_full_sweep_of_settlement_amounts_greens_exactly_once():
+    """Every settlement from ₹0.00 to ₹428.74 against a ₹214.37 intent, in both
+    envelope shapes. Exactly one value in each sweep may green: the exact one."""
+    amounts = sorted(set(range(0, AMOUNT * 2, 7)) | {AMOUNT})
+    greens: dict[str, list[int]] = {"link_only": [], "link_and_payment": []}
+    for paid in amounts:
+        p = GreenPredicate(lookup_of(Intent(SESSION, AMOUNT)))
+        raw = wire(payment_link_only(amount=AMOUNT, amount_paid=paid))
+        if p.evaluate(raw, _sign(raw), SECRET).green:
+            greens["link_only"].append(paid)
+
+        p2 = GreenPredicate(lookup_of(Intent(SESSION, AMOUNT)))
+        raw2 = wire(payment_link_paid(amount=AMOUNT, payment_amount=paid))
+        if p2.evaluate(raw2, _sign(raw2), SECRET).green:
+            greens["link_and_payment"].append(paid)
+
+    assert greens["link_only"] == [AMOUNT]
+    assert greens["link_and_payment"] == [AMOUNT]
+    print(
+        f"\n[measured] settlement sweep: {len(amounts)} amounts x 2 envelope "
+        f"shapes = {len(amounts) * 2} deliveries; greens: "
+        f"{len(greens['link_only']) + len(greens['link_and_payment'])}, "
+        f"both at exactly {AMOUNT}"
+    )
+
+
+def test_MEASURED_a_thousand_guessed_event_ids_block_zero_genuine_greens():
+    """The denial-of-green attack at scale: an attacker who lands one genuine
+    payment and rewrites its header 1000 times over, then 1000 genuine sales
+    whose signed envelope ids are exactly the values guessed."""
+    ids = [f"evt_{i:06d}" for i in range(1000)]
+    intents = [Intent("s_attacker", 100)] + [
+        Intent(f"s_{i}", 10000 + i) for i in range(len(ids))
+    ]
+    p = GreenPredicate(lookup_of(*intents))
+
+    poisoned = 0
+    for guess in ids:
+        atk = payment_captured(session_id="s_attacker", amount=100)
+        atk["id"] = f"evt_atk_{guess}"
+        raw = wire(atk)
+        if p.evaluate(raw, _sign(raw), SECRET, header_event_id=guess).green:
+            poisoned += 1
+
+    blocked = 0
+    for i, guess in enumerate(ids):
+        body = payment_captured(session_id=f"s_{i}", amount=10000 + i)
+        body["id"] = guess
+        raw = wire(body)
+        if not p.evaluate(raw, _sign(raw), SECRET).green:
+            blocked += 1
+
+    assert blocked == 0, f"{blocked}/{len(ids)} genuine sales denied their green"
+    print(
+        f"\n[measured] denial-of-green: {poisoned} header-poisoning deliveries "
+        f"accepted, {blocked}/{len(ids)} subsequent genuine sales blocked"
+    )
 
 
 @settings(max_examples=300, deadline=None)

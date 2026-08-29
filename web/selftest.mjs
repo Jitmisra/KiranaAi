@@ -11,6 +11,7 @@
  * declare "type": "module", and this file is not permitted to add one.
  */
 import { readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -42,6 +43,22 @@ function throws(fn, what) {
   let threw = false;
   try { fn(); } catch { threw = true; }
   if (!threw) throw new Error(`expected a throw: ${what}`);
+}
+/**
+ * Like `throws`, but the THROWN TYPE is part of the assertion. A blanket
+ * `catch` in a test is how a TypeError comes to read as a pass, so every place
+ * that expects the money guard to fire names MoneyError explicitly.
+ */
+function throwsMoney(fn, what) {
+  let err = null, threw = false;
+  try { fn(); } catch (e) { threw = true; err = e; }
+  if (!threw) throw new Error(`expected a MoneyError: ${what}`);
+  if (!(err instanceof A.MoneyError)) {
+    throw new Error(`expected MoneyError, got ${err && err.name}: ${err && err.message} — ${what}`);
+  }
+}
+function doesNotThrow(fn, what) {
+  try { fn(); } catch (e) { throw new Error(`unexpected throw (${what}): ${e && e.name}: ${e && e.message}`); }
 }
 function deepFreeze(o) {
   if (o && typeof o === 'object' && !Object.isFrozen(o)) {
@@ -115,17 +132,17 @@ console.log(`node ${process.version} · app.js ${APP_SRC.length} bytes`);
 G('1. money — integer paise only (invariant 1)');
 
 T('paise accepts integers', () => { eq(A.paise(0), 0); eq(A.paise(21450), 21450); eq(A.paise(-7), -7); });
-T('paise rejects a float', () => throws(() => A.paise(214.5), '214.5'));
-T('paise rejects 0.1+0.2', () => throws(() => A.paise(0.1 + 0.2), '0.30000000000000004'));
-T('paise rejects bool', () => { throws(() => A.paise(true), 'true'); throws(() => A.paise(false), 'false'); });
-T('paise rejects string', () => throws(() => A.paise('100'), "'100'"));
+T('paise rejects a float', () => throwsMoney(() => A.paise(214.5), '214.5'));
+T('paise rejects 0.1+0.2', () => throwsMoney(() => A.paise(0.1 + 0.2), '0.30000000000000004'));
+T('paise rejects bool', () => { throwsMoney(() => A.paise(true), 'true'); throwsMoney(() => A.paise(false), 'false'); });
+T('paise rejects string', () => throwsMoney(() => A.paise('100'), "'100'"));
 T('paise rejects null/undefined', () => {
-  throws(() => A.paise(null), 'null'); throws(() => A.paise(undefined), 'undefined');
+  throwsMoney(() => A.paise(null), 'null'); throwsMoney(() => A.paise(undefined), 'undefined');
 });
 T('paise rejects NaN and Infinity', () => {
-  throws(() => A.paise(NaN), 'NaN'); throws(() => A.paise(Infinity), 'Infinity');
+  throwsMoney(() => A.paise(NaN), 'NaN'); throwsMoney(() => A.paise(Infinity), 'Infinity');
 });
-T('paise rejects unsafe integers', () => throws(() => A.paise(2 ** 53), '2^53'));
+T('paise rejects unsafe integers', () => throwsMoney(() => A.paise(2 ** 53), '2^53'));
 T('MoneyError is the thrown type', () => {
   try { A.paise(1.5); } catch (e) { ok(e instanceof A.MoneyError, `got ${e.name}`); }
 });
@@ -135,11 +152,11 @@ T("fromRupeesStr('0.05') === 5", () => eq(A.fromRupeesStr('0.05'), 5));
 T("fromRupeesStr('7') === 700", () => eq(A.fromRupeesStr('7'), 700));
 T("fromRupeesStr('7.5') === 750", () => eq(A.fromRupeesStr('7.5'), 750));
 T("fromRupeesStr('-3.01') === -301", () => eq(A.fromRupeesStr('-3.01'), -301));
-T('fromRupeesStr rejects sub-paisa', () => throws(() => A.fromRupeesStr('1.234'), '1.234'));
+T('fromRupeesStr rejects sub-paisa', () => throwsMoney(() => A.fromRupeesStr('1.234'), '1.234'));
 T('fromRupeesStr rejects junk', () => {
-  ['', '  ', 'abc', '1.2.3', '1,50', '1e3', '.', '-'].forEach((s) => throws(() => A.fromRupeesStr(s), s));
+  ['', '  ', 'abc', '1.2.3', '1,50', '1e3', '.', '-'].forEach((s) => throwsMoney(() => A.fromRupeesStr(s), s));
 });
-T('fromRupeesStr rejects a number argument', () => throws(() => A.fromRupeesStr(214.5), 'number arg'));
+T('fromRupeesStr rejects a number argument', () => throwsMoney(() => A.fromRupeesStr(214.5), 'number arg'));
 T("toRupeesStr(21450) === '214.50'", () => eq(A.toRupeesStr(21450), '214.50'));
 T("toRupeesStr(5) === '0.05'", () => eq(A.toRupeesStr(5), '0.05'));
 T("toRupeesStr(-301) === '-3.01'", () => eq(A.toRupeesStr(-301), '-3.01'));
@@ -165,8 +182,8 @@ T('sumPaise of 10000 x ₹0.07 is exactly ₹700.00', () => {
   eq(A.toRupeesStr(70000), '700.00');
 });
 T('addPaise/sumPaise reject a float member', () => {
-  throws(() => A.addPaise(1, 2.5), 'float in add');
-  throws(() => A.sumPaise([1, 2, 3.5]), 'float in sum');
+  throwsMoney(() => A.addPaise(1, 2.5), 'float in add');
+  throwsMoney(() => A.sumPaise([1, 2, 3.5]), 'float in sum');
 });
 
 // The JS mirror of tools/lint_no_float.py, run over the money block itself.
@@ -289,6 +306,183 @@ const PY = {
   persp_index: 0.017737731,
 };
 
+// ---------------------------------------------------------------------------
+// ...but a transcription ROTS. Change the Python detector, the mat geometry or
+// the synthetic rig and those digits go on agreeing with a world that no longer
+// exists, while the JS quietly diverges. So the vector is REGENERATED below by
+// running the real gawaah.takhti.PlaneEngine in the repo venv, and compared
+// against the pinned digits to one unit in the last transcribed place. The pin
+// stays (it documents the numbers, and it is what the JS is checked against
+// when reading the file), but it can no longer drift in silence.
+// ---------------------------------------------------------------------------
+const REPO_ROOT = dirname(HERE);
+const PY_INTERPRETERS = [
+  join(REPO_ROOT, '.venv', 'bin', 'python'),
+  join(REPO_ROOT, '.venv', 'bin', 'python3'),
+  'python3',
+];
+
+/** The generator. Runs the SHIPPING detector — no reimplementation of it here. */
+const PY_GENERATOR = `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(REPO_ROOT)})
+import numpy as np
+from gawaah.takhti import PlaneEngine, MARKER_IDS, mm_to_buffer, marker_centres_mm
+from tests.test_plane import synth_frame
+
+frame, _ = synth_frame(px_per_mm=4.0, tilt=(3.0, -2.0), size=(960, 1280),
+                       noise=0.0, seed=7, fit=0.82)
+eng = PlaneEngine()
+corners, ids, _ = eng._det.detectMarkers(frame)
+by_id = {int(i): c.reshape(4, 2) for i, c in zip(ids.flatten(), corners)}
+src = np.array([by_id[i].mean(axis=0) for i in MARKER_IDS], np.float64)
+lock = eng.detect(frame)
+print(json.dumps({
+    "locked": bool(lock.locked),
+    "reason": str(lock.reason),
+    "src_frame_px": src.tolist(),
+    "dst_buffer_px": mm_to_buffer(marker_centres_mm()).tolist(),
+    "H_frame_to_buffer": [float(x) for x in np.asarray(lock.H).ravel()],
+    "reproj_rmse_px": float(lock.reproj_rmse_px),
+    "persp_index": float(lock.persp_index),
+    "scale_err": float(lock.scale_err),
+    "marker_quads_frame_px": {str(i): by_id[i].astype(float).tolist()
+                              for i in MARKER_IDS},
+}))
+`;
+
+function regeneratePythonGolden() {
+  const tried = [];
+  for (const py of PY_INTERPRETERS) {
+    const r = spawnSync(py, ['-c', PY_GENERATOR], { encoding: 'utf8', timeout: 180000 });
+    if (r.error) { tried.push(`${py}: ${r.error.code || r.error.message}`); continue; }
+    if (r.status !== 0) {
+      const tail = String(r.stderr || '').trim().split('\n').slice(-3).join(' | ');
+      tried.push(`${py}: exit ${r.status}: ${tail}`);
+      continue;
+    }
+    return { interpreter: py, data: JSON.parse(r.stdout) };
+  }
+  throw new Error(
+    'the Python golden vector could not be REGENERATED, so the JS pin is '
+    + 'unverified and this run must not claim cross-language conformance.\n      tried: '
+    + tried.join('\n             '));
+}
+
+/**
+ * One unit in the last place of a DECIMAL TRANSCRIPTION. A pin written as
+ * 0.017737731 carries 9 decimals, so a correctly-rounded transcription of the
+ * true value can differ from it by up to half of 1e-9 — a full ulp is the
+ * honest bound once the exact-tie case is included. Derived from the PINNED
+ * number itself, so the tolerance tightens automatically the moment someone
+ * pins more digits, and never has to be chosen by hand.
+ */
+function transcriptionUlp(p) {
+  if (p === 0 || !Number.isFinite(p)) return 0;
+  const [mant, exp] = Math.abs(p).toExponential().split('e');
+  const decimals = (mant.split('.')[1] || '').length;
+  return 10 ** (Number(exp) - decimals);
+}
+function sigDigits(p) {
+  if (p === 0) return 1;
+  return Math.abs(p).toExponential().split('e')[0].replace('.', '').replace(/0+$/, '').length;
+}
+let pinWorstUlpRatio = 0;
+/** Compare a pinned value (or nested array of them) against a regenerated one. */
+function pinEq(path, pinned, fresh) {
+  if (Array.isArray(pinned)) {
+    ok(Array.isArray(fresh) && fresh.length === pinned.length,
+      `${path}: pinned ${pinned.length} values, Python produced ${Array.isArray(fresh) ? fresh.length : typeof fresh}`);
+    pinned.forEach((v, i) => pinEq(`${path}[${i}]`, v, fresh[i]));
+    return;
+  }
+  ok(typeof fresh === 'number' && Number.isFinite(fresh), `${path}: Python produced ${fresh}`);
+  const tol = transcriptionUlp(pinned);
+  const d = Math.abs(pinned - fresh);
+  if (tol > 0) pinWorstUlpRatio = Math.max(pinWorstUlpRatio, d / tol);
+  if (!(d <= tol)) {
+    throw new Error(`${path}: pinned ${pinned}, Python now produces ${fresh} `
+      + `(drift ${d.toExponential(3)} > ${tol.toExponential(3)}, one ulp of the pin). `
+      + 'Either the Python side changed or the pin was mistyped — re-transcribe it.');
+  }
+}
+
+G('4a. the Python golden vector is GENERATED, not merely transcribed');
+const GEN = (() => {
+  try { return { ok: true, ...regeneratePythonGolden() }; }
+  catch (e) { return { ok: false, err: e }; }
+})();
+/** Every pin test fails loudly if the vector could not be regenerated. */
+function gen() { if (!GEN.ok) throw GEN.err; return GEN.data; }
+
+T('the shipping Python PlaneEngine runs from here and still locks', () => {
+  const g = gen();
+  ok(g.locked, `Python refuses its own reference frame: ${g.reason}`);
+  eq(g.reason, 'locked');
+  measured.pin_generator = GEN.interpreter.startsWith(REPO_ROOT)
+    ? GEN.interpreter.slice(REPO_ROOT.length + 1) : GEN.interpreter;
+});
+T('the pin is stated to enough digits to be worth comparing', () => {
+  const flat = [...PY.src_frame_px.flat(), ...PY.dst_buffer_px.flat(),
+    ...PY.H_frame_to_buffer, PY.reproj_rmse_px, PY.persp_index]
+    .filter((v) => v !== 1 && v !== 0);
+  const thin = flat.filter((v) => sigDigits(v) < 5);
+  eq(thin.length, 0, `pinned to too few digits to detect drift: ${JSON.stringify(thin)}`);
+  measured.pin_min_significant_digits = Math.min(...flat.map(sigDigits));
+  measured.pin_values_checked = flat.length + 1;
+});
+T('the pinned marker centres are what the Python detector produces TODAY', () => {
+  const g = gen();
+  pinEq('src_frame_px', PY.src_frame_px, g.src_frame_px);
+  pinEq('dst_buffer_px', PY.dst_buffer_px, g.dst_buffer_px);
+});
+T('the pinned cv2.findHomography matrix is what Python produces TODAY', () => {
+  const g = gen();
+  // A homography is defined up to scale, so both sides are normalised by H[8]
+  // before comparison — Python returns 0.9999999999999999 there, not 1.
+  const norm = (H) => H.map((v) => v / H[8]);
+  pinEq('H_frame_to_buffer', norm(PY.H_frame_to_buffer), norm(g.H_frame_to_buffer));
+});
+T('the pinned rmse and perspective index are what Python produces TODAY', () => {
+  const g = gen();
+  pinEq('reproj_rmse_px', PY.reproj_rmse_px, g.reproj_rmse_px);
+  pinEq('persp_index', PY.persp_index, g.persp_index);
+  measured.pin_worst_ulp_ratio = pinWorstUlpRatio.toFixed(3);
+});
+T('the drift check is itself tested (a planted divergence is caught)', () => {
+  throws(() => pinEq('planted', 0.017737731, 0.017737741), '1e-8 of drift, 10 ulp');
+  throws(() => pinEq('planted', 1.113677071648, 1.113677071), 'a dropped digit');
+  doesNotThrow(() => pinEq('planted', 0.017737731, 0.0177377312), 'sub-ulp agreement');
+  throws(() => pinEq('planted', 1, NaN), 'a NaN from the generator');
+  throws(() => pinEq('planted', [1, 2], [1]), 'a shape change');
+});
+T('JS adjudicateLock reproduces the Python lock on the REAL detected quads', () => {
+  const g = gen();
+  const quads = {};
+  for (const k of Object.keys(g.marker_quads_frame_px)) {
+    quads[Number(k)] = g.marker_quads_frame_px[k];
+  }
+  const L = A.adjudicateLock(quads);
+  ok(L.locked, `JS refused a frame Python locked: ${L.reason}`);
+  // The JS uses an EXACT 4-point DLT; cv2.findHomography normalises and solves
+  // least-squares. On 4 exact correspondences the two agree to ~6e-8 in the
+  // derived quantities, which is the number below — not an assumed zero.
+  near(L.scaleErr, g.scale_err, 1e-6, 'scale error');
+  near(L.perspIndex, g.persp_index, 1e-6, 'perspective index');
+  measured.js_vs_py_scale_err_delta = Math.abs(L.scaleErr - g.scale_err).toExponential(3);
+  measured.js_vs_py_persp_delta = Math.abs(L.perspIndex - g.persp_index).toExponential(3);
+  measured.py_scale_err_real_detection = g.scale_err.toExponential(4);
+});
+T('the two rmse numbers differ BY CONSTRUCTION, and the difference is stated', () => {
+  const g = gen();
+  const jsR = A.reprojRmse(A.homographyFrom4Points(g.src_frame_px, g.dst_buffer_px),
+    g.src_frame_px, g.dst_buffer_px);
+  ok(jsR < 1e-9, `exact DLT rmse ${jsR}`);
+  ok(g.reproj_rmse_px > jsR, 'cv2 least-squares should not beat an exact 4-point solve');
+  measured.rmse_js_exact_dlt_px = jsR.toExponential(3);
+  measured.rmse_py_cv2_findhomography_px = g.reproj_rmse_px.toExponential(3);
+});
+
 G('4. cross-language conformance vs the Python PlaneEngine');
 const JS_H = A.homographyFrom4Points(PY.src_frame_px, PY.dst_buffer_px);
 T('the JS marker-centre destinations match mm_to_buffer()', () => {
@@ -390,6 +584,151 @@ T('a 20 deg tilt -> refuses to lock on perspective index', () => {
   const L = A.adjudicateLock(markerQuads(A.invert3x3(Hbuf2frame)));
   ok(!L.locked, 'should refuse'); ok(L.reason.startsWith('perspective index'), L.reason);
   ok(L.reason.includes('deg'), 'reason must name the approximate angle');
+});
+
+// ================================= 5b. DETECTOR FAULTS — abstain, never throw
+// A detector is a foreign function: it is OpenCV compiled to wasm, driven by a
+// camera. It can hand back Infinity, NaN, a short quad or a null row, and it can
+// throw outright. Every one of those is an ABSTENTION (invariant 7), which means
+// adjudicateLock must RETURN a not-locked verdict with a truthful reason. It must
+// not throw, because a throw unwinds past the caller's `lock = detector(...)`
+// assignment and leaves the PREVIOUS lock in place — the app then keeps billing
+// against a plane it can no longer see.
+G('5b. detector faults — abstain with a named reason, never throw, never stale');
+
+/** Build the four clean quads and corrupt one corner of one marker. */
+function poisoned(mut) { const q = markerQuads(PY.H_frame_to_buffer); mut(q); return q; }
+const POISON = {
+  '+Infinity x on marker 0': (q) => { q[0][0][0] = Infinity; },
+  '-Infinity y on marker 2': (q) => { q[2][2][1] = -Infinity; },
+  '+Inf and -Inf in one quad': (q) => { q[1][0][0] = Infinity; q[1][2][0] = -Infinity; },
+  'NaN corner on marker 3': (q) => { q[3][1][1] = NaN; },
+  'undefined coordinate': (q) => { q[0][1][0] = undefined; },
+  'string coordinate': (q) => { q[1][0][0] = '120'; },
+  'null corner row': (q) => { q[0][1] = null; },
+  'a 3-corner quad': (q) => { q[2].pop(); },
+  'an empty quad': (q) => { q[3] = []; },
+  'a quad of bare numbers': (q) => { q[1] = [1, 2, 3, 4]; },
+  'a 5-corner quad with an Infinity 5th': (q) => { q[2].push([Infinity, Infinity]); },
+};
+
+T('adjudicateLock NEVER throws, whatever the detector hands it', () => {
+  for (const [name, mut] of Object.entries(POISON)) {
+    doesNotThrow(() => A.adjudicateLock(poisoned(mut)), name);
+  }
+});
+T('a non-finite corner is REFUSED and NAMED as such', () => {
+  for (const name of ['+Infinity x on marker 0', '-Infinity y on marker 2',
+    '+Inf and -Inf in one quad', 'NaN corner on marker 3', 'undefined coordinate',
+    'string coordinate']) {
+    const L = A.adjudicateLock(poisoned(POISON[name]));
+    ok(L.locked !== true, `${name}: locked on a non-finite corner`);
+    ok(/non-finite/.test(L.reason),
+      `${name}: reason is "${L.reason}" — it must name the non-finite corner, not misreport a scale error`);
+  }
+});
+T('a structurally malformed quad is REFUSED and NAMED as such', () => {
+  for (const name of ['null corner row', 'a 3-corner quad', 'an empty quad',
+    'a quad of bare numbers']) {
+    const L = A.adjudicateLock(poisoned(POISON[name]));
+    ok(L.locked !== true, `${name}: locked on a malformed quad`);
+    ok(/marker \d/.test(L.reason), `${name}: reason "${L.reason}" does not name the marker`);
+  }
+});
+T('no verdict ever carries a non-finite homography to the caller', () => {
+  for (const [name, mut] of Object.entries(POISON)) {
+    const L = A.adjudicateLock(poisoned(mut));
+    if (L.H === undefined) continue;
+    ok(Array.isArray(L.H) && L.H.every(Number.isFinite),
+      `${name}: verdict carries H = ${JSON.stringify(L.H)}`);
+  }
+});
+T('the clean quads still lock — the guard is not a blanket refusal', () => {
+  ok(A.adjudicateLock(markerQuads(PY.H_frame_to_buffer)).locked, 'the guard broke the good path');
+});
+T('fuzz: 20000 junk detections neither throw nor lock on garbage', () => {
+  const rnd = mulberry32(31);
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const coord = () => pick([rnd() * 1280, Infinity, -Infinity, NaN, undefined, null,
+    '100', 1e308 * 10, rnd() * 1e-9]);
+  let n = 0, locked = 0;
+  for (let i = 0; i < 20000; i++) {
+    const q = markerQuads(PY.H_frame_to_buffer);
+    for (const id of [0, 1, 2, 3]) {
+      if (rnd() < 0.45) continue;
+      const shape = rnd();
+      if (shape < 0.15) q[id] = pick([null, undefined, [], [1, 2], 'quad', 7]);
+      else if (shape < 0.3) q[id].pop();
+      else q[id][Math.floor(rnd() * 4)] = pick([[coord(), coord()], null, undefined, [coord()]]);
+    }
+    let L;
+    try { L = A.adjudicateLock(q); }
+    catch (e) { throw new Error(`adjudicateLock threw on iteration ${i}: ${e.name}: ${e.message}`); }
+    if (L.locked === true) {
+      locked++;
+      if (!L.H.every(Number.isFinite)) throw new Error(`locked with a non-finite H at ${i}`);
+      for (const id of [0, 1, 2, 3]) {
+        for (const c of q[id]) {
+          if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) {
+            throw new Error(`locked on a non-finite corner at ${i}: ${JSON.stringify(q[id])}`);
+          }
+        }
+      }
+    }
+    n++;
+  }
+  measured.detector_fuzz_cases = n;
+  measured.detector_fuzz_locked = locked;
+});
+
+// The other half of the same defect: the CALL SITE. `lock = detector(frame)`
+// leaves `lock` untouched when detector() throws, so a stale lock survives.
+T('safeDetect clears the lock when the detector THROWS (fail closed)', () => {
+  const stale = A.adjudicateLock(markerQuads(PY.H_frame_to_buffer));
+  ok(stale.locked, 'precondition: a good lock exists');
+  const L = A.safeDetect(() => { throw new Error('OpenCV(4.11.0) assertion failed'); }, null, 'absent');
+  eq(L.locked, false, 'a detector exception must clear the lock');
+  ok(L.reason.includes(A.Reason.DETECTOR_FAILED), L.reason);
+  ok(L.reason.includes('assertion failed'), `the real cause must survive: ${L.reason}`);
+  eq(L.H, undefined, 'a failed detection must not carry a homography');
+});
+T('safeDetect refuses a detector that returns junk instead of a verdict', () => {
+  for (const junk of [undefined, null, 0, '', 'MAT LOCK', [], { locked: 'true' }, { locked: 1 }]) {
+    const L = A.safeDetect(() => junk, null, 'absent');
+    eq(L.locked, false, `junk ${JSON.stringify(junk)} was taken as a lock`);
+    ok(typeof L.reason === 'string' && L.reason.length > 0, 'a refusal must be named');
+  }
+});
+T('safeDetect passes a genuine lock through untouched', () => {
+  const good = A.adjudicateLock(markerQuads(PY.H_frame_to_buffer));
+  const L = A.safeDetect(() => good, null, 'absent');
+  eq(L.locked, true); eq(L.H, good.H);
+});
+T('safeDetect refuses a "lock" that render() would crash on', () => {
+  const good = A.adjudicateLock(markerQuads(PY.H_frame_to_buffer));
+  // a lock is only a lock if every number the chrome and the warp consume is
+  // finite: H, and the three figures render() puts through toFixed.
+  const broken = [
+    ['H', { ...good, H: undefined }], ['short H', { ...good, H: [1, 2, 3] }],
+    ['non-finite H', { ...good, H: good.H.map((v, i) => (i === 4 ? NaN : v)) }],
+    ['scaleErr', { ...good, scaleErr: undefined }],
+    ['perspIndex', { ...good, perspIndex: Infinity }],
+    ['reprojRmsePx', { ...good, reprojRmsePx: NaN }],
+  ];
+  for (const [name, verdict] of broken) {
+    const L = A.safeDetect(() => verdict, null, 'absent');
+    eq(L.locked, false, `${name}: a crashing verdict was accepted as a lock`);
+    eq(A.frameGrabPolicy(L).retain, A.RETAIN_NOTHING, `${name}: a crop was retained`);
+  }
+});
+T('safeDetect names the absent-detector case rather than throwing', () => {
+  const L = A.safeDetect(null, null, A.Reason.OPENCV_ABSENT);
+  eq(L.locked, false); eq(L.reason, A.Reason.OPENCV_ABSENT);
+});
+T('a cleared lock retains NOTHING (invariant 4 holds through the failure)', () => {
+  const L = A.safeDetect(() => { throw new Error('boom'); }, null, 'absent');
+  eq(A.frameGrabPolicy(L).retain, A.RETAIN_NOTHING);
+  eq(A.frameGrabPolicy(L).egress, A.RETAIN_NOTHING);
 });
 
 // ================================================= 6. GLYPH PROJECTION =====
@@ -601,8 +940,8 @@ T('warm enroll — tapping a price resolves amber into the total', () => {
 });
 T('PRICE rejects a float price with MoneyError', () => {
   const s = run([LOCK, place('u', null)]);
-  throws(() => A.reduce(s, { type: 'PRICE', itemId: 'u', pricePaise: 15.5 }), 'float price');
-  throws(() => A.reduce(s, { type: 'PRICE', itemId: 'u', pricePaise: '1500' }), 'string price');
+  throwsMoney(() => A.reduce(s, { type: 'PRICE', itemId: 'u', pricePaise: 15.5 }), 'float price');
+  throwsMoney(() => A.reduce(s, { type: 'PRICE', itemId: 'u', pricePaise: '1500' }), 'string price');
 });
 T('PRICE on an unknown item is refused', () => {
   const s = A.reduce(run([LOCK]), { type: 'PRICE', itemId: 'nope', pricePaise: 100 });
@@ -805,29 +1144,87 @@ T('exhaustive: green iff all four conditions hold (16 combinations)', () => {
   eq(greens, 1, 'exactly one of the 16 combinations may be green');
   measured.green_gate_combinations = 16;
 });
-T('no non-webhook action can ever reach PAID', () => {
+/**
+ * The no-PAID-without-a-webhook fuzz, extracted into a function for one reason:
+ * so the harness's OWN error handling is under test.
+ *
+ * This loop used to be written with a bare `catch { }` carrying a comment that
+ * said MoneyError was fine — which catches EVERYTHING. A TypeError in the
+ * reducer, a genuine bug, would
+ * have been swallowed and the run would have reported a pass. The catch below is
+ * narrowed to MoneyError and re-throws anything else, and the two mutation tests
+ * under it prove that narrowing by planting both kinds of error.
+ *
+ * `reduceFn` is injectable ONLY for those mutation tests; every real run uses
+ * A.reduce. The float/string prices in the action pool are deliberate: they make
+ * the money guard fire, so the surviving catch is live code rather than a lid on
+ * an empty pot.
+ */
+function fuzzNoPaidWithoutWebhook(reduceFn = A.reduce, iterations = 40000) {
   const rnd = mulberry32(99);
   const ids = ['a', 'b', 'c', null, 'ghost'];
-  let s = S0, sawPaid = false, n = 0;
-  for (let i = 0; i < 40000; i++) {
+  let s = S0, sawPaid = false, n = 0, moneyErrors = 0;
+  for (let i = 0; i < iterations; i++) {
     const id = ids[Math.floor(rnd() * ids.length)];
+    // 1 draw in 8 is a float or a string price: money that must be REFUSED.
+    const badMoney = rnd() < 0.125;
+    const price = () => (badMoney
+      ? (rnd() < 0.5 ? Math.floor(rnd() * 10000) + 0.5 : String(Math.floor(rnd() * 10000)))
+      : Math.floor(rnd() * 10000));
     const acts = [
       LOCK, { type: 'MAT_LOCK', locked: false }, BRAIN, { type: 'BRAIN', up: false },
-      place(id ?? 'x', rnd() < 0.4 ? null : Math.floor(rnd() * 10000)),
-      { type: 'PRICE', itemId: id ?? 'x', pricePaise: Math.floor(rnd() * 10000) },
+      place(id ?? 'x', rnd() < 0.4 ? null : price()),
+      { type: 'PRICE', itemId: id ?? 'x', pricePaise: price() },
       { type: 'EXIT', itemId: id, tap: rnd() < 0.5 },
       { type: 'REVERT', itemId: id ?? 'x' },
       { type: 'DONE' }, { type: 'ACK' },
       { type: 'NETWORK', up: rnd() < 0.5 }, { type: 'PERF', p95Ms: Math.floor(rnd() * 600) },
     ];
-    try { s = A.reduce(s, acts[Math.floor(rnd() * acts.length)]); } catch { /* MoneyError is fine */ }
+    try {
+      s = reduceFn(s, acts[Math.floor(rnd() * acts.length)]);
+    } catch (e) {
+      // NARROWED. A MoneyError is the money guard doing its job. Anything else
+      // is a defect and must fail the run, not read as a pass.
+      if (!(e instanceof A.MoneyError)) throw e;
+      moneyErrors++;
+    }
     if (s.state === A.State.PAID) sawPaid = true;
     if (s.authorisedPaise !== 0) throw new Error('money authorised without a webhook');
     n++;
     if (i % 300 === 299) s = A.initialState('sess-test');
   }
-  ok(!sawPaid, 'a non-webhook action reached PAID');
-  measured.no_paid_without_webhook_steps = n;
+  return { steps: n, sawPaid, moneyErrors };
+}
+
+T('no non-webhook action can ever reach PAID', () => {
+  const r = fuzzNoPaidWithoutWebhook();
+  ok(!r.sawPaid, 'a non-webhook action reached PAID');
+  ok(r.moneyErrors > 0, 'the money guard never fired — the fuzz is not exercising it');
+  measured.no_paid_without_webhook_steps = r.steps;
+  measured.fuzz_money_errors_caught = r.moneyErrors;
+});
+T('the fuzz RE-THROWS a planted TypeError instead of counting it as a pass', () => {
+  let calls = 0;
+  const buggyReducer = (s, a) => {
+    if (++calls === 500) throw new TypeError('planted: reducer read a property of undefined');
+    return A.reduce(s, a);
+  };
+  let caught = null;
+  try { fuzzNoPaidWithoutWebhook(buggyReducer, 2000); } catch (e) { caught = e; }
+  ok(caught !== null, 'a planted TypeError was SWALLOWED — a real reducer bug would read as a pass');
+  ok(caught instanceof TypeError, `expected the planted TypeError, got ${caught && caught.name}`);
+  ok(/planted/.test(caught.message), caught.message);
+});
+T('the fuzz still swallows a genuine MoneyError, and counts it', () => {
+  const moneyOnly = () => { throw new A.MoneyError('float is not money: 1.5'); };
+  const r = fuzzNoPaidWithoutWebhook(moneyOnly, 100);
+  eq(r.steps, 100); eq(r.moneyErrors, 100); eq(r.sawPaid, false);
+});
+T('the harness itself refuses to accept the wrong error type', () => {
+  // throwsMoney is the assertion the money tests lean on; prove it discriminates.
+  throws(() => throwsMoney(() => { throw new TypeError('not money'); }, 'planted'), 'wrong type');
+  throws(() => throwsMoney(() => 1, 'planted'), 'no throw at all');
+  doesNotThrow(() => throwsMoney(() => A.paise(1.5), 'real'), 'a real MoneyError');
 });
 T('a duplicate event_id is ignored', () => {
   let s = A.reduce(armed(), { type: 'WEBHOOK', verdict: GOOD() });
@@ -1412,13 +1809,80 @@ T('losing the mat mid-session freezes the total and drops the crop', () => {
   eq(C_.byId.rect.dataset.policy, A.RETAIN_NOTHING, 'a crop survived losing the mat');
   ok(/no markers detected/.test(C_.byId.lockdetail.textContent), C_.byId.lockdetail.textContent);
 });
+// ============ 15d. the defect this whole section exists to catch ============
+// A detector EXCEPTION is not the same as a detector saying "no markers". The
+// second is handled; the first used to unwind past `lock = detector(frame)` and
+// leave the PREVIOUS lock in place — so the chrome kept saying MAT LOCK, the
+// rectified-crop policy stayed RETAIN_RECTIFIED, and the app went on billing
+// lines against a plane the camera could no longer see. Fail closed instead.
+G('15d. browser shell — a THROWING detector must CLEAR the lock, not keep a stale one');
+const D_ = await bootShell({ cvStub: makeCvStub(CVQ), tag: 'd' });
+const dsock = D_.sockets[0];
+
+T('precondition: the mat locks and a line is billed', () => {
+  D_.pump(2);
+  eq(D_.byId.lock.textContent, 'MAT LOCK');
+  eq(D_.byId.rect.dataset.policy, A.RETAIN_RECTIFIED);
+  dsock.onopen();
+  dsock.onmessage({ data: JSON.stringify({ type: 'placement', itemId: 'd1', name: 'Dal', pricePaise: 4500, centreMm: [100, 200] }) });
+  dsock.onmessage({ data: JSON.stringify({ type: 'exit', itemId: 'd1', tap: true }) });
+  eq(D_.byId.total.textContent, '₹45.00');
+});
+T('a detector EXCEPTION clears the lock and enters MAT_LOST', () => {
+  D_.cv.aruco_ArucoDetector.prototype.detectMarkers = () => {
+    throw new Error('OpenCV(4.11.0) Error: Assertion failed in detectMarkers');
+  };
+  D_.pump(2);
+  eq(D_.byId.lock.textContent, 'NO LOCK', 'a STALE lock survived a detector exception');
+  eq(D_.byId.chrome.dataset.state, A.State.MAT_LOST, 'the app did not enter MAT_LOST');
+  ok(/grey/.test(D_.byId.chrome.className), D_.byId.chrome.className);
+  ok(/detector/.test(D_.byId.lockdetail.textContent),
+    `the failure must be named on screen, got "${D_.byId.lockdetail.textContent}"`);
+});
+T('INVARIANT 4 — no crop survives a detector exception', () => {
+  eq(D_.byId.rect.dataset.policy, A.RETAIN_NOTHING, 'a rectified crop survived a detector exception');
+});
+T('INVARIANT 7 — nothing is billed while the mat cannot be seen', () => {
+  const before = D_.byId.total.textContent;
+  dsock.onmessage({ data: JSON.stringify({ type: 'placement', itemId: 'd2', name: 'Rice', pricePaise: 9900, centreMm: [150, 300] }) });
+  eq(D_.byId.lines.children.length, 1, 'a line was added while the mat could not be seen');
+  eq(D_.byId.total.textContent, before, 'the total moved while the mat could not be seen');
+  ok(D_.byId.reason.textContent.includes(A.Reason.REFUSED_MAT_LOST), D_.byId.reason.textContent);
+});
+T('the frozen total is the snapshot taken when the detector failed', () => {
+  eq(D_.byId.total.textContent, '₹45.00');
+  ok(!D_.byId.chrome.className.includes('chrome-red'), 'a detector fault is never RED');
+});
+T('a recovered detector re-acquires the mat and resumes the open basket', () => {
+  D_.cv.aruco_ArucoDetector.prototype.detectMarkers = (gray, corners, ids) => {
+    corners.items = [0, 1, 2, 3].map((i) => ({ data32F: Float64Array.from(CVQ[i].flat()) }));
+    ids.rows = 4; ids.vals = [0, 1, 2, 3];
+  };
+  D_.pump(2);
+  eq(D_.byId.lock.textContent, 'MAT LOCK');
+  eq(D_.byId.chrome.dataset.state, A.State.BASKET_OPEN);
+  eq(D_.byId.rect.dataset.policy, A.RETAIN_RECTIFIED);
+  eq(D_.byId.total.textContent, '₹45.00');
+});
+T('a detector returning junk instead of a verdict also fails closed', () => {
+  D_.cv.aruco_ArucoDetector.prototype.detectMarkers = (gray, corners, ids) => {
+    // a wasm build that hands back a short corner buffer: NaN corners, no throw
+    corners.items = [0, 1, 2, 3].map(() => ({ data32F: Float64Array.from([1, 2]) }));
+    ids.rows = 4; ids.vals = [0, 1, 2, 3];
+  };
+  D_.pump(2);
+  eq(D_.byId.lock.textContent, 'NO LOCK', 'NaN corners were taken as a lock');
+  eq(D_.byId.rect.dataset.policy, A.RETAIN_NOTHING);
+  eq(D_.byId.chrome.dataset.state, A.State.MAT_LOST);
+});
+
 T('the shell created every element app.js reaches for', () => {
-  measured.shell_dom_nodes_created = A_.made.length + B_.made.length + C_.made.length;
+  measured.shell_dom_nodes_created = A_.made.length + B_.made.length + C_.made.length + D_.made.length;
   ok(measured.shell_dom_nodes_created > 40, 'the shells barely rendered');
 });
 
 // hand the process back its real timer so the run can exit cleanly
-globalThis.setTimeout = C_.realSetTimeout;
+globalThis.setTimeout = D_.realSetTimeout;
 
 
 // ============================================================== report =====

@@ -15,13 +15,20 @@ the number rather than merely going red.
 """
 from __future__ import annotations
 
+import ast
+import dataclasses
 import math
+import pathlib
+import re
+import sys
 import time
+from typing import Any, Callable
 
 import cv2
 import numpy as np
 import pytest
 
+import gawaah.mudra as _mudra_mod
 from gawaah.mudra import (
     COMPACTNESS_DISC_CEILING,
     DWELL_FRAMES,
@@ -194,6 +201,32 @@ def ref() -> np.ndarray:
 
 def fresh(ref: np.ndarray, **kw) -> OccluderGesture:
     return OccluderGesture(ref, **kw)
+
+
+def _traced(fn: Callable[[], Any]) -> tuple[set[int], Any]:
+    """Run `fn`, returning the set of mudra.py line numbers it executed.
+
+    Line tracing is how a reachability claim gets PROVED rather than asserted:
+    two different branches emit the same reason string, so collecting strings
+    alone cannot tell a live branch from a dead one.
+    """
+    target = _mudra_mod.__file__
+    hit: set[int] = set()
+
+    def tracer(frame, event, arg):
+        if frame.f_code.co_filename != target:
+            return None
+        if event == "line":
+            hit.add(frame.f_lineno)
+        return tracer
+
+    previous = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        out = fn()
+    finally:
+        sys.settrace(previous)
+    return hit, out
 
 
 # =================================================== INVARIANT 3: no weights
@@ -808,20 +841,403 @@ def test_states_tuple_is_exactly_the_contract():
     assert set(STATES) == {"NONE", "OPEN", "FIST", "GOODS", "AMBIGUOUS"}
 
 
-def test_every_reason_the_code_can_emit_is_published():
-    """Completeness, checked against the source rather than against a sweep:
-    an abstention reason that is not in REASONS cannot be aggregated by a
-    caller, which quietly turns a published abstention rate into a lie."""
-    import pathlib
-    import re
+# ======================================== THE REASONS CONTRACT (three halves)
+#
+# REASONS is the module's published abstention-cause vocabulary. A caller
+# aggregates abstention rate BY CAUSE from it, so the tuple has to be exactly
+# right in three independent senses, and each gets its own mechanism:
+#
+#   SOUNDNESS     no unpublished code can escape       -> GestureState.__post_init__
+#   COMPLETENESS  no source literal is missing from it -> _reason_emission_sites, below
+#   LIVENESS      no published code is unreachable     -> the traced sweep, below
+#
+# The completeness half used to be a regex, and a regex is not up to the job:
+# test_the_reason_enumerator_sees_what_a_regex_cannot MEASURES that the regex
+# missed 5 of 7 ways to smuggle an unpublished code past it.
 
-    src = (pathlib.Path(__file__).resolve().parent.parent / "gawaah" / "mudra.py").read_text()
-    # matches both `return "STATE", "reason"` and `raw, reason = "STATE", "reason"`
-    emitted = set(re.findall(r'"(?:%s)"\s*,\s*"([a-z_]+)"' % "|".join(STATES), src))
-    assert emitted, "regex found no reason literals; the check has rotted"
-    assert emitted <= set(REASONS), f"unpublished reason codes: {emitted - set(REASONS)}"
-    # and nothing is published that the code cannot produce
+
+MUDRA_SRC_PATH = pathlib.Path(__file__).resolve().parent.parent / "gawaah" / "mudra.py"
+
+# Identifiers that CARRY a reason. Anything flowing into one of these, or into
+# a `reason=` keyword, is a reason position and must be enumerable.
+REASON_CARRIERS = frozenset({"reason"})
+
+
+class NotEnumerable(AssertionError):
+    """A reason position holds an expression the walker cannot resolve to a
+    finite set of literals. That is a hard failure and NOT a pass: an
+    enumerator that shrugs at a case it does not understand is exactly the
+    weakness this whole section exists to remove."""
+
+
+def _reason_emission_sites(src: str) -> dict[str, set[int]]:
+    """AST-walk `src`; return {reason literal -> set of source line numbers}.
+
+    A *reason position* is defined structurally, so no formatting choice can
+    hide one:
+      (a) ``reason = <expr>``                       (plain assignment)
+      (b) ``<a>, reason = <expr>, <expr>``          (tuple unpacking)
+      (c) ``f(..., reason=<expr>)``                 (keyword argument)
+      (d) the 2nd element of any ``return`` from a function annotated
+          ``-> tuple[str, str]``                    (the classifier contract)
+
+    Every such expression is then resolved to literals through Constant,
+    IfExp, BoolOp, a Name previously bound in a reason position, and the
+    ``f"{reason}|suffix"`` telemetry form. ANYTHING ELSE RAISES.
+    """
+    tree = ast.parse(src)
+    bindings: dict[str, set[str]] = {n: set() for n in REASON_CARRIERS}
+    sites: dict[str, set[int]] = {}
+    positions: list[ast.expr] = []          # every reason-carrying expression
+    binds: list[tuple[str, ast.expr]] = []  # (carrier name, expression bound to it)
+    from_fn: list[tuple[str, str]] = []     # (carrier name, producer function)
+    fn_returns: dict[str, list[ast.expr]] = {}
+
+    def _is_reason_tuple_fn(fn: ast.FunctionDef) -> bool:
+        return (fn.returns is not None
+                and ast.unparse(fn.returns).replace(" ", "") == "tuple[str,str]")
+
+    def _callee_name(call: ast.Call) -> str | None:
+        f = call.func
+        if isinstance(f, ast.Attribute):
+            return f.attr
+        if isinstance(f, ast.Name):
+            return f.id
+        return None
+
+    # -- pass 0: which functions are declared (state, reason) producers? Their
+    # returns are enumerated by rule (d), so unpacking a CALL to one of them is
+    # legitimate rather than opaque -- but a call to anything else is not.
+    reason_tuple_fns = {n.name for n in ast.walk(tree)
+                        if isinstance(n, ast.FunctionDef) and _is_reason_tuple_fn(n)}
+
+    # A dataclass FIELD declaration (`reason: str = ""` in a class body) is a
+    # default, not an emission: it names the "no verdict yet" sentinel, and no
+    # runtime line ever executes it. Excluded here and checked separately, by
+    # test_every_reason_the_code_can_emit_is_published, so the exclusion cannot
+    # quietly grow into a hiding place for a real literal.
+    field_defaults = {id(stmt)
+                      for cd in ast.walk(tree) if isinstance(cd, ast.ClassDef)
+                      for stmt in cd.body if isinstance(stmt, ast.AnnAssign)}
+
+    # -- pass 1: locate every reason position, and note carrier-name bindings
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id in REASON_CARRIERS:
+                    positions.append(node.value)
+                    binds.append((tgt.id, node.value))
+                elif isinstance(tgt, ast.Tuple):
+                    for k, el in enumerate(tgt.elts):
+                        if not (isinstance(el, ast.Name) and el.id in REASON_CARRIERS):
+                            continue
+                        if isinstance(node.value, ast.Tuple):
+                            positions.append(node.value.elts[k])
+                            binds.append((el.id, node.value.elts[k]))
+                        elif (isinstance(node.value, ast.Call)
+                              and _callee_name(node.value) in reason_tuple_fns):
+                            # already enumerated at that function's returns
+                            from_fn.append((el.id, _callee_name(node.value)))
+                        else:
+                            raise NotEnumerable(
+                                f"line {node.lineno}: {el.id} unpacked from "
+                                f"{ast.unparse(node.value)!r}, which is neither a "
+                                f"literal tuple nor a call to a declared "
+                                f"-> tuple[str, str] producer")
+        elif isinstance(node, ast.AnnAssign) and id(node) not in field_defaults:
+            if (isinstance(node.target, ast.Name)
+                    and node.target.id in REASON_CARRIERS and node.value is not None):
+                positions.append(node.value)
+                binds.append((node.target.id, node.value))
+        elif isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg in REASON_CARRIERS:
+                    positions.append(kw.value)
+        elif isinstance(node, ast.FunctionDef) and _is_reason_tuple_fn(node):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Return):
+                    if sub.value is None:
+                        continue
+                    if not (isinstance(sub.value, ast.Tuple) and len(sub.value.elts) == 2):
+                        raise NotEnumerable(
+                            f"line {sub.lineno}: {node.name} is annotated "
+                            f"-> tuple[str, str] but returns "
+                            f"{ast.unparse(sub.value)!r}, which the enumerator "
+                            f"cannot decompose into (state, reason)")
+                    positions.append(sub.value.elts[1])
+                    fn_returns.setdefault(node.name, []).append(sub.value.elts[1])
+
+    def resolve(expr: ast.expr, depth: int = 0) -> set[str]:
+        if depth > 6:
+            raise NotEnumerable(f"line {expr.lineno}: reason expression nests too deep")
+        if isinstance(expr, ast.Constant):
+            if not isinstance(expr.value, str):
+                raise NotEnumerable(
+                    f"line {expr.lineno}: reason literal is {type(expr.value).__name__}")
+            sites.setdefault(expr.value, set()).add(expr.lineno)
+            return {expr.value}
+        if isinstance(expr, ast.IfExp):
+            return resolve(expr.body, depth + 1) | resolve(expr.orelse, depth + 1)
+        if isinstance(expr, ast.BoolOp):
+            out: set[str] = set()
+            for v in expr.values:
+                out |= resolve(v, depth + 1)
+            return out
+        if isinstance(expr, ast.Name):
+            if expr.id in REASON_CARRIERS and expr.id in bindings:
+                return set(bindings[expr.id])
+            raise NotEnumerable(
+                f"line {expr.lineno}: a reason position reads name {expr.id!r}, "
+                f"which the enumerator cannot resolve to literals. Emit the "
+                f"literal at the site or add {expr.id!r} to REASON_CARRIERS.")
+        if isinstance(expr, ast.JoinedStr):
+            # the telemetry form f"{reason}|dwell_..." -- the HEAD is the reason
+            if not expr.values or not isinstance(expr.values[0], ast.FormattedValue):
+                raise NotEnumerable(
+                    f"line {expr.lineno}: f-string in a reason position must "
+                    f"start with the reason itself")
+            head = resolve(expr.values[0].value, depth + 1)
+            tail = "".join(v.value for v in expr.values[1:]
+                           if isinstance(v, ast.Constant))
+            if not tail.startswith("|"):
+                raise NotEnumerable(
+                    f"line {expr.lineno}: f-string appends {tail!r} to a reason "
+                    f"without the '|' separator the head-split relies on")
+            return head
+        raise NotEnumerable(
+            f"line {getattr(expr, 'lineno', '?')}: reason position holds "
+            f"{ast.unparse(expr)!r} ({type(expr).__name__}), which cannot be "
+            f"enumerated. Completeness is not provable, so this is a failure.")
+
+    if not positions:
+        raise NotEnumerable("no reason positions found at all; the walk has rotted")
+
+    # -- pass 2a: seed the carrier bindings from the literals assigned to them.
+    # Failures are tolerated HERE only (a carrier may be assigned from another
+    # carrier that is not bound yet); pass 2b is the authoritative one and
+    # tolerates nothing. Iterated to a fixed point, bounded by the bind count.
+    for _ in range(len(binds) + len(from_fn) + 1):
+        before = {k: set(v) for k, v in bindings.items()}
+        for name, expr in binds:
+            try:
+                bindings[name] |= resolve(expr)
+            except NotEnumerable:
+                continue
+        for name, fname in from_fn:
+            for expr in fn_returns.get(fname, ()):
+                try:
+                    bindings[name] |= resolve(expr)
+                except NotEnumerable:
+                    continue
+        if bindings == before:
+            break
+
+    # -- pass 2b: the authoritative sweep. Every reason position must resolve.
+    sites = {}
+    for p in positions:
+        resolve(p)
+    return sites
+
+
+def test_every_reason_the_code_can_emit_is_published():
+    """COMPLETENESS, enumerated from the AST rather than sniffed with a regex.
+
+    Every literal that can reach a reason position is collected, and the
+    published tuple must equal that set exactly. An unpublished code cannot be
+    aggregated by a caller (which quietly turns a published abstention rate
+    into a lie); a published code the source cannot emit is a dead entry that
+    makes the vocabulary look richer than it is.
+    """
+    sites = _reason_emission_sites(MUDRA_SRC_PATH.read_text())
+    emitted = set(sites)
+    print(f"\nAST-enumerated reason emission sites in mudra.py "
+          f"({len(emitted)} codes, {sum(len(v) for v in sites.values())} sites):")
+    for r in sorted(sites):
+        print(f"  {r:<36} line(s) {sorted(sites[r])}")
+
+    # The one literal the walk deliberately skips is the dataclass field
+    # default. Pin that it really is the empty sentinel, so the exclusion can
+    # never become a hiding place for a real code.
+    fields = {f.name: f for f in dataclasses.fields(GestureState)}
+    assert fields["reason"].default == "", (
+        f"the reason field default is {fields['reason'].default!r}, not the "
+        f"empty sentinel the enumerator excludes"
+    )
+
+    assert emitted, "the walk found no reason literals; the check has rotted"
+    assert emitted - set(REASONS) == set(), (
+        f"unpublished reason codes reachable from the source: {emitted - set(REASONS)}"
+    )
     assert set(REASONS) - emitted == set(), f"dead reason codes: {set(REASONS) - emitted}"
+
+
+def test_the_reason_enumerator_sees_what_a_regex_cannot():
+    """NON-VACUITY, and the record of the defect this replaced.
+
+    The previous completeness test was a regex for `"STATE", "reason"`. Seven
+    ordinary ways of adding a branch are injected here; the regex is run
+    exactly as it was written, and the AST walker is run beside it. The regex's
+    miss count is MEASURED and printed rather than asserted from memory.
+    """
+    src = MUDRA_SRC_PATH.read_text()
+    anchor = '        return "AMBIGUOUS", "solidity_dead_band"'
+    assert anchor in src, "the injection anchor moved; re-point this test"
+
+    def old_regex(text: str) -> set[str]:
+        # verbatim, as it stood in this file before the fix
+        return set(re.findall(r'"(?:%s)"\s*,\s*"([a-z_]+)"' % "|".join(STATES), text))
+
+    mutants = {
+        "plain literal pair":
+            '        return "AMBIGUOUS", "smuggled_plain"',
+        "bare assignment, no state literal adjacent":
+            '        reason = "smuggled_bare"\n        return "AMBIGUOUS", reason',
+        "state held in a variable":
+            '        st = "AMBIGUOUS"\n        return st, "smuggled_var"',
+        "conditional expression":
+            '        return "AMBIGUOUS", ("smuggled_a" if m.defects else "smuggled_b")',
+        "single-quoted literal":
+            "        return 'AMBIGUOUS', 'smuggled_quote'",
+        "wrapped across lines":
+            '        return (\n            "AMBIGUOUS",\n            "smuggled_wrapped",\n        )',
+        "reason keyword on a GestureState built inline":
+            '        _ = GestureState("AMBIGUOUS", 0.0, 0, 0.0, 0.0,\n'
+            '                         reason="smuggled_kwarg")',
+    }
+
+    regex_missed, walker_missed = [], []
+    for name, patch in mutants.items():
+        # ADD a branch rather than replace one, so all twelve published codes
+        # are still emitted and only the smuggled one is new -- the realistic
+        # shape of the mistake.
+        mutant = src.replace(anchor, patch + "\n" + anchor, 1)
+        smuggled = {s for s in re.findall(r"smuggled_[a-z_]+", patch)}
+        assert smuggled, name
+
+        if not (smuggled <= old_regex(mutant)):
+            regex_missed.append(name)
+        if not (smuggled <= set(_reason_emission_sites(mutant))):
+            walker_missed.append(name)
+
+    print(f"\nsmuggling routes past the completeness check ({len(mutants)} tried):")
+    print(f"  the old regex missed  {len(regex_missed)}: {regex_missed}")
+    print(f"  the AST walker missed {len(walker_missed)}: {walker_missed}")
+
+    assert len(regex_missed) >= 5, (
+        "the regex it replaced was supposed to be demonstrably weak; if it is "
+        "not, this test is theatre and the replacement needs re-justifying"
+    )
+    assert walker_missed == [], (
+        f"the AST walker also missed a smuggled reason code: {walker_missed}"
+    )
+
+
+def test_the_reason_enumerator_refuses_to_guess():
+    """The walker must FAIL, not shrug, when a reason position holds something
+    it cannot enumerate. A completeness check that silently skips the case it
+    does not understand is precisely the weakness being removed."""
+    src = MUDRA_SRC_PATH.read_text()
+    anchor = '        return "AMBIGUOUS", "solidity_dead_band"'
+
+    for patch in (
+        '        return "AMBIGUOUS", _SOME_MODULE_CONSTANT',
+        '        return "AMBIGUOUS", "prefix_" + m.reason_suffix',
+        '        return "AMBIGUOUS", REASONS[3]',
+        '        return "AMBIGUOUS", f"{m.solidity}_dead"',
+    ):
+        mutant = src.replace(anchor, patch + "\n" + anchor, 1)
+        with pytest.raises(NotEnumerable):
+            _reason_emission_sites(mutant)
+
+
+def test_every_published_reason_is_reachable_at_its_own_source_line():
+    """LIVENESS. Every emission SITE the AST found is driven by a real frame,
+    and mudra.py is line-traced to prove the site actually executed.
+
+    Reason-string coverage alone is not enough: `hand_area_implausible` is
+    emitted from two different branches, and a sweep that only collects strings
+    would call the pair covered while one of them was dead code.
+    """
+    sites = _reason_emission_sites(MUDRA_SRC_PATH.read_text())
+    want_lines = {ln for lns in sites.values() for ln in lns}
+
+    ref_frame = empty_mat()
+    small_fist = m_crescent(r_mm=30.0, offset_frac=0.80)     # ~2000 mm2: not hand-sized
+    forearm = blank_mask()
+    cv2.line(forearm, (int(30 * PX_PER_MM_X), int(CY_MM * PX_PER_MM_Y)),
+             (int(270 * PX_PER_MM_X), int(CY_MM * PX_PER_MM_Y)),
+             255, int(22 * PX_PER_MM_ISO))
+    merged = cv2.bitwise_or(m_open_palm(), m_goods(w_mm=180.0, h_mm=120.0))
+
+    # (label, engine kwargs, frame, expected reason head)
+    sweep = [
+        ("empty mat", {}, occlude(ref_frame, blank_mask()), "no_occluder"),
+        ("whole mat changed", {}, np.full((BUF_H, BUF_W), 40, np.uint8),
+         "occluder_too_large"),
+        ("fist", {}, occlude(ref_frame, m_fist()), "closed_hand"),
+        ("open palm", {}, occlude(ref_frame, m_open_palm()), "open_palm"),
+        ("goods", {}, occlude(ref_frame, m_goods()), "inert_object"),
+        ("fist, articulation armed at 1", {"min_defects_open": 1},
+         occlude(ref_frame, m_fist()), "low_solidity_but_articulated"),
+        ("half-closed hand", {}, occlude(ref_frame, m_crescent(offset_frac=1.10)),
+         "mid_solidity_too_few_defects"),
+        ("open palm, compactness ceiling dropped", {"open_compactness_max": 0.05},
+         occlude(ref_frame, m_open_palm()), "mid_solidity_outline_too_compact"),
+        ("notched blob at goods solidity", {"min_defects_open": 1},
+         occlude(ref_frame, m_crescent(offset_frac=1.55)),
+         "goods_solidity_but_articulated"),
+        ("bare forearm", {}, occlude(ref_frame, forearm),
+         "goods_solidity_but_elongated"),
+        ("hand merged with goods", {}, occlude(ref_frame, merged),
+         "hand_area_implausible"),
+        ("under-sized closed blob", {}, occlude(ref_frame, small_fist),
+         "hand_area_implausible"),
+        ("calibrated dead band", {"open_solidity": (0.86, 0.95),
+                                  "fist_solidity_max": 0.70},
+         occlude(ref_frame, m_crescent(offset_frac=0.95)), "solidity_dead_band"),
+    ]
+
+    hit_lines: set[int] = set()
+    seen_reasons: set[str] = set()
+    rows = []
+    for label, kw, frame, expect in sweep:
+        eng = OccluderGesture(ref_frame, **kw)
+        lines, st = _traced(lambda: eng.update(frame))
+        head = st.reason.split("|")[0]
+        hit_lines |= lines
+        seen_reasons.add(head)
+        rows.append((label, head, expect, st.raw_state))
+        assert head == expect, (
+            f"{label}: expected reason {expect!r}, got {head!r} "
+            f"(raw={st.raw_state} sol={st.solidity:.4f} def={st.defects} "
+            f"comp={st.compactness:.4f} area={st.area_mm2:.0f})"
+        )
+
+    print("\nreachability sweep (every published reason, driven by a real frame):")
+    for label, head, expect, raw in rows:
+        print(f"  {label:<38} -> {head:<34} raw={raw}")
+
+    assert seen_reasons == set(REASONS), (
+        f"unreached published reasons: {set(REASONS) - seen_reasons}"
+    )
+    unreached = want_lines - hit_lines
+    assert not unreached, (
+        f"emission sites at lines {sorted(unreached)} were never executed; "
+        f"they are dead code or the sweep is missing a case"
+    )
+
+
+def test_no_unpublished_reason_can_escape_at_runtime():
+    """SOUNDNESS. Even if a future branch emitted an unpublished code, the
+    record refuses to be constructed, so it can never reach a caller's
+    abstention-rate aggregation."""
+    with pytest.raises(MudraError, match="not published in REASONS"):
+        GestureState("AMBIGUOUS", 0.9, 1, 0.5, 100.0, reason="totally_made_up")
+    # the dwell telemetry suffix is still accepted, head-first
+    ok = GestureState("OPEN", 0.9, 3, 0.5, 100.0, reason="open_palm|dwell_2/4")
+    assert ok.reason.startswith("open_palm")
+    # and an empty reason (the dataclass default) stays legal
+    assert GestureState("NONE", 0.0, 0, 0.0, 0.0).reason == ""
 
 
 def test_no_reason_string_is_ever_empty(ref):
@@ -868,9 +1284,85 @@ def test_update_many_matches_a_manual_loop(ref):
 
 
 def test_shape_metrics_is_immutable():
+    """Narrowed from `pytest.raises(Exception)`, which passed on ANY exception.
+
+    A bare Exception makes the assertion unfalsifiable by the failure mode it
+    is meant to catch: NameError, AttributeError and TypeError are all
+    Exceptions, so a typo anywhere inside the `with` block satisfied it while
+    the object under test was never touched.
+    test_the_immutability_test_is_not_vacuous measures that directly.
+    """
     m = ShapeMetrics(0.9, 3, 0.5, 100.0, False)
-    with pytest.raises(Exception):
+    assert dataclasses.is_dataclass(m) and m.__dataclass_params__.frozen
+    with pytest.raises(dataclasses.FrozenInstanceError):
         m.solidity = 0.1        # type: ignore[misc]
+    assert m.solidity == 0.9, "the write landed despite the exception"
+
+    # the audit record is the one that actually reaches the ledger
+    st = GestureState("OPEN", 0.9, 3, 0.5, 100.0, reason="open_palm")
+    assert st.__dataclass_params__.frozen
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        st.state = "GOODS"      # type: ignore[misc]
+    assert st.state == "OPEN"
+
+
+def test_the_immutability_test_is_not_vacuous():
+    """Measures how much the narrowed exception type actually buys.
+
+    Four ways the immutability check could go wrong are exercised against both
+    the OLD predicate (`Exception`) and the NEW one (`FrozenInstanceError`).
+    Anything the old predicate accepts is a way the original test could have
+    stayed green while proving nothing.
+    """
+    m = ShapeMetrics(0.9, 3, 0.5, 100.0, False)
+    mutable = dataclasses.make_dataclass(
+        "MutableMetrics",
+        [("solidity", float), ("defects", int), ("compactness", float),
+         ("area_mm2", float), ("border_touching", bool)])(0.9, 3, 0.5, 100.0, False)
+
+    def typo_object_name():
+        mm.solidity = 0.1                    # noqa: F821 -- NameError, deliberate
+
+    def typo_attribute_read():
+        return m.soliditee                   # AttributeError, deliberate
+
+    def wrong_arity_call():
+        return ShapeMetrics(0.9)             # TypeError, deliberate
+
+    def the_real_check():
+        mutable.solidity = 0.1               # a MUTABLE record: must be caught
+
+    rows = []
+    for name, fn in (("typo in the object name", typo_object_name),
+                     ("typo in the attribute name", typo_attribute_read),
+                     ("wrong constructor arity", wrong_arity_call),
+                     ("the record is genuinely mutable", the_real_check)):
+        old = new = False
+        try:
+            fn()
+        except dataclasses.FrozenInstanceError:
+            old = new = True
+        except Exception:
+            old = True
+        rows.append((name, old, new))
+
+    print("\nwhat each predicate accepts as 'ShapeMetrics is immutable':")
+    for name, old, new in rows:
+        print(f"  {name:<36} raises(Exception)={'PASS' if old else 'fail':<5}"
+              f"  raises(FrozenInstanceError)={'PASS' if new else 'fail'}")
+
+    bogus = [r for r in rows[:3] if r[1]]
+    assert len(bogus) == 3, (
+        "the bare-Exception predicate was supposed to be satisfiable by three "
+        f"kinds of typo; it accepted {len(bogus)}"
+    )
+    assert not any(r[2] for r in rows[:3]), (
+        "the narrowed predicate is still satisfiable by a typo, so it has not "
+        "actually fixed anything"
+    )
+    # and the case that matters is caught by NEITHER predicate when the record
+    # is mutable -- which is what makes the test able to fail at all
+    assert rows[3] == ("the record is genuinely mutable", False, False)
 
 
 def test_min_defect_depth_default_is_below_a_finger_gap(ref):

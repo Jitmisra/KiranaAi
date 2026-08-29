@@ -15,8 +15,10 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 
 from gawaah.sellevent import (
     DEAD_BAND_MM, REASON_NEVER_COUNTED, REASON_NO_TRACKER_ID,
+    REASON_REID_AMBIGUOUS, REASON_REID_GAP_EXCEEDED, REID_REASONS,
     SIDE_IN, SIDE_ON_LINE, SIDE_OUT,
-    CentroidTracker, CrossingResult, LineZone, UncountedCrossing,
+    AbstainedCentroid, CentroidTracker, CrossingResult, LineZone,
+    UncountedCrossing,
 )
 
 LINE_Y = 400.0
@@ -419,6 +421,394 @@ def test_tracker_input_validation():
         CentroidTracker(max_dist_mm=0.0)
 
 
+# ------------------------------------- RE-IDENTIFICATION: the abstention that
+# ------------------------------------- was missing (invariant 7)
+#
+# Association across a DETECTION GAP is not the same problem as association
+# between two consecutive frames. Frame to frame there is continuity evidence:
+# the object was there 60 ms ago and objects on a mat do not teleport. Across a
+# blackout there is no evidence at all — only a blob that turned up somewhere
+# near where a different blob used to be. Re-using the old id there is a guess,
+# and it is a guess in the two directions that both cost money:
+#
+#   * it can MANUFACTURE a crossing, by splicing a post-gap OUT observation
+#     onto a pre-gap IN history and letting the debounce commit a sale nobody
+#     ever watched happen; and
+#   * it can MASK a second item, by feeding a genuinely new object into an old
+#     track so that the old track's disappearance is never reported and the new
+#     object is never counted.
+#
+# Both must abstain with a name.
+
+
+def test_reid_after_a_long_gap_does_not_silently_bind():
+    """A track unseen for longer than the confidence window may not be re-bound
+    to a blob that merely turns up nearby."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=4,
+                         reid_max_gap_frames=1)
+    tr.update([(150.0, 380.0)])                 # id 1
+    tr.update([])                               # gap 1
+    tr.update([])                               # gap 2 — past the window
+    u = tr.update([(150.0, 412.0)])             # 32 mm away, inside the gate
+
+    assert 1 not in u.tracks, "a 2-frame blackout is not evidence of identity"
+    assert u.tracks == {}
+    assert u.new_ids == (), "nor may it be renamed: that is the opposite guess"
+    assert u.untracked == ((150.0, 412.0),)
+
+
+def test_reid_with_two_candidates_in_the_gate_does_not_silently_bind():
+    """Nearest-neighbour is not a tie-break when the evidence is missing: with
+    two coasting tracks inside the gate, the nearer one is a guess, not a fact.
+    Note the margin here is 25 mm — fifty times `ambiguity_mm`, so the ordinary
+    tie rule does not fire and the old code binds happily."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=4,
+                         reid_max_gap_frames=2, ambiguity_mm=0.5)
+    tr.update([(100.0, 400.0), (135.0, 400.0)])   # ids 1, 2
+    tr.update([])                                  # both coast, gap 1
+    u = tr.update([(110.0, 400.0)])                # 10 mm from 1, 25 mm from 2
+
+    assert u.tracks == {}, "two candidates in the gate is a coin flip"
+    assert u.new_ids == ()
+    assert u.untracked == ((110.0, 400.0),)
+
+
+def test_MONEY_silent_reid_manufactures_a_crossing_never_observed():
+    """THE MONEY BUG. An item sits on the shopkeeper's side and is then hidden
+    by the hand. Three frames later a blob — a different item, the hand's own
+    contour, anything — appears past the line where the first one used to be.
+    Splicing the two together hands the debounce a complete IN->OUT history and
+    charges the customer for a crossing no camera ever saw.
+    """
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    z = zone(min_crossing_frames=3, evict_after_frames=tr.max_missing_frames + 1)
+
+    def step(cs):
+        u = tr.update(cs)
+        return z.update(u.tracks, untracked=u.untracked, lost=u.lost)
+
+    for _ in range(4):
+        step([(150.0, 380.0)])        # id 1, held on the shopkeeper's side
+    for _ in range(3):
+        step([])                      # occluded: no detection at all
+    for _ in range(3):
+        res = step([(150.0, 412.0)])  # something reappears past the line
+
+    assert z.out_count == 0, (
+        "a crossing spliced across a 3-frame blackout is a manufactured sale")
+    assert z.net_count == 0
+    assert z.amber, "and the refusal must be visible, not silent"
+    assert res.total_is_trustworthy is False
+
+
+def test_MONEY_silent_reid_masks_a_genuine_second_item():
+    """The other direction. Item 1 is lifted off the mat entirely; item 2 is
+    put down nearby a few frames later. Re-using id 1 means item 1's departure
+    is never judged and item 2 inherits a history it never earned."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    tr.update([(120.0, 300.0)])
+    tr.update([(120.0, 300.0)])
+    for _ in range(3):
+        tr.update([])                       # item 1 taken away
+    u = tr.update([(148.0, 300.0)])          # item 2 placed 28 mm away
+
+    assert u.tracks == {}, "item 2 is not item 1 just because it is close"
+    assert u.untracked == ((148.0, 300.0),)
+
+
+def test_the_refused_reid_is_NAMED_not_merely_dropped():
+    """An abstention with no name is indistinguishable from a bug. The gap
+    refusal must arrive as a reason code, the candidates it declined to pick
+    between, and the size of the gap that disqualified it."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=4,
+                         reid_max_gap_frames=1)
+    tr.update([(150.0, 380.0)])
+    tr.update([])
+    tr.update([])
+    u = tr.update([(150.0, 412.0)])
+
+    (a,) = u.untracked
+    assert a.code == REASON_REID_GAP_EXCEEDED
+    assert a.candidate_ids == (1,)
+    assert a.gap_frames == 2
+    assert a.is_reid
+    assert "confidence window" in a.detail
+    assert u.reid_abstentions == (a,)
+    assert tr.reid_abstentions == 1
+    assert tr.abstentions == 1
+
+
+def test_the_ambiguous_reid_names_every_candidate_it_declined():
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=4,
+                         reid_max_gap_frames=2, ambiguity_mm=0.5)
+    tr.update([(100.0, 400.0), (135.0, 400.0)])
+    tr.update([])
+    u = tr.update([(110.0, 400.0)])
+
+    (a,) = u.untracked
+    assert a.code == REASON_REID_AMBIGUOUS
+    assert a.candidate_ids == (1, 2), "both, not just the nearer one"
+    assert a.gap_frames == 1
+    assert tr.reid_abstentions == 1
+
+
+def test_an_abstained_centroid_is_still_an_ordinary_point():
+    """The reason rides ON the coordinate, so no caller has to know it exists.
+    If this ever stops being true, every existing consumer silently loses the
+    centroid, which is a worse bug than the one being fixed."""
+    a = AbstainedCentroid((12.5, 34.0), code=REASON_REID_AMBIGUOUS,
+                          detail="d", candidate_ids=[3, 1], gap_frames=2)
+    assert a == (12.5, 34.0)
+    assert tuple(a) == (12.5, 34.0)
+    assert len(a) == 2
+    x, y = a
+    assert (x, y) == (12.5, 34.0)
+    assert hash(a) == hash((12.5, 34.0))
+    assert {a} == {(12.5, 34.0)}
+    assert (a.x_mm, a.y_mm) == (12.5, 34.0)
+    assert a.candidate_ids == (3, 1)
+    # and it validates like any other point
+    with pytest.raises(ValueError):
+        AbstainedCentroid((1.0, float("inf")), code="x", detail="d")
+
+
+def test_a_refused_reid_becomes_an_amber_exception_row():
+    """INVARIANT 7, end to end: the refusal is routed to the SAME exception
+    surface an uncounted crossing uses, under its own name, and the total stops
+    being trustworthy."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    z = zone(min_crossing_frames=3, evict_after_frames=tr.max_missing_frames + 1)
+
+    tr.update([(150.0, 380.0)])
+    tr.update([])
+    tr.update([])
+    u = tr.update([(150.0, 412.0)])
+    res = z.update(u.tracks, untracked=u.untracked, lost=u.lost)
+
+    (exc,) = res.exceptions
+    assert exc.code == REASON_REID_GAP_EXCEEDED
+    assert exc.track_id is None, "naming one would imply we bound it"
+    assert exc.candidate_ids == (1,)
+    assert exc.signed_dist_mm == pytest.approx(12.0)
+    assert "confidence window" in exc.detail
+    assert "candidates 1" in str(exc)
+    assert res.amber and not res.total_is_trustworthy
+    assert z.out_count == 0
+
+
+def test_reid_abstained_is_a_subset_of_the_anonymous_crossing_count():
+    """Two counters that could disagree about the same event are two chances to
+    publish a wrong number. `reid_abstained` is a BREAKDOWN, never an addition."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    z = zone(min_crossing_frames=3)
+
+    tr.update([(150.0, 380.0)])
+    tr.update([])
+    tr.update([])
+    for _ in range(3):
+        u = tr.update([(150.0, 412.0)])
+        res = z.update(u.tracks, untracked=u.untracked, lost=u.lost)
+
+    assert z.reid_abstained == 3
+    assert z.crossed_without_tracker_id == 3
+    assert z.reid_abstained <= z.crossed_without_tracker_id
+    assert res.reid_abstained == 3
+    # a plain anonymous blob still lands in the generic bucket only
+    z.update({}, untracked=[(150.0, 415.0)])
+    assert z.reid_abstained == 3
+    assert z.crossed_without_tracker_id == 4
+
+
+def test_reid_max_gap_frames_zero_refuses_every_re_identification():
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=4,
+                         reid_max_gap_frames=0)
+    tr.update([(150.0, 300.0)])
+    tr.update([])
+    u = tr.update([(151.0, 301.0)])
+    assert u.tracks == {}
+    assert u.untracked[0].code == REASON_REID_GAP_EXCEEDED
+
+
+def test_reid_window_is_validated():
+    with pytest.raises(ValueError):
+        CentroidTracker(reid_max_gap_frames=-1)
+
+
+def test_a_stale_track_may_not_steal_a_live_tracks_detection():
+    """Order of judgement matters. A track that is still being seen every frame
+    must keep its id even when a stale track's last position happens to be
+    nearer to the new detection than its own."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    tr.update([(100.0, 100.0), (300.0, 300.0)])     # ids 1 (stale soon), 2
+    for _ in range(3):
+        tr.update([(300.0, 300.0)])                  # id 1 coasts, id 2 lives
+    u = tr.update([(300.0, 300.0), (99.0, 100.0)])
+
+    assert u.tracks == {2: (300.0, 300.0)}, "the live track keeps its id"
+    assert u.untracked[0].code == REASON_REID_GAP_EXCEEDED
+    assert u.new_ids == ()
+
+
+def test_a_reid_is_not_blocked_by_a_track_another_centroid_already_explains():
+    """Strictness must not become superstition. Track 2 is 39 mm from the
+    re-identified blob — inside the 40 mm gate, so nominally a rival — but track
+    2 is simultaneously being claimed by its own centroid 5 mm away. A rival
+    that is already accounted for is not an alternative explanation, and
+    refusing here would cost an id for no gain in honesty.
+
+    Continuation claims therefore settle FIRST, and only what is left over is
+    put to the strict re-identification test.
+    """
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=6,
+                         reid_max_gap_frames=1)
+    tr.update([(100.0, 100.0), (140.0, 100.0)])      # ids 1, 2
+    tr.update([(140.0, 100.0)])                       # id 1 blinks; id 2 lives
+    u = tr.update([(101.0, 100.0), (145.0, 100.0)])
+
+    assert u.tracks == {1: (101.0, 100.0), 2: (145.0, 100.0)}
+    assert u.untracked == ()
+    assert u.new_ids == ()
+    assert tr.reid_abstentions == 0
+
+
+def test_the_abstention_resolves_once_the_stale_track_is_retired():
+    """The refusal must be a WINDOW, not a deadlock: once the old track ages
+    out, the blob is an honest new object and gets a fresh id."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=3,
+                         reid_max_gap_frames=1)
+    tr.update([(150.0, 300.0)])
+    tr.update([])
+    tr.update([])                                    # gap 2
+
+    u = tr.update([(160.0, 300.0)])                  # gap 2: refused
+    assert u.tracks == {} and u.untracked and u.lost == ()
+
+    u = tr.update([(160.0, 300.0)])                  # gap 3 -> aged out here
+    assert u.tracks == {} and u.untracked
+    assert u.lost == (1,), "the stale track is retired, and reported"
+
+    u = tr.update([(160.0, 300.0)])                  # nothing left to confuse it
+    assert u.lost == ()
+    assert u.new_ids == (2,)
+    assert u.tracks == {2: (160.0, 300.0)}
+    assert u.untracked == ()
+    # the window cost exactly the frames the stale track was alive for
+    assert tr.reid_abstentions == 2
+
+
+def test_mat_dimensions_agree_with_takhti():
+    """The two floats `mat_exit_line` no longer imports cv2 to obtain must keep
+    agreeing with the module they were copied from."""
+    from gawaah import sellevent
+    from gawaah import takhti
+    assert sellevent.MAT_W_MM == takhti.MAT_W_MM
+    assert sellevent.MAT_H_MM == takhti.MAT_H_MM
+    z = LineZone.mat_exit_line()
+    assert z.p1 == (0.0, takhti.MAT_H_MM - 18.0)
+    assert z.p2 == (takhti.MAT_W_MM, takhti.MAT_H_MM - 18.0)
+
+
+def test_a_one_frame_blink_is_still_re_identified():
+    """The guard must not become a blanket refusal to track. One dropped frame
+    with a single uncontested candidate inside the gate is still an id."""
+    tr = CentroidTracker(max_dist_mm=40.0, max_missing_frames=3,
+                         reid_max_gap_frames=1)
+    tr.update([(150.0, 300.0)])
+    tr.update([])                            # one-frame detector blink
+    u = tr.update([(153.0, 306.0)])
+    assert u.tracks == {1: (153.0, 306.0)}
+    assert u.untracked == ()
+    assert u.new_ids == ()
+
+
+# ------------------------------------------- INVARIANT 5: no OpenCV server-side
+
+_BLOCK_TEMPLATE = """
+import sys
+
+BLOCKED = {blocked!r}
+
+
+class _Deny:
+    def find_spec(self, name, path=None, target=None):
+        if name.partition('.')[0] in BLOCKED:
+            raise ImportError("blocked by the invariant-5 test: " + name)
+        return None
+
+
+for _m in [m for m in sys.modules if m.partition('.')[0] in BLOCKED]:
+    del sys.modules[_m]
+sys.meta_path.insert(0, _Deny())
+
+for _b in BLOCKED:
+    try:
+        __import__(_b)
+    except ImportError:
+        pass
+    else:
+        raise SystemExit("blocker did not work: %s was importable" % _b)
+"""
+
+
+def _run_without(blocked, body: str):
+    """Run `body` in a fresh interpreter with `blocked` un-importable."""
+    import pathlib
+    import subprocess
+    import sys as _sys
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    src = _BLOCK_TEMPLATE.format(blocked=tuple(blocked)) + body
+    return subprocess.run([_sys.executable, "-c", src], cwd=str(root),
+                          capture_output=True, text=True, timeout=180)
+
+
+def test_INVARIANT5_crossing_predicate_runs_with_cv2_blocked():
+    """The predicate that decides money must run on a machine with no camera
+    stack. `mat_exit_line` used to reach for `gawaah.takhti`, which imports
+    cv2 at module scope, so the server-side re-run needed OpenCV installed."""
+    proc = _run_without(("cv2", "numpy"), """
+import sys
+from gawaah.sellevent import LineZone
+
+z = LineZone.mat_exit_line(min_crossing_frames=3)
+for y in [380.0] * 4 + [415.0] * 4:
+    z.update({1: (150.0, y)})
+assert z.out_count == 1, z.out_count
+assert "cv2" not in sys.modules
+assert "numpy" not in sys.modules
+assert "gawaah.takhti" not in sys.modules
+print("OK", z.out_count, z.net_count)
+""")
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert proc.stdout.strip().endswith("OK 1 1"), proc.stdout
+
+
+def test_INVARIANT5_paisa_replays_the_predicate_with_cv2_blocked():
+    """paisa is the server-side re-run. If it cannot import without OpenCV,
+    invariant 5 is decorative."""
+    proc = _run_without(("cv2",), """
+import sys
+from gawaah.paisa import Crossing, replay_crossings
+
+path = [(150.0, 380.0)] * 4 + [(150.0, 415.0)] * 4
+r = replay_crossings(
+    [Crossing(item_id="parle-g", track_id=1, path_mm=path, committed=True)],
+    min_crossing_frames=3,
+)
+assert r.committed == (1,), r
+assert r.uncounted == 0, r
+assert "cv2" not in sys.modules
+print("OK", r.committed, r.uncounted)
+""")
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert proc.stdout.strip().endswith("OK (1,) 0"), proc.stdout
+
+
 # ------------------------------------------------------- tracker + zone wired
 
 def test_ambiguous_centroid_past_the_line_becomes_a_loud_uncounted_sale():
@@ -571,6 +961,125 @@ def test_ACCEPTANCE_dropped_tracks_are_all_reported_never_swallowed():
     print(f"\ninjected dropouts            {injected}")
     print(f"detected_but_never_counted   {reported}")
     assert reported == injected
+
+
+def _occluded_handover(rng: random.Random, gap: int, window: int):
+    """One scripted occlusion: an item is held on the shopkeeper's side, the
+    hand covers it for `gap` frames, and a blob then appears past the line.
+
+    Nothing observed the transit. Whether that becomes a charge depends
+    entirely on whether re-identification is allowed to guess.
+    """
+    tr = CentroidTracker(max_dist_mm=45.0, max_missing_frames=8,
+                         reid_max_gap_frames=window)
+    z = zone(min_crossing_frames=3, evict_after_frames=tr.max_missing_frames + 1)
+    x = rng.uniform(40.0, 260.0)
+
+    def step(cs):
+        u = tr.update(cs)
+        z.update(u.tracks, untracked=u.untracked, lost=u.lost)
+
+    for _ in range(4):
+        step([(x, LINE_Y - 12.0)])
+    for _ in range(gap):
+        step([])
+    for _ in range(4):
+        step([(x, LINE_Y + 18.0)])
+    z.flush()
+    return z
+
+
+def test_ACCEPTANCE_MEASURED_reid_guard_prevents_manufactured_sales():
+    """The A/B that produces the published number. Same 40 scripted occlusions,
+    twice: once with the confidence window opened wide enough to permit the old
+    silent re-bind, once at the shipped default. Every sale the guard removes
+    is replaced by a NAMED amber row — none of them just disappear."""
+    n = 40
+    permissive = [_occluded_handover(random.Random(1000 + i), gap=3, window=99)
+                  for i in range(n)]
+    shipped = [_occluded_handover(random.Random(1000 + i), gap=3, window=1)
+               for i in range(n)]
+
+    manufactured = sum(z.out_count for z in permissive)
+    silent = sum(1 for z in permissive if z.out_count and not z.amber)
+    still_counted = sum(z.out_count for z in shipped)
+    named = sum(z.reid_abstained for z in shipped)
+    ambers = sum(1 for z in shipped if z.amber)
+    codes = {e.code for z in shipped for e in z.exceptions}
+
+    print(f"\nocclusion scenarios              {n}")
+    print(f"sales manufactured, window open  {manufactured} "
+          f"({silent} of them SILENT: no exception, green total)")
+    print(f"sales manufactured, window=1     {still_counted}")
+    print(f"named re-id abstentions          {named}")
+    print(f"sessions correctly amber         {ambers}/{n}")
+
+    assert manufactured == n, "precondition: the permissive path really guesses"
+    assert silent == n, "precondition: and it guesses without saying so"
+    assert still_counted == 0, "the guard must remove every manufactured sale"
+    assert named >= n, "and replace each with at least one named abstention"
+    assert ambers == n
+    assert codes <= REID_REASONS | {REASON_NO_TRACKER_ID, REASON_NEVER_COUNTED}
+    assert REASON_REID_GAP_EXCEEDED in codes
+
+
+def test_HONEST_LIMIT_a_genuine_occluded_crossing_is_refused_too():
+    """Pinned executably, because it is the price of the guard.
+
+    Nothing in the pixels distinguishes a real item crossing behind the hand
+    from a swap behind the hand. So a genuine sale that happens entirely inside
+    the occlusion is NOT counted either: it becomes an amber row for a human to
+    clear. The policy trades recall for never issuing a wrong charge, and
+    `reid_max_gap_frames` is the documented knob that trades it back — here the
+    same script counts once when the window is widened past the gap.
+    """
+    strict = _occluded_handover(random.Random(5), gap=2, window=1)
+    wide = _occluded_handover(random.Random(5), gap=2, window=3)
+
+    assert (strict.out_count, strict.amber) == (0, True)
+    assert strict.reid_abstained > 0
+    assert (wide.out_count, wide.amber) == (1, False)
+
+
+def test_ACCEPTANCE_the_reid_guard_costs_the_clean_path_nothing():
+    """The guard is only allowed to fire where the evidence is actually
+    missing. Re-run the 60-placement acceptance session with the tracker's
+    re-identification window at its shipped default and assert the recall and
+    the amber count are untouched."""
+    rng = random.Random(20260829)
+    sessions, per_session = 20, 3
+    counted = 0
+    ambers = 0
+    for _ in range(sessions):
+        z = _scripted_session(rng, per_session, noise_mm=1.0)
+        counted += z.out_count
+        ambers += int(z.amber)
+    placements = sessions * per_session
+    print(f"\nclean-path recall with the guard {counted}/{placements}")
+    print(f"amber sessions                   {ambers}/{sessions}")
+    assert counted == placements
+    assert ambers == 0
+
+
+def test_determinism_holds_through_the_abstention_path():
+    def go():
+        out = []
+        tr = CentroidTracker(max_dist_mm=45.0, max_missing_frames=6,
+                             reid_max_gap_frames=1)
+        z = zone(min_crossing_frames=3)
+        script = ([[(150.0, 380.0)]] * 4 + [[]] * 3
+                  + [[(150.0, 412.0), (170.0, 412.0)]] * 3)
+        for cs in script:
+            u = tr.update(cs)
+            r = z.update(u.tracks, untracked=u.untracked, lost=u.lost)
+            out.append((sorted(u.tracks), [(p.code, p.candidate_ids, p.gap_frames)
+                                           for p in u.untracked],
+                        r.net_count, r.reid_abstained,
+                        tuple(str(e) for e in r.exceptions)))
+        out.append(tuple(str(e) for e in z.flush().exceptions))
+        return out
+    a, b = go(), go()
+    assert a == b
 
 
 def test_MEASURED_update_latency():

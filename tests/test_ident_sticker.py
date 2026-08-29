@@ -26,11 +26,12 @@ from gawaah.clock import VirtualClock
 from gawaah.ident_sticker import (
     ABSTENTIONS, DIFF_THRESHOLD, GENUINE, MAX_BLIND_FRACTION, MIN_CROP_PX,
     MIN_ECC_CC, MIN_SHARPNESS_RATIO, MIN_VALID_FRACTION, OPEN_KERNEL,
-    R_ASPECT_MISMATCH, R_CROP_FEATURELESS, R_CROP_TOO_SMALL, R_CROP_UNREADABLE,
-    R_ECC_LOW_CORRELATION, R_ECC_NO_CONVERGENCE, R_FOCUS_MISMATCH,
-    R_INSUFFICIENT_OVERLAP, R_NOT_ENROLLED, R_OBSCURED, TAMPER_GATE, TAMPERED,
-    UNREGISTERABLE, StickerError, StickerRegistry, StickerVerdict,
-    _apply_warp, _as_gray, diff_ignited, flatfield, sharpness_of,
+    R_ASPECT_MISMATCH, R_COMPARED, R_CROP_FEATURELESS, R_CROP_TOO_SMALL,
+    R_CROP_UNREADABLE, R_ECC_LOW_CORRELATION, R_ECC_NO_CONVERGENCE,
+    R_FOCUS_MISMATCH, R_INSUFFICIENT_OVERLAP, R_NOT_ENROLLED, R_OBSCURED,
+    TAMPER_GATE, TAMPERED, UNREGISTERABLE, StickerError, StickerRegistry,
+    StickerVerdict, _apply_warp, _as_gray, diff_ignited, flatfield,
+    sharpness_of,
 )
 from gawaah.takhti import BUF_H, BUF_W, PlaneEngine, mm_to_buffer, render_takhti
 
@@ -169,6 +170,13 @@ FORBIDDEN_TOKENS = [
 ]
 
 
+def _words(ident: str) -> set[str]:
+    """snake_case and camelCase split into whole words, so `sqrt` does not read
+    as `qr` and `imencode` is judged as one word rather than as `encode`."""
+    return {w.lower() for w in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+",
+                                          ident)}
+
+
 def _executable_surface(path: Path) -> tuple[set[str], set[str], set[str]]:
     """Every identifier, string literal and imported name in a module, with
     docstrings and comments removed.
@@ -221,14 +229,8 @@ def test_SAFETY_module_contains_no_forgery_primitive():
     hits = [t for t in FORBIDDEN_TOKENS if t.lower() in surface]
     assert hits == [], f"forgery primitive in ident_sticker.py code: {hits}"
 
-    def words(ident: str) -> set[str]:
-        """snake_case and camelCase split into whole words, so `sqrt` does not
-        read as `qr`."""
-        return {w.lower() for w in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+",
-                                              ident)}
-
     for word in ("qr", "payload", "vpa", "upi", "zbar", "zxing"):
-        bad = sorted(i for i in idents if word in words(i))
+        bad = sorted(i for i in idents if word in _words(i))
         assert bad == [], f"{word!r} appears in executable identifiers: {bad}"
 
     # Three allowances, each a byte move on data the module already holds:
@@ -246,16 +248,190 @@ def test_SAFETY_module_contains_no_forgery_primitive():
                    for m in imports), imports
 
 
-def test_SAFETY_module_namespace_exposes_no_qr_capability():
-    """Runtime check, so a re-export through another module is caught too."""
-    import gawaah.ident_sticker as mod
-    bad = [n for n in dir(mod) if "qr" in n.lower() or "payload" in n.lower()]
-    assert bad == [], f"QR/payload capability exposed: {bad}"
-    assert not any(
-        isinstance(getattr(mod, n, None), type)
-        and "QR" in type(getattr(mod, n)).__name__
-        for n in dir(mod)
+# Everything gawaah/ident_sticker.py is permitted to reach for. An ALLOW-list is
+# the only form of this check that survives cv2: the same namespace that holds
+# GaussianBlur also holds QRCodeDetector and the whole QRCODE_ENCODER_* family,
+# so a deny-list of library names would let `cv2.QRCodeDetector()` straight
+# through. Adding an entry here is a deliberate act with a reviewer attached.
+ALLOWED_IMPORTS = frozenset({
+    "__future__", "annotations", "hashlib", "json", "dataclasses", "dataclass",
+    "pathlib", "Path", "typing", "Any", "cv2", "numpy", ".clock", "Clock",
+})
+
+ALLOWED_CV2 = frozenset({
+    "BORDER_CONSTANT", "BORDER_REPLICATE", "COLOR_BGR2GRAY", "COLOR_BGRA2GRAY",
+    "CV_32F", "GaussianBlur", "IMREAD_GRAYSCALE", "INTER_AREA", "INTER_LINEAR",
+    "INTER_NEAREST", "Laplacian", "MORPH_OPEN", "MORPH_RECT", "MOTION_EUCLIDEAN",
+    "TERM_CRITERIA_COUNT", "TERM_CRITERIA_EPS", "THRESH_BINARY",
+    "WARP_INVERSE_MAP", "absdiff", "bitwise_and", "bitwise_not", "boxFilter",
+    "cvtColor", "erode", "error", "findTransformECC", "getStructuringElement",
+    "imencode", "imread", "morphologyEx", "resize", "threshold", "warpAffine",
+})
+
+# Whole words that may not appear in any identifier the module defines or names.
+FORBIDDEN_WORDS = frozenset({
+    "qr", "qrcode", "zbar", "zxing", "segno", "pyzbar", "wechat", "barcode",
+    "aztec", "datamatrix", "solomon", "reedsolomon", "galois", "payload",
+    "vpa", "upi", "encoder", "decoder", "codeword", "bitstream",
+})
+
+# The only three byte-moves allowed. Nothing else in the module may encode or
+# decode anything -- in particular nothing may turn an image into a string.
+ALLOWED_CODECS = frozenset({"imencode", "encode", "JSONDecodeError"})
+
+QR_ORIGIN = re.compile(r"qr|zbar|zxing|segno|solomon|wechat|barcode", re.I)
+
+
+def qr_capability_hits(path: Path) -> list[str]:
+    """AST-walk one module and report every route a QR encoder or decoder could
+    have taken into it.
+
+    Four routes, because there are four:
+      * an import of a QR library, or of anything not on the allow-list at all
+      * a reference to a QR entry point of a library that is allowed (cv2)
+      * an identifier defined or used whose words name the capability
+      * any other encode/decode path beyond the three byte-moves the module needs
+
+    Prose is not consulted. The module's own docstring has to be able to say the
+    words "QR decoder" in order to state that there is not one; what must be
+    absent is the CAPABILITY, and capability lives in code.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    hits: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root not in ALLOWED_IMPORTS:
+                    hits.append(f"import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = "." * node.level + (node.module or "")
+            if module not in ALLOWED_IMPORTS:
+                hits.append(f"from {module} import ...")
+            for alias in node.names:
+                if alias.name not in ALLOWED_IMPORTS:
+                    hits.append(f"from {module} import {alias.name}")
+        elif isinstance(node, ast.Attribute):
+            if (isinstance(node.value, ast.Name) and node.value.id == "cv2"
+                    and node.attr not in ALLOWED_CV2):
+                hits.append(f"cv2.{node.attr}")
+
+    idents: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            idents.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            idents.add(node.attr)
+        elif isinstance(node, ast.arg):
+            idents.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            idents.add(node.name)
+        elif isinstance(node, ast.alias):
+            idents.add(node.asname or node.name.split(".")[-1])
+
+    for ident in sorted(idents):
+        if _words(ident) & FORBIDDEN_WORDS:
+            hits.append(f"identifier {ident}")
+        elif ident not in ALLOWED_CODECS and (
+                "encode" in ident.lower() or "decode" in ident.lower()):
+            hits.append(f"codec {ident}")
+    return sorted(set(hits))
+
+
+def qr_objects_in(namespace) -> list[str]:
+    """Runtime half: which names in a live module are bound to a QR capability.
+
+    This is what the AST cannot see -- a decoder aliased under an innocent name,
+    or re-exported through some other module -- so it compares OBJECT IDENTITY
+    against cv2's QR classes rather than trusting what the binding is called.
+    """
+    qr_types = tuple(
+        obj for obj in (getattr(cv2, n, None) for n in dir(cv2)
+                        if QR_ORIGIN.search(n))
+        if isinstance(obj, type)
     )
+    bad = []
+    for name in dir(namespace):
+        obj = getattr(namespace, name, None)
+        if any(obj is t for t in qr_types):
+            bad.append(f"{name} -> {getattr(obj, '__name__', obj)}")
+            continue
+        if isinstance(obj, type) and qr_types and issubclass(obj, qr_types):
+            bad.append(f"{name} subclasses a QR type")
+            continue
+        if isinstance(obj, qr_types) if qr_types else False:
+            bad.append(f"{name} is a QR instance")
+            continue
+        origin = getattr(obj, "__module__", None)
+        if isinstance(origin, str) and QR_ORIGIN.search(origin):
+            bad.append(f"{name} comes from {origin}")
+    return sorted(bad)
+
+
+def test_SAFETY_module_namespace_exposes_no_qr_capability():
+    """No QR encoder or decoder is imported, defined, referenced or bound.
+
+    Two halves, because either alone is escapable. The AST half reads the source
+    and refuses anything outside a short allow-list of imports and of cv2 entry
+    points -- cv2 ships QRCodeDetector next to GaussianBlur, so a deny-list
+    would not do. The runtime half compares object identity, which is what
+    catches `helper = cv2.QRCodeDetector`: an alias whose NAME says nothing.
+
+    test_SAFETY_the_no_qr_check_is_not_vacuous proves both halves bite.
+    """
+    import gawaah.ident_sticker as mod
+
+    hits = qr_capability_hits(MODULE_SRC)
+    assert hits == [], f"QR capability reachable from ident_sticker.py: {hits}"
+    assert qr_objects_in(mod) == [], qr_objects_in(mod)
+
+    # The allow-lists must stay allow-lists: if one silently grew to admit a QR
+    # entry point the walk above would pass while meaning nothing.
+    assert not any(QR_ORIGIN.search(n) for n in ALLOWED_CV2), ALLOWED_CV2
+    assert not any(QR_ORIGIN.search(n) for n in ALLOWED_IMPORTS), ALLOWED_IMPORTS
+    assert len(ALLOWED_IMPORTS) < 20 and len(ALLOWED_CV2) < 50
+
+
+def test_SAFETY_the_no_qr_check_is_not_vacuous(tmp_path: Path, monkeypatch):
+    """The guard above, checked against six ways someone could add the thing.
+
+    A safety assertion nobody has ever seen fail is a decoration. Each mutant is
+    written to a temporary file and PARSED -- never imported, never executed --
+    and each must be caught. The last one is the case the previous version of
+    this test missed for real: it asserted `"QR" in type(x).__name__`, which is
+    "type" for every class there is, so it passed with a working QR decoder
+    sitting in the module namespace.
+    """
+    source = MODULE_SRC.read_text(encoding="utf-8")
+    mutants = {
+        "a QR library import": "import pyzbar\n",
+        "a decoder pulled off a QR library": "from pyzbar.pyzbar import decode\n",
+        "cv2's own detector": "def _read(img):\n    return cv2.QRCodeDetector()\n",
+        "cv2's own encoder": "def _write(s):\n    return cv2.QRCodeEncoder_create()\n",
+        "a payload builder": "def _build_payload(vpa, amount):\n    return ''\n",
+        "an innocently named alias": "_helper = cv2.QRCodeDetector\n",
+    }
+    for label, extra in mutants.items():
+        p = tmp_path / f"mutant_{abs(hash(label))}.py"
+        p.write_text(source + "\n\n" + extra, encoding="utf-8")
+        hits = qr_capability_hits(p)
+        assert hits, f"the AST check missed {label}: {extra!r}"
+        print(f"  caught {label}: {hits}")
+
+    # and the runtime half catches the alias the old assertion could not see
+    import gawaah.ident_sticker as mod
+    assert qr_objects_in(mod) == []
+    monkeypatch.setattr(mod, "_helper", cv2.QRCodeDetector, raising=False)
+    smuggled = qr_objects_in(mod)
+    assert smuggled, (
+        "a working cv2.QRCodeDetector bound under an innocent name went "
+        "unnoticed; the runtime half of the guard is decoration"
+    )
+    print(f"  caught the runtime alias: {smuggled}")
+    monkeypatch.undo()
+    assert qr_objects_in(mod) == []
 
 
 def test_SAFETY_fixtures_are_random_grids_not_codes():
@@ -818,17 +994,59 @@ def test_every_abstention_reason_is_a_named_code(enrolled):
 
 
 def test_verdict_is_only_ever_one_of_three_words(enrolled):
+    """Three words, and the scalar that goes with each of them.
+
+    The verdict and `ignited_fraction` are ONE statement, not two that happen to
+    agree: an abstention publishes no number, a comparison publishes one, and
+    which side of TAMPER_GATE it lands on is the whole verdict. Asserted over
+    every outcome this file can produce -- including the abstentions, which the
+    three probes below do not reach -- because a verdict that disagreed with its
+    own scalar is what a downstream stage would price on.
+    """
     reg, ideal, name = enrolled
     seen = set()
     sub, _ = substitute_patch(ideal, 0.20, seed=3)
+    outcomes = []
     for probe, who in ((photograph(ideal, seed=9), name),
                        (photograph(sub, seed=9), name),
                        (photograph(ideal, seed=9), "sticker:absent")):
         v = reg.compare(who, probe)
         seen.add(v.verdict)
+        outcomes.append(v)
         assert isinstance(v, StickerVerdict)
     assert seen == {GENUINE, TAMPERED, UNREGISTERABLE}
-    assert seen <= {GENUINE, TAMPERED, UNREGISTERABLE}
+
+    # every abstention path this module has, so the coupling is checked on the
+    # UNREGISTERABLE side too and not only on the two that publish a number
+    ref_shape = reg.reference(name).shape
+    outcomes += [
+        reg.compare(name, np.full(ref_shape, 128, np.uint8)),   # featureless
+        reg.compare(name, np.zeros((10, 10), np.uint8)),        # too small
+        reg.compare(name, photograph(ideal, blur=4.0, seed=1)),  # defocused
+        reg.compare(name, photograph(ideal, dx=50, dy=50, seed=5)),  # unalignable
+        reg.compare(name, "not an image"),                      # unreadable
+    ]
+
+    for v in outcomes:
+        abstained = v.verdict == UNREGISTERABLE
+        assert v.abstained is abstained, v
+        assert (v.ignited_fraction is None) is abstained, (
+            f"{v.verdict}/{v.reason} published ignited_fraction="
+            f"{v.ignited_fraction!r}"
+        )
+        assert (v.reason in ABSTENTIONS) is abstained, v
+        assert (v.reason == R_COMPARED) is not abstained, v
+        assert v.evidence()["verdict"] == v.verdict
+        assert v.evidence()["ignited_fraction"] == (
+            None if v.ignited_fraction is None
+            else round(v.ignited_fraction, 6))
+        if not abstained:
+            assert v.registered is True
+            assert 0.0 <= v.ignited_fraction <= 1.0, v.ignited_fraction
+            # TAMPER_GATE is the ONLY thing separating the two published
+            # verdicts, and it separates them in this direction
+            assert (v.verdict == TAMPERED) is (v.ignited_fraction >= TAMPER_GATE), v
+    assert sum(v.abstained for v in outcomes) == 6
 
 
 def test_evidence_is_json_serialisable_for_the_ledger(enrolled):

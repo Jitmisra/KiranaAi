@@ -26,7 +26,11 @@ from fastapi.testclient import TestClient
 from gawaah.clock import VirtualClock
 from gawaah.kernel import CALLING, NEW, SETTLED, Kernel
 from gawaah.ledger import Ledger, verify
+from gawaah.money import MoneyError
 from gawaah.paisa import (
+    PII_DROPPED_KEY,
+    PII_FIELDS,
+    REFUSAL_CODES,
     DictPriceBook,
     IntentRequest,
     PaisaConfig,
@@ -38,8 +42,16 @@ from gawaah.paisa import (
     expected_marker_points,
     replay_crossings,
     rerun_geometry,
+    strip_pii,
 )
-from gawaah.rzp_sim import RazorpaySim
+from gawaah.rzp_sim import (
+    SIM_CONTACT,
+    SIM_EMAIL,
+    SIM_VPA,
+    RazorpaySim,
+    serialize_body,
+    sign_body,
+)
 from gawaah.takhti import PlaneEngine, marker_centres_mm, mm_to_buffer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -892,3 +904,315 @@ def test_build_service_from_a_directory_round_trips(tmp_path):
     assert ok, err
     assert n > 0
     assert os.path.exists(os.path.join(data, "kernel.db"))
+
+
+# =====================================================================
+# 8. GAP — INVARIANT 1 AT THE PRICE-BOOK BOUNDARY
+#
+# Every other float gate in this system is pinned: the wire model is StrictInt,
+# `money.paise` rejects floats, the AST lint bans them from the file. The price
+# book was the one door with no test behind it. Deleting the `paise()` call in
+# `DictPriceBook.__init__` turns a `214.507` rupee-ish price into `int(214.507)
+# == 214` paise — a silent 99% discount that nothing in the suite noticed.
+# These tests are that missing lock.
+# =====================================================================
+
+
+@pytest.mark.parametrize(
+    "bad", [214.507, 214.5, 0.0, "21450", "214.50", True, False, None, [21450]]
+)
+def test_the_price_book_refuses_a_non_integer_price_at_the_door(bad):
+    """INVARIANT 1: a price that is not integer paise never enters the book."""
+    with pytest.raises(MoneyError):
+        DictPriceBook({SKU_RICE: bad})
+    book = DictPriceBook({SKU_RICE: PRICES[SKU_RICE]})
+    with pytest.raises(MoneyError):
+        book.set_price(SKU_RICE, bad)
+    # and the rejection left the book exactly as it was
+    assert book.price_paise(SKU_RICE) == PRICES[SKU_RICE]
+
+
+def test_a_truncating_price_book_would_be_caught_not_silently_billed():
+    """The specific corruption the `paise()` call prevents, named out loud.
+
+    214.507 is what a rupees->paise conversion looks like when someone did the
+    arithmetic in floats. `int()` of it is 214 paise — two rupees fourteen for a
+    two-hundred-fourteen rupee bag of rice. The book must refuse, not round.
+    """
+    with pytest.raises(MoneyError) as ei:
+        DictPriceBook({SKU_RICE: 214.507})
+    assert "float is not money" in str(ei.value)
+    assert int(214.507) == 214  # what we would have billed instead
+
+
+def test_a_price_book_that_hands_back_a_float_is_refused_not_truncated(rig):
+    """The Protocol is injectable, so the boundary must hold for any impl.
+
+    `PriceBook` is a Protocol: a store could plug in a book backed by a CSV, a
+    spreadsheet export, or an API that returns JSON numbers. If such a book
+    hands `rerun_geometry` a float, the total must be refused with a named
+    code — not truncated into a discount, and not raised as a 500 that tells an
+    operator nothing.
+    """
+
+    class FloatyBook:
+        def price_paise(self, item_id):
+            return {SKU_RICE: 21450.0, SKU_DAL: 9900}.get(item_id)
+
+    v = rerun_geometry(IntentRequest(**two_item_body()), FloatyBook())
+    assert v.agrees is False
+    assert v.reason == "bad_price_book"
+    assert v.server_total_paise == 0
+    assert SKU_RICE in v.detail
+
+    rig.svc.price_book = FloatyBook()
+    r = rig.client.post("/intent", json=two_item_body("sess-floaty"))
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "bad_price_book"
+    _assert_nothing_minted(rig)
+    assert "bad_price_book" in REFUSAL_CODES
+
+
+def test_a_float_price_never_reaches_the_ledger_or_a_total(rig):
+    """End to end: no float-derived number is ever written as money."""
+
+    class FloatyBook:
+        def price_paise(self, item_id):
+            return 21450.0 if item_id == SKU_RICE else PRICES.get(item_id)
+
+    rig.svc.price_book = FloatyBook()
+    rig.client.post("/intent", json=two_item_body("sess-floatled"))
+    for rec in rig.ledger.read():
+        for key, value in rec.items():
+            if any(k in key for k in ("paise", "amount", "price", "total")):
+                assert not isinstance(value, float), (key, value)
+    assert rig.kernel.count() == 0
+
+
+# =====================================================================
+# 9. GAP — CUSTOMER PII
+#
+# `rzp_sim` puts a real-shaped vpa, email, contact, rrn and card on every
+# payment it emits, and documents that paisa drops them on receipt (PRD 9).
+# Nothing asserted it. These tests do, from both ends: the webhook path (a
+# signed body full of PII that must be fully processed and fully forgotten) and
+# the gateway path (a client whose response carries a customer object, which
+# must be scrubbed before paisa stores it anywhere).
+# =====================================================================
+
+
+CARD_PII = {
+    "id": "card_LEAKCANARY_cardid",
+    "last4": "4242",
+    "network": "Visa",
+    "name": "LEAKCANARY Cardholder Name",
+    "issuer": "HDFC",
+    "international": False,
+    "type": "credit",
+}
+PII_STRINGS = (
+    SIM_VPA,
+    SIM_EMAIL,
+    SIM_CONTACT,
+    CARD_PII["id"],
+    CARD_PII["last4"],
+    CARD_PII["name"],
+)
+
+
+def pii_laden_delivery(rig, minted):
+    """A genuine signed delivery, re-signed with a card object bolted on.
+
+    The sim already carries vpa/email/contact/rrn; a `card` block only appears
+    on a real card payment, so it is injected here and the body is re-signed by
+    the SIMULATOR's own signer. Nothing in this helper constructs a payment
+    request — it dresses a webhook the sim already produced (INVARIANT 6).
+    """
+    d = pay(rig, minted)[0]
+    obj = json.loads(d.body.decode("utf-8"))
+    entity = obj["payload"]["payment"]["entity"]
+    assert entity["vpa"] == SIM_VPA and entity["email"] == SIM_EMAIL
+    assert entity["contact"] == SIM_CONTACT
+    entity["card"] = dict(CARD_PII)
+    entity["card_id"] = CARD_PII["id"]
+    body = serialize_body(obj)
+    signature = sign_body(body, WEBHOOK_SECRET)
+    for s in PII_STRINGS:
+        assert s in body.decode("utf-8"), s
+    return body, signature
+
+
+def test_no_customer_pii_from_a_webhook_is_persisted_logged_or_returned(rig):
+    """A green webhook stuffed with PII pays the session and leaves no trace."""
+    minted = rig.client.post("/intent", json=two_item_body("sess-pii")).json()
+    body, signature = pii_laden_delivery(rig, minted)
+
+    r = rig.client.post(
+        "/webhook",
+        content=body,
+        headers={"Content-Type": "application/json",
+                 "X-Razorpay-Signature": signature},
+    )
+    assert r.status_code == 200, r.text
+    # the PII-bearing body really was processed all the way to money
+    assert r.json()["green"] is True
+    assert r.json()["settled_nonce"] == minted["nonce"]
+    assert rig.kernel.get(minted["nonce"]).state == SETTLED
+
+    surfaces = {
+        "webhook response": r.text,
+        "session view": rig.client.get("/session/sess-pii").text,
+        "health": rig.client.get("/health").text,
+        "intent replay": rig.client.post(
+            "/intent", json=two_item_body("sess-pii")
+        ).text,
+        "service repr": repr(rig.svc),
+        "stored link": json.dumps(rig.svc.stored_link(minted["nonce"])),
+        "ledger file": open(rig.ledger_path, encoding="utf-8").read(),
+        "kernel rows": json.dumps([vars(i) for i in rig.kernel.all_intents()]),
+    }
+    for name, blob in surfaces.items():
+        for needle in PII_STRINGS:
+            assert needle not in blob, f"{needle!r} leaked into {name}"
+        # secrets, on the same sweep and for the same reason
+        assert WEBHOOK_SECRET not in blob, f"webhook secret leaked into {name}"
+        assert KEY_SECRET not in blob, f"key secret leaked into {name}"
+    # nor the raw body, which is the only thing that could reconstruct them
+    assert "acquirer_data" not in surfaces["ledger file"]
+    assert '"vpa"' not in surfaces["ledger file"]
+
+    ok, _, _, err = verify(rig.ledger_path)
+    assert ok, err
+
+
+def test_a_gateway_that_hands_back_customer_pii_has_it_stripped_before_storage(rig):
+    """paisa keeps the minted link. It must not keep the customer with it.
+
+    The simulator returns a lean link entity, but the real Razorpay
+    `payment_links` response carries a `customer` block, and a fetched payment
+    carries vpa/email/contact/card. paisa stores whatever the gateway returned,
+    so the scrub has to happen at that boundary, not at the response boundary.
+    """
+
+    class ChattyGateway:
+        def create_payment_link(self, amount_paise, notes, **kw):
+            return {
+                "id": "plink_chatty",
+                "short_url": "https://rzp.io/i/chatty",
+                "reference_id": notes["nonce"],
+                "amount": int(amount_paise),
+                "status": "created",
+                "notes": dict(notes),
+                "customer": {
+                    "name": CARD_PII["name"],
+                    "email": SIM_EMAIL,
+                    "contact": SIM_CONTACT,
+                },
+                "vpa": SIM_VPA,
+                "card": dict(CARD_PII),
+                "card_id": CARD_PII["id"],
+                "acquirer_data": {"rrn": "LEAKCANARY_rrn_123456"},
+                "payments": [
+                    {"payment_id": "pay_1", "email": SIM_EMAIL,
+                     "contact": SIM_CONTACT, "amount": int(amount_paise)}
+                ],
+            }
+
+    rig.svc.gateway = ChattyGateway()
+    r = rig.client.post("/intent", json=two_item_body("sess-chatty"))
+    assert r.status_code == 200, r.text
+    nonce = r.json()["nonce"]
+
+    stored = rig.svc.stored_link(nonce)
+    blobs = {
+        "stored link": json.dumps(stored),
+        "intent response": r.text,
+        "session view": rig.client.get("/session/sess-chatty").text,
+        "ledger": open(rig.ledger_path, encoding="utf-8").read(),
+    }
+    for name, blob in blobs.items():
+        for needle in (SIM_EMAIL, SIM_CONTACT, SIM_VPA, CARD_PII["name"],
+                       CARD_PII["last4"], "LEAKCANARY_rrn_123456"):
+            assert needle not in blob, f"{needle!r} survived into {name}"
+
+    # and the fields paisa actually needs are untouched
+    assert stored["id"] == "plink_chatty"
+    assert stored["short_url"] == "https://rzp.io/i/chatty"
+    assert stored["amount"] == PRICES[SKU_RICE] + PRICES[SKU_DAL]
+    assert r.json()["short_url"] == "https://rzp.io/i/chatty"
+
+
+def test_strip_pii_is_recursive_and_keeps_the_money(rig):
+    """Unit-level: nested, listed and deeply buried PII all go."""
+    doc = {
+        "id": "plink_1",
+        "amount": 21450,
+        "email": SIM_EMAIL,
+        "notes": {"session_id": "s1", "contact": SIM_CONTACT},
+        "payments": [
+            {"payment_id": "pay_1", "vpa": SIM_VPA,
+             "card": dict(CARD_PII), "amount": 21450},
+            {"payment_id": "pay_2", "customer": {"email": SIM_EMAIL}},
+        ],
+        "acquirer_data": {"rrn": "999", "upi_transaction_id": "u1"},
+    }
+    clean = strip_pii(doc)
+    blob = json.dumps(clean)
+    for needle in (SIM_EMAIL, SIM_CONTACT, SIM_VPA, CARD_PII["last4"],
+                   CARD_PII["name"], "999", "u1"):
+        assert needle not in blob, needle
+    assert clean["id"] == "plink_1"
+    assert clean["amount"] == 21450
+    assert clean["notes"]["session_id"] == "s1"
+    assert clean["payments"][0]["payment_id"] == "pay_1"
+    assert clean["payments"][0]["amount"] == 21450
+    assert doc["email"] == SIM_EMAIL, "strip_pii mutated its argument"
+    assert set(PII_FIELDS) >= {"vpa", "email", "contact", "card", "card_id",
+                               "customer", "acquirer_data", "rrn"}
+    # the scrub leaves a receipt: field NAMES, never values
+    assert set(clean[PII_DROPPED_KEY]) == {
+        "email", "contact", "vpa", "card", "customer", "acquirer_data"
+    }
+    assert strip_pii({"id": "x"}) == {"id": "x"}   # no marker when nothing went
+
+
+def test_an_escalated_intent_becomes_visible_to_a_human_on_health(rig):
+    """The other half of GAP 1: escalation only works if someone can see it.
+
+    An indeterminate intent used to be swept forever with nothing counting it.
+    Now the kernel gives up after a bounded number of lookups and `/health`
+    reports the queue, so the till can be watched without reading the ledger.
+    """
+
+    class Exploding:
+        def create_payment_link(self, **kw):
+            raise RuntimeError("upstream said no")
+
+    rig.svc.gateway = Exploding()
+    assert rig.client.post("/intent", json=two_item_body("sess-esc")).status_code == 502
+    nonce = rig.kernel.all_intents()[0].nonce
+    assert rig.kernel.get(nonce).state == "INDETERMINATE"
+
+    h = rig.client.get("/health").json()
+    assert h["intents_escalated"] == 0 and h["intents_needing_human"] == 0
+
+    charges = []
+
+    def never_answers(n):
+        return {"found": True, "status": "pending", "payment_id": "p",
+                "amount_paise": PRICES[SKU_RICE] + PRICES[SKU_DAL]}
+
+    for _ in range(50):
+        rig.kernel.sweep(never_answers)
+
+    assert rig.kernel.get(nonce).state == "ESCALATED"
+    h2 = rig.client.get("/health").json()
+    assert h2["intents_escalated"] == 1
+    assert h2["intents_needing_human"] == 1
+    assert charges == []
+    # and the session is still unpaid: escalation settles nothing
+    view = rig.client.get("/session/sess-esc").json()
+    assert view["paid"] is False
+    assert view["intents"][0]["needs_human"] is True
+    ok, _, _, err = verify(rig.ledger_path)
+    assert ok, err

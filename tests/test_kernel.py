@@ -18,6 +18,8 @@ import pytest
 from gawaah.clock import VirtualClock
 from gawaah.kernel import (
     CALLING,
+    DEFAULT_MAX_RETRIEVE_ATTEMPTS,
+    ESCALATED,
     FAILED,
     INDETERMINATE,
     NEW,
@@ -91,11 +93,11 @@ class FakeGateway:
         return sum(int(r["amount_paise"]) for r in self.captures.values())
 
 
-def mk(tmp_path: Path, name: str = "k") -> tuple[Kernel, Ledger, Path]:
+def mk(tmp_path: Path, name: str = "k", **kw) -> tuple[Kernel, Ledger, Path]:
     db = os.path.join(str(tmp_path), name + ".sqlite3")
     lp = tmp_path.joinpath(name + "_audit.jsonl")
     led = Ledger(lp)
-    return Kernel(db, VirtualClock(), led), led, lp
+    return Kernel(db, VirtualClock(), led, **kw), led, lp
 
 
 def drive(kernel: Kernel, gw: FakeGateway, session: str = SESSION,
@@ -851,3 +853,295 @@ def test_ledger_stays_consistent_under_concurrent_settlement(tmp_path):
     ok, lines, _, err = verify(lp)
     assert ok, err
     assert lines == total * 3                       # created + calling + settled
+
+
+# ================================================================== GAP 1
+# THE ABSTENTION LOOP MUST BE BOUNDED.
+#
+# INVARIANT 7 says abstain rather than guess, and reconcile() honours it: an
+# unknown or pending gateway answer goes straight back to INDETERMINATE. What
+# was missing is the other half — a loop that can abstain forever is not a
+# safety property, it is a stuck till. These tests pin a finite retrieve budget,
+# a terminal-for-machines ESCALATED state, an audit line, and the rule that
+# escalation NEVER charges anything.
+# ==========================================================================
+
+
+def counting_lookup(result):
+    """A gateway lookup that records every call so a budget can be asserted."""
+    calls: list[str] = []
+
+    def fn(nonce: str):
+        calls.append(nonce)
+        return dict(result) if isinstance(result, dict) else result
+
+    fn.calls = calls          # type: ignore[attr-defined]
+    return fn
+
+
+PENDING = {"found": True, "status": "pending", "payment_id": "pay_x",
+           "amount_paise": AMT}
+QUANTUM = {"found": True, "status": "quantum", "payment_id": "pay_x",
+           "amount_paise": AMT}
+
+
+def stuck(tmp_path, max_retrieve_attempts=3):
+    """An intent whose money moved but whose outcome the gateway will not state."""
+    k, _, lp = mk(tmp_path, max_retrieve_attempts=max_retrieve_attempts)
+    gw = FakeGateway()
+    gw.lose_next_response = True
+    it = drive(k, gw)
+    assert it.state == INDETERMINATE
+    assert gw.total_captured == AMT          # money really did move
+    return k, gw, it, lp
+
+
+def test_the_retrieve_budget_is_finite_and_escalates(tmp_path):
+    """Sweep forever; the gateway is asked exactly `max` times and no more."""
+    k, gw, it, lp = stuck(tmp_path, max_retrieve_attempts=3)
+    look = counting_lookup(PENDING)
+
+    for _ in range(50):
+        k.sweep(look)
+
+    final = k.get(it.nonce)
+    assert final.state == ESCALATED, "the loop is unbounded: it is still being swept"
+    assert final.needs_human is True
+    assert final.retrieve_attempts == 3
+    assert len(look.calls) == 3, f"{len(look.calls)} lookups for a budget of 3"
+    assert k.intents_needing_retrieve() == []
+    assert [i.nonce for i in k.intents_needing_human()] == [it.nonce]
+    assert [i.nonce for i in k.escalated_intents()] == [it.nonce]
+    # nothing auto-charged on the way out
+    assert gw.charge_calls == 1 and gw.total_captured == AMT
+
+
+def test_escalation_writes_an_audit_line_naming_the_budget(tmp_path):
+    import json
+    k, gw, it, lp = stuck(tmp_path, max_retrieve_attempts=2)
+    for _ in range(10):
+        k.sweep(counting_lookup(PENDING))
+
+    assert events(lp) == [
+        "intent.created", "intent.calling", "intent.indeterminate",
+        "intent.retrieve", "intent.indeterminate",
+        "intent.retrieve", "intent.indeterminate",
+        "intent.escalated",
+    ]
+    rec = [json.loads(l) for l in lp.read_text().splitlines() if l.strip()][-1]
+    assert rec["event"] == "intent.escalated"
+    assert rec["to_state"] == ESCALATED
+    assert rec["from_state"] == INDETERMINATE
+    assert rec["needs_human"] is True
+    assert rec["retrieve_attempts"] == 2
+    assert rec["max_retrieve_attempts"] == 2
+    assert rec["amount_paise"] == AMT and isinstance(rec["amount_paise"], int)
+    assert rec["payment_id"] is None            # nothing was concluded
+    ok, _, _, err = verify(lp)
+    assert ok, err
+
+
+def test_an_escalated_intent_is_never_touched_by_the_machine_again(tmp_path):
+    """Terminal for the sweeper. Only a human moves it, and never by charging."""
+    k, gw, it, lp = stuck(tmp_path, max_retrieve_attempts=1)
+    k.sweep(counting_lookup(PENDING))
+    k.sweep(counting_lookup(PENDING))
+    assert k.get(it.nonce).state == ESCALATED
+
+    after = counting_lookup(PENDING)
+    for _ in range(5):
+        assert k.reconcile(it.nonce, after).state == ESCALATED
+        k.sweep(after)
+    assert after.calls == [], "the gateway was polled for an escalated intent"
+    assert gw.charge_calls == 1, "escalation triggered a charge"
+    assert k.get(it.nonce).payment_id is None
+
+
+def test_escalation_is_reached_from_any_abstaining_answer(tmp_path):
+    """Pending, unknown-status and an unreachable gateway all burn the budget."""
+    for i, answer in enumerate((PENDING, QUANTUM, "raise")):
+        k, gw, it, _ = stuck(tmp_path.joinpath(f"a{i}"), max_retrieve_attempts=2)
+
+        def look(nonce, _a=answer):
+            if _a == "raise":
+                raise GatewayTimeout(nonce)
+            return dict(_a)
+
+        for _ in range(20):
+            k.sweep(look)
+        assert k.get(it.nonce).state == ESCALATED, answer
+        assert gw.charge_calls == 1
+
+
+def test_a_human_can_resolve_an_escalated_intent_without_a_gateway(tmp_path):
+    """`resolve_escalated` takes no gateway argument: it cannot charge by design."""
+    k, gw, it, lp = stuck(tmp_path, max_retrieve_attempts=1)
+    for _ in range(4):
+        k.sweep(counting_lookup(PENDING))
+    assert k.get(it.nonce).state == ESCALATED
+
+    pid = gw.captures[it.nonce]["payment_id"]
+    out = k.resolve_escalated(it.nonce, SETTLED, operator="anita@kirana",
+                              payment_id=pid, note="found on the RZP dashboard")
+    assert out.state == SETTLED
+    assert out.payment_id == pid
+    assert out.needs_human is True          # the flag stays: a person owned this
+    assert gw.charge_calls == 1
+    assert "intent.resolved" in events(lp)
+    ok, _, _, err = verify(lp)
+    assert ok, err
+
+
+def test_human_resolution_refuses_a_guess(tmp_path):
+    k, gw, it, _ = stuck(tmp_path, max_retrieve_attempts=1)
+    for _ in range(3):
+        k.sweep(counting_lookup(PENDING))
+    assert k.get(it.nonce).state == ESCALATED
+
+    with pytest.raises(KernelError):
+        k.resolve_escalated(it.nonce, SETTLED, operator="", payment_id="pay_1")
+    with pytest.raises(KernelError):
+        k.resolve_escalated(it.nonce, SETTLED, operator="anita")   # no payment_id
+    with pytest.raises(KernelError):
+        k.resolve_escalated(it.nonce, INDETERMINATE, operator="anita")
+    assert k.get(it.nonce).state == ESCALATED
+    # FAILED needs no payment id: "no money moved" carries no reference
+    assert k.resolve_escalated(it.nonce, FAILED, operator="anita",
+                               note="refunded by hand").state == FAILED
+
+
+def test_resolve_escalated_only_applies_to_escalated_rows(tmp_path):
+    k, _, _ = mk(tmp_path)
+    it = k.create_intent(SESSION, AMT)
+    with pytest.raises(IllegalTransition):
+        k.resolve_escalated(it.nonce, FAILED, operator="anita")
+
+
+def test_a_late_authoritative_webhook_can_still_settle_an_escalated_intent(tmp_path):
+    k, gw, it, _ = stuck(tmp_path, max_retrieve_attempts=1)
+    for _ in range(3):
+        k.sweep(counting_lookup(PENDING))
+    assert k.get(it.nonce).state == ESCALATED
+    out = k.mark_settled(it.nonce, gw.captures[it.nonce]["payment_id"])
+    assert out.state == SETTLED and out.needs_human is True
+    assert gw.charge_calls == 1
+
+
+def test_the_budget_is_bounded_by_default(tmp_path):
+    """No caller has to remember to pass a cap for the loop to terminate."""
+    assert 0 < DEFAULT_MAX_RETRIEVE_ATTEMPTS < 100
+    k, _, _ = mk(tmp_path, name="dflt")
+    gw = FakeGateway()
+    gw.lose_next_response = True
+    it = drive(k, gw)
+    look = counting_lookup(PENDING)
+    for _ in range(DEFAULT_MAX_RETRIEVE_ATTEMPTS * 3 + 10):
+        k.sweep(look)
+    assert k.get(it.nonce).state == ESCALATED
+    assert len(look.calls) == DEFAULT_MAX_RETRIEVE_ATTEMPTS
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.0, "3", True, None])
+def test_a_nonsense_retrieve_budget_is_refused_at_construction(tmp_path, bad):
+    with pytest.raises(KernelError):
+        Kernel(os.path.join(str(tmp_path), "b.sqlite3"), VirtualClock(),
+               Ledger(tmp_path.joinpath("b.jsonl")), max_retrieve_attempts=bad)
+
+
+def test_a_resolvable_answer_still_wins_before_the_budget_runs_out(tmp_path):
+    """The cap must not turn a recoverable intent into a human ticket."""
+    k, gw, it, _ = stuck(tmp_path, max_retrieve_attempts=5)
+    gw.lookup_raises = 3
+    for _ in range(5):
+        k.sweep(gw.lookup)
+    final = k.get(it.nonce)
+    assert final.state == SETTLED
+    assert final.needs_human is False
+    assert final.retrieve_attempts == 4      # 3 failures then the answer
+
+
+# ================================================================== GAP 2
+# TWO PROCESSES, ONE LEDGER FILE.
+#
+# Ledger.append caches the chain head in memory. That is correct for one writer
+# and silently wrong for two: the second process appends a line whose prev_hash
+# is whatever the head was when IT opened the file, and verify() reports a chain
+# break. The kernel is the writer, so the kernel takes a cross-process file lock
+# and re-reads the true head under it before every append.
+# ==========================================================================
+
+
+def _appender_prog(db: str, lp: str, n: int, tag: str) -> str:
+    return (
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
+        "from gawaah.kernel import Kernel\n"
+        "from gawaah.clock import VirtualClock\n"
+        "from gawaah.ledger import Ledger\n"
+        f"k = Kernel({db!r}, VirtualClock(), Ledger({lp!r}))\n"
+        "time.sleep(max(0.0, float(sys.argv[1]) - time.time()))\n"
+        f"for i in range({n}):\n"
+        f"    it = k.create_intent({tag!r} + str(i), {AMT})\n"
+        "    k.mark_calling(it.nonce)\n"
+        "    k.mark_settled(it.nonce, 'pay_' + it.nonce[-6:])\n"
+        "print('ok')\n"
+    )
+
+
+def test_two_processes_sharing_one_ledger_keep_the_chain_intact(tmp_path):
+    """The defect, and its fix, in one file: two writers, one verifiable chain.
+
+    Each process gets its own kernel DB (uniqueness of intents is already the
+    DB's job and is proved elsewhere) and they SHARE the ledger file, which is
+    the thing that used to corrupt.
+    """
+    import time
+
+    lp = os.path.join(str(tmp_path), "shared.jsonl")
+    per_proc, procs_n = 12, 4
+    start_at = repr(time.time() + 2.0)
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c",
+             _appender_prog(os.path.join(str(tmp_path), f"p{i}.sqlite3"), lp,
+                            per_proc, f"s{i}_"),
+             start_at],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for i in range(procs_n)
+    ]
+    for p in procs:
+        so, se = p.communicate(timeout=120)
+        assert p.returncode == 0, se
+        assert so.strip() == "ok"
+
+    ok, lines, head, err = verify(Path(lp))
+    assert ok, err
+    assert lines == procs_n * per_proc * 3, lines
+    assert head
+
+
+def test_a_kernel_reports_whether_its_ledger_lock_is_cross_process(tmp_path):
+    """An honest flag, so a deployment can tell what it actually has."""
+    k, _, lp = mk(tmp_path, name="flag")
+    assert isinstance(k.ledger_lock_is_cross_process, bool)
+    assert k.ledger_lock_path == os.fspath(lp) + ".lock"
+    assert os.path.exists(k.ledger_lock_path)
+
+
+def test_a_second_process_appending_between_our_appends_is_not_overwritten(tmp_path):
+    """The narrowest form of the bug: interleave by hand, then verify."""
+    lp = tmp_path.joinpath("interleave.jsonl")
+    k = Kernel(os.path.join(str(tmp_path), "a.sqlite3"), VirtualClock(), Ledger(lp))
+    k.create_intent("sess_a", AMT)
+
+    prog = _appender_prog(os.path.join(str(tmp_path), "b.sqlite3"),
+                          os.fspath(lp), 3, "sess_b_")
+    r = subprocess.run([sys.executable, "-c", prog, "0"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+    # our in-memory head is now stale by 9 lines; the next append must notice
+    k.create_intent("sess_c", AMT)
+    ok, lines, _, err = verify(lp)
+    assert ok, err
+    assert lines == 1 + 9 + 1

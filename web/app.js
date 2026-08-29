@@ -269,16 +269,55 @@ export function scaleError(quadsByFrame, H) {
 }
 
 /**
+ * Structural + numeric validation of one detected marker quad.
+ * Returns null when the quad is usable, or a human reason when it is not.
+ *
+ * INVARIANT 7, at the boundary. The detector is a foreign function — OpenCV
+ * compiled to wasm, driven by a camera — and it can hand back a short corner
+ * buffer, a null row, or a non-finite coordinate. Every one of those is an
+ * ABSTENTION, so it has to be turned into a named refusal HERE. Two failure
+ * modes are being closed:
+ *   - a missing/short corner makes `q[k][0]` throw a TypeError, which unwinds
+ *     past the caller's assignment and leaves the PREVIOUS lock standing;
+ *   - Infinity or NaN propagates silently into the DLT, poisons H, and then
+ *     trips the scale gate — which abstains, but MISREPORTS the cause as
+ *     "scale error NaN%" and still hands a non-finite H back to the caller.
+ * Number.isFinite is the right predicate: it is false for NaN, ±Infinity,
+ * undefined, null and strings alike.
+ */
+export function quadFault(q) {
+  if (!Array.isArray(q)) return 'is not a quad';
+  if (q.length !== 4) return `has ${q.length} corners, need 4`;
+  for (let k = 0; k < 4; k++) {
+    const c = q[k];
+    if (!Array.isArray(c) || c.length < 2) return `corner ${k} is not an [x, y] pair`;
+    if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) {
+      return `corner ${k} is non-finite (${String(c[0])}, ${String(c[1])})`;
+    }
+  }
+  return null;
+}
+
+/**
  * Adjudicate a mat lock from detected marker quads (frame px, keyed by id).
  * Pure: takes the detection result, returns the same shape PlaneEngine.detect
- * returns. Abstains with a named reason rather than guessing.
+ * returns. Abstains with a named reason rather than guessing, and NEVER throws:
+ * a throw here is indistinguishable, at the call site, from "nothing changed".
  */
 export function adjudicateLock(quadsById) {
+  if (quadsById === null || typeof quadsById !== 'object') {
+    return { locked: false, reason: 'no markers detected', idsFound: [] };
+  }
   const found = MARKER_IDS.filter((i) => Array.isArray(quadsById[i]));
   if (found.length === 0) return { locked: false, reason: 'no markers detected', idsFound: [] };
   if (found.length < 4) {
     const missing = MARKER_IDS.filter((i) => !found.includes(i));
     return { locked: false, reason: `missing markers ${JSON.stringify(missing)}`, idsFound: found };
+  }
+  // Every corner of every marker is validated BEFORE any of it reaches the DLT.
+  for (const i of MARKER_IDS) {
+    const fault = quadFault(quadsById[i]);
+    if (fault) return { locked: false, reason: `marker ${i} ${fault}`, idsFound: found };
   }
   const centre = (q) => [
     (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4,
@@ -289,6 +328,11 @@ export function adjudicateLock(quadsById) {
   let H;
   try { H = homographyFrom4Points(src, dst); }
   catch { return { locked: false, reason: 'homography failed', idsFound: found }; }
+  // Finite inputs can still overflow to a non-finite H (huge coordinates make
+  // the elimination divide Infinity by Infinity). Refuse rather than ship NaN.
+  if (!H.every(Number.isFinite)) {
+    return { locked: false, reason: 'homography is non-finite', idsFound: found };
+  }
 
   const rmse = reprojRmse(H, src, dst);
   const persp = perspIndex(H);
@@ -306,6 +350,55 @@ export function adjudicateLock(quadsById) {
     };
   }
   return { locked: true, reason: 'locked', ...base };
+}
+
+/** Named reason for a detector that threw. Mirrored into Reason below. */
+export const DETECTOR_FAILED = 'detector_threw_lock_cleared';
+
+/**
+ * The ONLY sanctioned way to call a detector.
+ *
+ * INVARIANT 7, fail closed. `lock = detector(frame)` is a trap: when detector()
+ * throws, the assignment never happens and the PREVIOUS lock silently survives.
+ * The chrome then goes on saying MAT LOCK, the frame-grab policy goes on
+ * retaining a crop, and the app goes on billing lines against a plane the camera
+ * can no longer see. A detector that throws knows LESS than one that returns
+ * "no markers", so it must produce a WEAKER verdict, never a stale stronger one.
+ *
+ * Always returns a fresh, not-locked-unless-proven verdict. Never throws.
+ * Never returns the previous lock, because it has never seen it.
+ */
+export function safeDetect(detector, frame, absentReason) {
+  if (typeof detector !== 'function') {
+    return { locked: false, reason: absentReason || 'detector not ready' };
+  }
+  let out;
+  try {
+    out = detector(frame);
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : String(e);
+    return { locked: false, reason: `${DETECTOR_FAILED}: ${msg}` };
+  }
+  if (out === null || typeof out !== 'object' || Array.isArray(out)) {
+    return { locked: false, reason: `${DETECTOR_FAILED}: detector returned ${typeof out}, not a verdict` };
+  }
+  // `locked` is checked for the literal true, so a truthy 1 or 'true' cannot
+  // sneak a lock past this boundary.
+  if (out.locked !== true) {
+    return { ...out, locked: false, reason: out.reason || 'detector returned no lock' };
+  }
+  if (!Array.isArray(out.H) || out.H.length !== 9 || !out.H.every(Number.isFinite)) {
+    return { ...out, locked: false, reason: 'detector claimed a lock without a finite homography' };
+  }
+  // render() formats these three with toFixed, and invert3x3/warpPerspective
+  // consume H. A lock missing any of them would crash the frame loop, which is
+  // the same stale-lock failure by a different door.
+  for (const k of ['scaleErr', 'perspIndex', 'reprojRmsePx']) {
+    if (!Number.isFinite(out[k])) {
+      return { ...out, locked: false, reason: `detector claimed a lock without a finite ${k}` };
+    }
+  }
+  return out;
 }
 
 // ===========================================================================
@@ -492,6 +585,7 @@ export const Reason = Object.freeze({
   UNKNOWN_ITEM: 'refused_unknown_item', REVERTED_ITEM: 'refused_item_already_reverted',
   DUPLICATE: 'duplicate_event_ignored',
   OPENCV_ABSENT: 'opencv_absent_geometry_unavailable',
+  DETECTOR_FAILED,
 });
 
 export const GREEN_EVENTS = Object.freeze(
@@ -1014,8 +1108,11 @@ function boot() {
     const rawCtx = els.raw.getContext('2d');
     rawCtx.drawImage(els.video, 0, 0, els.raw.width, els.raw.height);
 
-    lock = detector ? detector(els.raw)
-      : { locked: false, reason: cv ? 'detector not ready' : Reason.OPENCV_ABSENT };
+    // FAIL CLOSED. safeDetect always returns a fresh verdict, so a detector
+    // that throws CLEARS the lock instead of leaving the previous one standing.
+    // The MAT_LOCK dispatch below then drives the session into MAT_LOST, which
+    // freezes the total, greys the chrome and refuses further billing.
+    lock = safeDetect(detector, els.raw, cv ? 'detector not ready' : Reason.OPENCV_ABSENT);
     if (lock.locked !== st.matLocked) dispatch({ type: 'MAT_LOCK', locked: lock.locked });
 
     // INVARIANT 4, made visible. The moment we have a lock we scrim everything

@@ -17,8 +17,11 @@ import numpy as np
 import pytest
 
 from gawaah.chilla import (
-    AMBER_STALE, AMBIGUOUS, CHILLAR_SPACE, DEFAULT_WINDOW_S, HERO_AMOUNT,
-    LIGHT_FOR_VERDICT, MATCHED, NEVER_READ, NO_MATCH, PLACEMENT_BOX_MM,
+    ABSTENTION_REASONS, AMBER_STALE, AMBIGUOUS, CHILLAR_SPACE,
+    DEFAULT_WINDOW_S, DETECTION_REASONS, HERO_AMOUNT, LIGHT_FOR_VERDICT,
+    LIMITATIONS, MATCHED, MAX_ILLUM_COUPLING, MIN_AREA_MM2,
+    MIN_BRIGHTNESS_DELTA, MIN_CONTOUR_AREA_MM2, MIN_COUPLING_CONTRAST,
+    MIN_RECTANGULARITY, NEVER_READ, NO_MATCH, PLACEMENT_BOX_MM, REASON_NOTES,
     REFERENCE_STRING, SCREEN_TIMESTAMP, VERDICTS, ChillaError, ChillaRefusal,
     LedgerMatcher, Mirror, MirrorRow, MmRect, ScreenDetection, ScreenFinder,
     any_collision_risk, buffer_to_mm, collision_risk, legibility,
@@ -96,6 +99,71 @@ def place_phone(buf: np.ndarray, cx: float, cy: float, *, w: float = 70.0,
     out = buf.copy()
     out[mask > 128] = warped[mask > 128]
     return out
+
+
+def place_poly(buf: np.ndarray, poly_mm: np.ndarray, luma: int = 248) -> np.ndarray:
+    """Fill an arbitrary (non-rectangular) bright polygon, given mm corners."""
+    out = buf.copy()
+    cv2.fillPoly(out, [mm_to_buffer(np.asarray(poly_mm, float)).astype(np.int32)],
+                 int(luma))
+    return out
+
+
+def bright_dots(buf: np.ndarray, side_mm: float = 8.0, luma: int = 250) -> np.ndarray:
+    """Scattered bright specks: each one below the contour floor, together above
+    the whole-mask floor. Highlights, a foil wrapper, a watch face."""
+    out = buf.copy()
+    for i in range(4):
+        for j in range(3):
+            q = mm_to_buffer(quad_mm(60.0 + j * 80.0, 60.0 + i * 90.0,
+                                     side_mm, side_mm, 0.0)).astype(np.int32)
+            cv2.fillConvexPoly(out, q, int(luma))
+    return out
+
+
+def lamp_field(shape: tuple[int, int], amp: float, lx: float, ly: float) -> np.ndarray:
+    """A counter lamp: a smooth MULTIPLICATIVE illumination field, mean ~1.
+
+    This is the thing a diffuse reflector obeys and an emissive panel ignores.
+    """
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]].astype(np.float64)
+    xx /= shape[1]
+    yy /= shape[0]
+    r2 = (xx - lx) ** 2 + (yy - ly) ** 2
+    return 1.0 + amp * (1.0 - 2.0 * r2 / r2.max())
+
+
+def lit_mat(amp: float = 0.18, lx: float = 0.32, ly: float = 0.24, *,
+            exposure: float = 0.62, noise: float = 0.0, seed: int = 0) -> np.ndarray:
+    """REF_EMPTY_MAT under a lamp, i.e. with a real spatial light gradient.
+
+    Exposure is lower than `empty_mat`'s so that a sheet of paper 25% brighter
+    than the mat still has headroom and does not clip at 255 — clipping would
+    flatten the paper and hand the discriminator an unfair win.
+    """
+    base = empty_mat(exposure=exposure, noise=noise, seed=seed).astype(np.float64)
+    return np.clip(base * lamp_field(base.shape, amp, lx, ly), 0, 255).astype(np.uint8)
+
+
+def place_paper(buf: np.ndarray, cx: float, cy: float, *, w: float = 70.0,
+                h: float = 150.0, ang: float = 0.0, gain: float = 1.25,
+                texture: float = 0.0, seed: int = 0) -> np.ndarray:
+    """Composite a DIFFUSE REFLECTOR — a white sheet under the same lamp.
+
+    Reflectance is MULTIPLICATIVE in the light field: the paper is `gain` times
+    the albedo of the mat, so it is brighter everywhere while still carrying the
+    lamp's gradient. That is exactly what an emissive panel does not do, and it
+    is the only physics that separates the two in a monochrome rig.
+    """
+    q = mm_to_buffer(quad_mm(cx, cy, w, h, ang)).astype(np.int32)
+    m = np.zeros(buf.shape, np.uint8)
+    cv2.fillConvexPoly(m, q, 255)
+    out = buf.astype(np.float64).copy()
+    out[m > 0] *= gain
+    if texture:
+        rng = np.random.default_rng(seed)
+        out[m > 0] += rng.normal(0.0, texture, int(np.count_nonzero(m)))
+    return np.clip(out, 0, 255).astype(np.uint8)
 
 
 @pytest.fixture(scope="module")
@@ -243,10 +311,12 @@ def test_MEASURED_geometric_accuracy_over_a_placement_sweep(finder, ref_mat):
 
 def test_a_dark_object_on_the_mat_is_not_a_screen(finder, ref_mat):
     """A phone-shaped dark slab differs from the reference just as much, but it
-    is not emissive. absdiff alone would accept it; the photometry gate does not."""
+    is darker, not brighter. absdiff alone would accept it; the photometry gate
+    does not. (Reason renamed from `not_emissive`: it measures brightness, and
+    saying otherwise was a claim the arithmetic does not support.)"""
     cur = place_phone(ref_mat, 148.5, 210.0, luma=40, bar=30)
     d = finder.detect(cur)
-    assert d.found is False and d.reason == "not_emissive"
+    assert d.found is False and d.reason == "not_brighter_than_mat"
     assert d.delta_luma < 0.0
 
 
@@ -325,6 +395,344 @@ def test_PRIVACY_detection_returns_geometry_only_never_pixels(finder, ref_mat):
 def test_detection_of_a_wrong_sized_buffer_abstains(finder):
     d = finder.detect(np.full((100, 100), 200, np.uint8))
     assert d.found is False and d.reason == "buffer_shape_mismatch"
+
+
+# =============================================================================
+# 2b. DEFECT 1 — "too_small" was a published reason that could never fire
+# =============================================================================
+#
+# detect() pre-filtered contours at `min_area_mm2` BEFORE _evaluate() could ever
+# reach its own `too_small` check, and minAreaRect area is by construction >=
+# contour area, so `rect.area_mm2 < min_area_mm2` was unsatisfiable. The reason
+# was a false claim about the system's behaviour. The pre-filter is now a NOISE
+# FLOOR (MIN_CONTOUR_AREA_MM2) and the real size gate lives where it can report
+# the measured rect that failed it.
+
+def test_DEFECT1_a_phone_sized_gate_failure_reports_too_small_with_its_geometry(
+        finder, ref_mat):
+    """1800 mm^2 of bright, phone-shaped, phone-bright pixels. That is a real
+    candidate that fails ONLY on size, and the operator is entitled to be told
+    the measured area rather than 'no bright region'."""
+    d = finder.detect(place_phone(ref_mat, 148.5, 210.0, w=30.0, h=60.0))
+    assert d.found is False
+    assert d.reason == "too_small"
+    assert d.rect_mm is not None, "too_small must carry the rect that failed"
+    assert d.area_mm2 == pytest.approx(1800.0, rel=0.06)
+    assert d.area_mm2 < MIN_AREA_MM2
+
+
+def test_DEFECT1_the_pre_filter_is_a_noise_floor_not_the_size_gate():
+    """The two thresholds are now different numbers with different jobs, which
+    is the only way both `all_regions_too_small` and `too_small` can fire."""
+    assert MIN_CONTOUR_AREA_MM2 < MIN_AREA_MM2
+    f = ScreenFinder(empty_mat())
+    assert f.min_contour_area_mm2 == MIN_CONTOUR_AREA_MM2
+
+
+def test_DEFECT1_specks_below_the_noise_floor_are_all_regions_too_small(
+        finder, ref_mat):
+    """Twelve 8 mm specks: together well past the noise floor, individually far
+    below it. Distinct from `no_bright_region` (nothing changed at all)."""
+    d = finder.detect(bright_dots(ref_mat, side_mm=8.0))
+    assert d.found is False
+    assert d.reason == "all_regions_too_small"
+    assert d.mask_fraction > 0.0
+
+
+@pytest.mark.parametrize("side,expect", [
+    (2.0, "no_bright_region"),        # 48 mm2 total: under the whole-mask floor
+    (8.0, "all_regions_too_small"),   # 768 mm2 total, 64 mm2 each: over it, but
+                                      # no single blob clears the floor
+    (12.0, "too_small"),              # 144 mm2 each: clears the floor, so it is
+                                      # now a candidate and fails the SIZE gate
+])
+def test_DEFECT1_the_three_small_region_reasons_are_separable(finder, ref_mat,
+                                                              side, expect):
+    """One knob (speck size) walks the detector through three distinct named
+    reasons in order. Before the fix the third was unreachable and the first two
+    were the same threshold, so two of these rows could not exist."""
+    d = finder.detect(bright_dots(ref_mat, side_mm=side))
+    assert d.reason == expect
+    assert d.found is False
+
+
+# =============================================================================
+# 2c. DEFECT 2 / MUTATION M15 — the rectangularity gate carried no test
+# =============================================================================
+#
+# `min_rectangularity` could be deleted (or set to 0.0) and all 60 tests still
+# passed, because every bright phantom in the suite was already a rectangle.
+# A non-rectangular bright blob whose BOUNDING rect is phone-sized and
+# phone-shaped is caught by this gate and by nothing else.
+
+M15_SHAPES = {
+    # bounding rect 70x150 mm in all three cases -> area and aspect both pass
+    "L_shape": np.array([[113.5, 135.0], [183.5, 135.0], [183.5, 285.0],
+                         [143.5, 285.0], [143.5, 185.0], [113.5, 185.0]]),
+    "triangle": np.array([[113.5, 285.0], [183.5, 285.0], [148.5, 135.0]]),
+    "chevron": np.array([[113.5, 135.0], [148.5, 195.0], [183.5, 135.0],
+                         [183.5, 285.0], [148.5, 225.0], [113.5, 285.0]]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(M15_SHAPES))
+def test_MUTATION_M15_a_non_rectangular_bright_blob_is_rejected(finder, ref_mat,
+                                                                name):
+    """Kills M15. Delete the rectangularity gate and every one of these is
+    returned as `screen_found` with a confident mm rect around a shape that is
+    not a phone."""
+    d = finder.detect(place_poly(ref_mat, M15_SHAPES[name], luma=248))
+    assert d.found is False, f"{name} was accepted as a screen"
+    assert d.reason == "not_rectangular"
+    assert d.rectangularity < MIN_RECTANGULARITY
+
+
+@pytest.mark.parametrize("name", sorted(M15_SHAPES))
+def test_MUTATION_M15_those_blobs_pass_every_OTHER_gate(ref_mat, name):
+    """The other half of the mutation proof: with the gate disarmed (and only
+    the gate) these blobs sail through area, aspect, edge and photometry. So the
+    gate is load-bearing, not decoration."""
+    disarmed = ScreenFinder(ref_mat, min_rectangularity=0.0)
+    d = disarmed.detect(place_poly(ref_mat, M15_SHAPES[name], luma=248))
+    assert d.found is True, f"{name} rejected by something else: {d.reason}"
+    assert d.reason == "screen_found"
+    assert d.rectangularity < MIN_RECTANGULARITY
+
+
+def test_MEASURED_rectangularity_of_real_and_fake_screens(finder, ref_mat):
+    """Report the actual separation the gate is exploiting."""
+    real = finder.detect(place_phone(ref_mat, 148.5, 210.0)).rectangularity
+    disarmed = ScreenFinder(ref_mat, min_rectangularity=0.0)
+    fakes = {n: disarmed.detect(place_poly(ref_mat, p, 248)).rectangularity
+             for n, p in sorted(M15_SHAPES.items())}
+    print(f"\n[MEASURED] rectangularity gate at {MIN_RECTANGULARITY}: "
+          f"true screen {real:.4f}; "
+          + ", ".join(f"{n} {v:.4f}" for n, v in fakes.items()))
+    assert real > MIN_RECTANGULARITY
+    assert max(fakes.values()) < MIN_RECTANGULARITY
+
+
+# =============================================================================
+# 2d. DEFECT 3 — brightness delta is not emission
+# =============================================================================
+#
+# The gate formerly called `min_emissive_delta` only asked "is this quad >= 18
+# grey levels brighter than the mat". A sheet of white paper under a lamp is.
+# Two changes: the brightness test is now NAMED for what it measures, and a
+# second, physical discriminator was added — a diffuse reflector's luminance is
+# MULTIPLICATIVE in the light field, so it correlates with the reference's own
+# illumination gradient; an emissive panel sets its own luminance and does not.
+
+def test_DEFECT3_the_brightness_gate_is_named_for_what_it_measures():
+    """A threshold that measures brightness delta may not be called 'emissive'."""
+    assert MIN_BRIGHTNESS_DELTA == 18.0
+    assert "not_brighter_than_mat" in ABSTENTION_REASONS
+    assert not hasattr(ScreenFinder(), "min_emissive_delta")
+    assert ScreenFinder().min_brightness_delta == MIN_BRIGHTNESS_DELTA
+    # and the limitation is published next to the reason, not buried
+    note = REASON_NOTES["not_brighter_than_mat"]
+    assert "brightness" in note.lower()
+    assert "paper" in LIMITATIONS.lower()
+
+
+def test_DEFECT3_a_lamp_lit_white_sheet_passes_the_brightness_gate():
+    """The defect itself, held still: a merely REFLECTIVE object clears the
+    18-grey-level bar comfortably. Brightness alone cannot be the whole test."""
+    ref = lit_mat()
+    d = ScreenFinder(ref).detect(place_paper(ref, 148.5, 210.0))
+    assert d.delta_luma > MIN_BRIGHTNESS_DELTA * 2, d.as_dict()
+    assert d.mean_luma > 200.0
+
+
+def test_DEFECT3_a_lamp_lit_white_sheet_is_rejected_as_reflective():
+    """...and the illumination-coupling discriminator catches it anyway."""
+    ref = lit_mat()
+    d = ScreenFinder(ref).detect(place_paper(ref, 148.5, 210.0))
+    assert d.found is False
+    assert d.reason == "reflective_not_emissive"
+    assert d.coupling_measurable is True
+    assert d.illum_coupling is not None and d.illum_coupling > 0.9
+
+
+def test_DEFECT3_a_real_screen_under_the_same_lamp_is_still_found():
+    """The gate must not cost us the true positive it was added to protect."""
+    ref = lit_mat()
+    d = ScreenFinder(ref).detect(place_phone(ref, 148.5, 210.0, luma=248))
+    assert d.found is True, d.as_dict()
+    assert d.coupling_measurable is True
+    assert d.illum_coupling is not None and d.illum_coupling < MAX_ILLUM_COUPLING
+
+
+def test_MEASURED_illumination_coupling_separates_paper_from_screen():
+    """The number the gate rests on, swept over lamp strength, lamp position,
+    sensor noise and phone pose. Printed, then asserted."""
+    paper_r, screen_r, contrasts = [], [], []
+    for amp in (0.10, 0.14, 0.18, 0.24):
+        for lx, ly in ((0.32, 0.24), (0.75, 0.80), (0.50, 0.10)):
+            for noise in (0.0, 4.0):
+                ref = lit_mat(amp, lx, ly, noise=noise, seed=3)
+                f = ScreenFinder(ref)
+                for cx, cy, w, h, ang in ((148.5, 210.0, 70.0, 150.0, 0.0),
+                                          (110.0, 170.0, 66.0, 142.0, 15.0),
+                                          (190.0, 260.0, 74.0, 158.0, -20.0)):
+                    p = f.detect(place_paper(ref, cx, cy, w=w, h=h, ang=ang,
+                                             texture=noise, seed=9))
+                    s = f.detect(place_phone(ref, cx, cy, w=w, h=h, ang=ang))
+                    assert p.illum_coupling is not None, p.as_dict()
+                    assert s.illum_coupling is not None, s.as_dict()
+                    paper_r.append(p.illum_coupling)
+                    screen_r.append(s.illum_coupling)
+                    contrasts.append(min(p.ref_contrast, s.ref_contrast))
+                    assert p.reason == "reflective_not_emissive"
+                    assert s.found is True, s.reason
+    print(f"\n[MEASURED] illumination coupling over {len(paper_r)} paired scenes "
+          f"(4 lamp strengths x 3 lamp positions x 2 noise levels x 3 poses):")
+    print(f"    diffuse paper  r in [{min(paper_r):+.4f}, {max(paper_r):+.4f}], "
+          f"mean {np.mean(paper_r):+.4f}")
+    print(f"    emissive panel r in [{min(screen_r):+.4f}, {max(screen_r):+.4f}], "
+          f"mean {np.mean(screen_r):+.4f}")
+    print(f"    gate at r >= {MAX_ILLUM_COUPLING}; margin "
+          f"{min(paper_r) - max(screen_r):.4f}; "
+          f"min pooled reference contrast {min(contrasts):.3f} grey levels")
+    assert min(paper_r) > MAX_ILLUM_COUPLING
+    assert max(screen_r) < MAX_ILLUM_COUPLING
+    assert min(paper_r) - max(screen_r) > 0.5
+
+
+def test_DEFECT3_under_a_FLAT_light_field_the_coupling_test_says_so():
+    """THE LIMITATION, tested rather than asserted in prose. With no gradient
+    across the footprint there is nothing to correlate, so CHILLA reports the
+    test as unmeasurable instead of pretending it ran — and paper is then NOT
+    rejected. That is the honest boundary of the discriminator."""
+    flat = empty_mat()
+    f = ScreenFinder(flat)
+    d = f.detect(place_phone(flat, 148.5, 210.0))
+    assert d.found is True
+    assert d.coupling_measurable is False
+    assert d.ref_contrast < MIN_COUPLING_CONTRAST
+    # and the honest cost of that: under flat light, paper is not caught
+    paper = f.detect(place_paper(flat, 148.5, 210.0, gain=1.18))
+    assert paper.coupling_measurable is False
+    assert paper.found is True          # <- the documented limitation, in code
+    assert "flat" in LIMITATIONS.lower() or "uniform" in LIMITATIONS.lower()
+
+
+def test_DEFECT3_sensor_noise_alone_never_fires_the_reflective_gate():
+    """The failure direction matters: a spurious coupling would abstain (amber),
+    never accept. Confirm noise on a flat mat does not even get that far."""
+    ref = empty_mat(noise=4.0, seed=1)
+    d = ScreenFinder(ref).detect(place_phone(empty_mat(noise=4.0, seed=2),
+                                             148.5, 210.0))
+    assert d.found is True
+    assert d.ref_contrast < MIN_COUPLING_CONTRAST
+    print(f"[MEASURED] flat mat + sigma=4 sensor noise: pooled reference "
+          f"contrast {d.ref_contrast:.4f} grey levels "
+          f"(measurability floor {MIN_COUPLING_CONTRAST})")
+
+
+# =============================================================================
+# 2e. THE ABSTENTION INVENTORY — every named reason, reached by a real frame
+# =============================================================================
+
+def _reasons_in_source() -> set[str]:
+    """Every string literal this module can actually put in `reason`, read out
+    of the AST. A published reason that no code path emits, or a code path that
+    emits an unpublished reason, both fail the test below."""
+    import ast
+    import inspect
+
+    import gawaah.chilla as chilla_mod
+
+    tree = ast.parse(inspect.getsource(chilla_mod))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not (isinstance(fn, ast.Name) and fn.id == "ScreenDetection"):
+            continue
+        cand = None
+        if len(node.args) >= 2:
+            cand = node.args[1]
+        for kw in node.keywords:
+            if kw.arg == "reason":
+                cand = kw.value
+        if isinstance(cand, ast.Constant) and isinstance(cand.value, str):
+            found.add(cand.value)
+    return found
+
+
+def _reason_battery() -> dict[str, ScreenDetection]:
+    """One real frame per named reason. No monkeypatching, no private calls —
+    every entry is `ScreenFinder.detect()` on a buffer built by this file."""
+    flat = empty_mat()
+    lit = lit_mat()
+    f = ScreenFinder(flat)
+    g = ScreenFinder(lit)
+    cases = {
+        "no_reference": (ScreenFinder(), flat),
+        "buffer_shape_mismatch": (f, np.full((100, 100), 200, np.uint8)),
+        "global_illumination_shift": (
+            f, np.clip(flat.astype(np.float64) * 1.2, 0, 255).astype(np.uint8)),
+        "no_bright_region": (f, flat),
+        "diff_saturated": (f, place_phone(flat, 148.5, 210.0, w=220.0, h=227.0,
+                                          luma=250, bar=250)),
+        "all_regions_too_small": (f, bright_dots(flat, side_mm=8.0)),
+        "too_small": (f, place_phone(flat, 148.5, 210.0, w=30.0, h=60.0)),
+        "too_large": (f, place_phone(flat, 148.5, 210.0, w=140.0, h=200.0)),
+        "not_rectangular": (f, place_poly(flat, M15_SHAPES["triangle"], 248)),
+        "aspect_out_of_range": (f, place_phone(flat, 148.5, 210.0, w=140.0,
+                                               h=150.0)),
+        "touches_mat_edge": (f, place_phone(flat, 35.0, 210.0)),
+        "not_brighter_than_mat": (f, place_phone(flat, 148.5, 210.0, luma=40,
+                                                 bar=30)),
+        "reflective_not_emissive": (g, place_paper(lit, 148.5, 210.0)),
+        "ambiguous_two_bright_quads": (
+            f, place_phone(place_phone(flat, 90.0, 140.0), 210.0, 290.0)),
+        "screen_found": (f, place_phone(flat, 148.5, 210.0)),
+    }
+    return {want: finder_.detect(buf) for want, (finder_, buf) in cases.items()}
+
+
+def test_INVENTORY_every_named_reason_is_reachable_by_a_real_frame():
+    """The builder published 16 reasons; two of them (`no_contours`,
+    `empty_quad`) were unreachable by construction and one (`too_small`) was
+    shadowed by its own pre-filter. This test is the thing that keeps that
+    honest: source and battery must agree exactly, in both directions."""
+    in_source = _reasons_in_source()
+    got = _reason_battery()
+    for want, d in got.items():
+        assert d.reason == want, f"battery case for {want!r} produced {d.reason!r}"
+    exercised = {d.reason for d in got.values()}
+    assert exercised == in_source, (
+        f"unreachable (in source, never emitted): {sorted(in_source - exercised)}; "
+        f"unpublished (emitted, not in source): {sorted(exercised - in_source)}")
+    print(f"\n[MEASURED] {len(exercised)} distinct detection reasons, each "
+          f"produced by a real detect() call: {sorted(exercised)}")
+
+
+def test_INVENTORY_the_published_list_matches_the_code_and_is_documented():
+    in_source = _reasons_in_source()
+    assert set(DETECTION_REASONS) == in_source
+    assert set(ABSTENTION_REASONS) == in_source - {"screen_found"}
+    assert len(DETECTION_REASONS) == len(set(DETECTION_REASONS))
+    assert "no_contours" not in in_source     # unreachable: closing is extensive
+    assert "empty_quad" not in in_source      # unreachable: area gate precedes it
+    assert "not_emissive" not in in_source    # renamed; it measured brightness
+    for r in DETECTION_REASONS:
+        assert r in REASON_NOTES and REASON_NOTES[r].strip(), r
+    assert set(REASON_NOTES) == set(DETECTION_REASONS)
+
+
+def test_INVENTORY_every_abstention_carries_found_false_and_never_a_crop():
+    """Privacy plus invariant 7 across the whole inventory, not just the happy
+    path: no reason may leak pixels and no abstention may look like a find."""
+    for want, d in _reason_battery().items():
+        assert d.found is (want == "screen_found"), want
+        for name, value in vars(d).items():
+            if isinstance(value, np.ndarray):
+                assert value.shape == (4, 2), f"{want}/{name}: {value.shape}"
+        assert not any(isinstance(v, np.ndarray) for v in d.as_dict().values())
 
 
 # =============================================================================

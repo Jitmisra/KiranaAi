@@ -33,10 +33,32 @@ INVARIANT 7: unknown gateway answers abstain (back to INDETERMINATE or parked
 for a human with needs_human=1). They never guess a settlement.
 INVARIANT 6: there is no payload construction anywhere in this module. It moves
 state machines and reads the gateway; it cannot mint a request.
+
+Two operational properties that are as load-bearing as the safety ones:
+
+  * THE ABSTENTION LOOP IS BOUNDED. Abstaining forever is not safety, it is a
+    stuck till: an INDETERMINATE intent would be re-polled by every sweep until
+    the end of time, writing two audit lines a turn and never reaching a person.
+    `max_retrieve_attempts` caps the machine's budget; when it runs out the row
+    moves to ESCALATED, which no sweep will ever touch again. Escalation is a
+    hand-off, not a decision: it settles nothing, fails nothing, and — because
+    `resolve_escalated` takes no gateway argument — it cannot charge anything.
+
+  * TWO PROCESSES MAY SHARE ONE LEDGER FILE. `Ledger` caches the chain head in
+    memory, which is correct for a single writer and silently wrong for two:
+    the second process appends a line whose prev_hash is whatever the head was
+    when IT opened the file, and `ledger.verify` reports a chain break on the
+    very next line. A threading.RLock cannot see another process. So every
+    append this module makes is taken under an `flock` on a sidecar lock file,
+    and the true head is re-read from disk under that lock first. Measured: 4
+    processes x 12 intents (144 lines) breaks the chain at line 2 without this
+    and verifies clean with it — see
+    tests/test_kernel.py::test_two_processes_sharing_one_ledger_keep_the_chain_intact
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -45,8 +67,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
+try:                                    # POSIX only; see ledger_lock_is_cross_process
+    import fcntl as _fcntl
+except ImportError:                     # pragma: no cover - Windows
+    _fcntl = None                       # type: ignore[assignment]
+
 from .clock import Clock
-from .ledger import Ledger, canonical
+from .ledger import GENESIS, Ledger, canonical
 from .money import MoneyError, paise
 
 MODULE = "kernel"
@@ -59,22 +86,45 @@ SETTLED = "SETTLED"
 INDETERMINATE = "INDETERMINATE"
 RETRIEVE = "RETRIEVE"
 FAILED = "FAILED"
+#: The machine has spent its whole retrieve budget and still does not know
+#: whether money moved. Terminal for every automatic code path in this module;
+#: only `resolve_escalated` (a human) or a late authoritative webhook moves it.
+ESCALATED = "ESCALATED"
 
-ALL_STATES = frozenset({NEW, CALLING, SETTLED, INDETERMINATE, RETRIEVE, FAILED})
+ALL_STATES = frozenset(
+    {NEW, CALLING, SETTLED, INDETERMINATE, RETRIEVE, FAILED, ESCALATED}
+)
+#: States in which the MONEY question is answered. ESCALATED is deliberately
+#: NOT here: it is terminal for the sweeper but the money is still unknown, and
+#: calling it terminal would let a caller mistake a stuck row for a decision.
 TERMINAL = frozenset({SETTLED, FAILED})
+#: States no automatic sweep may drive forward.
+MACHINE_TERMINAL = frozenset({SETTLED, FAILED, ESCALATED})
+
+#: How many times the machine may ask the gateway "what happened to this nonce?"
+#: before handing the row to a person. Each attempt is one read-only lookup and
+#: two audit lines, so an uncapped loop is both unbounded work and unbounded
+#: log. Eight is enough to ride out a multi-minute gateway outage on a one
+#: minute sweep and small enough that a genuinely stuck intent reaches a human
+#: within the same shift.
+DEFAULT_MAX_RETRIEVE_ATTEMPTS = 8
 
 # NEW -> CALLING -> (SETTLED | INDETERMINATE | FAILED)
 # INDETERMINATE -> RETRIEVE -> (SETTLED | FAILED | back to INDETERMINATE)
 # INDETERMINATE -> SETTLED is allowed for a late authoritative webhook.
+# (INDETERMINATE | RETRIEVE) -> ESCALATED when the retrieve budget is spent.
+# ESCALATED -> (SETTLED | FAILED) only through a human, or a late authoritative
+# webhook; needs_human stays raised either way so a person still signs it off.
 # FAILED -> SETTLED is allowed but always raises needs_human: it means an
 # earlier conclusion of "no money moved" was wrong, and a person must look.
 LEGAL: dict[str, frozenset[str]] = {
     NEW: frozenset({CALLING}),
     CALLING: frozenset({SETTLED, INDETERMINATE, FAILED}),
-    INDETERMINATE: frozenset({RETRIEVE, SETTLED}),
-    RETRIEVE: frozenset({SETTLED, FAILED, INDETERMINATE}),
+    INDETERMINATE: frozenset({RETRIEVE, SETTLED, ESCALATED}),
+    RETRIEVE: frozenset({SETTLED, FAILED, INDETERMINATE, ESCALATED}),
     SETTLED: frozenset(),
     FAILED: frozenset({SETTLED}),
+    ESCALATED: frozenset({SETTLED, FAILED}),
 }
 
 # Gateway status vocabulary. Anything outside these three sets is UNKNOWN and
@@ -116,7 +166,17 @@ class Intent:
 
     @property
     def is_terminal(self) -> bool:
+        """The money question is answered. ESCALATED is NOT terminal here."""
         return self.state in TERMINAL
+
+    @property
+    def is_escalated(self) -> bool:
+        return self.state == ESCALATED
+
+    @property
+    def machine_done(self) -> bool:
+        """No automatic code path will ever move this row again."""
+        return self.state in MACHINE_TERMINAL
 
 
 @dataclass(frozen=True)
@@ -200,6 +260,25 @@ def new_nonce() -> str:
     return "gwn_" + secrets.token_hex(16)
 
 
+#: Read size for the tail scan that recovers another process's chain head.
+_LEDGER_SCAN_CHUNK = 1 << 16
+
+
+def _hash_of_line(raw: bytes) -> str:
+    """The `hash` field of one ledger line, or genesis if the line is unusable.
+
+    A line we cannot read is not a chain we may extend, so this abstains to
+    GENESIS rather than guessing; `ledger.verify` will then say so loudly on the
+    very next check instead of the corruption spreading silently.
+    """
+    try:
+        rec = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return GENESIS
+    h = rec.get("hash") if isinstance(rec, dict) else None
+    return h if isinstance(h, str) and h else GENESIS
+
+
 def _row_to_intent(row: sqlite3.Row) -> Intent:
     return Intent(
         nonce=row["nonce"],
@@ -235,6 +314,7 @@ class Kernel:
         *,
         busy_timeout_ms: int = 15000,
         synchronous: str = "FULL",
+        max_retrieve_attempts: int = DEFAULT_MAX_RETRIEVE_ATTEMPTS,
     ) -> None:
         p = os.fspath(db_path)
         if p in (":memory:", "") or p.startswith("file::memory:"):
@@ -249,6 +329,21 @@ class Kernel:
         if synchronous.upper() not in ("FULL", "NORMAL", "EXTRA"):
             raise KernelError(f"bad synchronous pragma: {synchronous!r}")
         self._synchronous = synchronous.upper()
+        if isinstance(max_retrieve_attempts, bool) or not isinstance(
+            max_retrieve_attempts, int
+        ):
+            raise KernelError(
+                f"max_retrieve_attempts must be an int, got "
+                f"{max_retrieve_attempts!r}. An unbounded retrieve loop is a "
+                "stuck till that never reaches a person."
+            )
+        if max_retrieve_attempts < 1:
+            raise KernelError(
+                f"max_retrieve_attempts must be >= 1, got {max_retrieve_attempts}. "
+                "Zero would escalate every indeterminate intent without ever "
+                "asking the gateway what happened."
+            )
+        self._max_retrieve = int(max_retrieve_attempts)
         # One re-entrant lock guards BOTH the clock advance and the ledger
         # append, so an audit line and its timestamp are atomic together.
         # Ledger keeps an in-memory head; concurrent appends would race it.
@@ -259,10 +354,16 @@ class Kernel:
         parent = os.path.dirname(os.path.abspath(p))
         if parent:
             os.makedirs(parent, exist_ok=True)
+        self._init_ledger_lock()
         with self._conn() as con:
             con.executescript(_SCHEMA)
 
     # ------------------------------------------------------------ plumbing
+
+    @property
+    def max_retrieve_attempts(self) -> int:
+        """The machine's budget for "what happened to this nonce?" lookups."""
+        return self._max_retrieve
 
     @property
     def open_connections(self) -> int:
@@ -270,6 +371,145 @@ class Kernel:
         network call is in flight; tests assert exactly that."""
         with self._conn_lock:
             return self._open_conns
+
+    # -------------------------------------------------- cross-process ledger
+
+    def _init_ledger_lock(self) -> None:
+        """Open the sidecar lock file and snapshot where the ledger file ends.
+
+        The lock is advisory and per open-file-description, so it serialises
+        appends between PROCESSES, which is exactly the case `threading.RLock`
+        cannot see. It is taken and released around each append rather than held
+        for the Kernel's lifetime: a lock held at open would make a second
+        writer fail rather than wait, and a till that refuses to audit because
+        another process has the file is a worse failure than a queued append.
+        """
+        self._ledger_path = os.fspath(self.ledger.path)
+        self._ledger_lock_path = self._ledger_path + ".lock"
+        parent = os.path.dirname(os.path.abspath(self._ledger_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._lock_fd: int | None = None
+        if _fcntl is not None:
+            self._lock_fd = os.open(
+                self._ledger_lock_path, os.O_CREAT | os.O_RDWR, 0o600
+            )
+        else:                                   # pragma: no cover - Windows
+            # Still create the file so the path is observable, but say plainly
+            # that this build has thread-level protection only.
+            with open(self._ledger_lock_path, "a", encoding="utf-8"):
+                pass
+        # Where our knowledge of the file ends. Anything past this offset was
+        # written by somebody else and must be read before we append.
+        self._ledger_size = self._file_size(self._ledger_path)
+        self._ledger_head = self.ledger.head
+        self._ledger_count = self.ledger.count
+        # Ledger is a plain dataclass with a cached head. If that ever stops
+        # being true, fail here rather than silently writing a broken chain.
+        self._head_syncable = hasattr(self.ledger, "_head") and hasattr(
+            self.ledger, "_count"
+        )
+
+    @property
+    def ledger_lock_path(self) -> str:
+        """The sidecar file whose flock serialises appends across processes."""
+        return self._ledger_lock_path
+
+    @property
+    def ledger_lock_is_cross_process(self) -> bool:
+        """True when appends are safe between processes, not just threads.
+
+        False on a platform without `fcntl`, or against a ledger whose head is
+        not re-readable. Reported rather than assumed, so a deployment can tell
+        what it actually has instead of trusting a docstring.
+        """
+        return self._lock_fd is not None and self._head_syncable
+
+    @staticmethod
+    def _file_size(path: str) -> int:
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    @contextmanager
+    def _ledger_file_lock(self) -> Iterator[None]:
+        if self._lock_fd is None:               # pragma: no cover - Windows
+            yield
+            return
+        _fcntl.flock(self._lock_fd, _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(self._lock_fd, _fcntl.LOCK_UN)
+
+    def _sync_ledger_head(self) -> None:
+        """Re-read the true chain head from disk. MUST run under the file lock.
+
+        The ledger is append-only, so anything we have not seen is a contiguous
+        tail: we scan only the bytes past our last known offset instead of the
+        whole file, which keeps a shared ledger O(new bytes) per append rather
+        than O(file). A file that SHRANK was replaced under us, so that case
+        rescans from genesis rather than trusting a stale offset.
+        """
+        if not self._head_syncable:             # pragma: no cover - duck-typed
+            return
+        size = self._file_size(self._ledger_path)
+        if size == self._ledger_size:
+            return                              # nobody else has written
+        if size < self._ledger_size:
+            start, head, count = 0, GENESIS, 0
+        else:
+            start = self._ledger_size
+            head, count = self._ledger_head, self._ledger_count
+
+        last = b""
+        try:
+            f = open(self._ledger_path, "rb")
+        except FileNotFoundError:               # pragma: no cover - raced unlink
+            head, count, size = GENESIS, 0, 0
+        else:
+            with f:
+                f.seek(start)
+                carry = b""
+                while True:
+                    chunk = f.read(_LEDGER_SCAN_CHUNK)
+                    if not chunk:
+                        break
+                    carry += chunk
+                    parts = carry.split(b"\n")
+                    carry = parts.pop()
+                    for raw in parts:
+                        if raw.strip():
+                            last, count = raw, count + 1
+                if carry.strip():
+                    last, count = carry, count + 1
+        if last:
+            head = _hash_of_line(last)
+
+        self._ledger_size, self._ledger_head, self._ledger_count = size, head, count
+        # Push the truth back into the shared Ledger object. Private attributes
+        # on purpose: Ledger has no public setter, and inventing one would mean
+        # editing a module this file does not own.
+        self.ledger._head = head                # noqa: SLF001
+        self.ledger._count = count              # noqa: SLF001
+
+    def audit_append(self, module: str, **fields: Any) -> str:
+        """Append one ledger line safely against other PROCESSES, not just threads.
+
+        Public because `paisa` shares this ledger file and must go through the
+        same lock; a service that audits around the kernel would reintroduce
+        exactly the chain break this method exists to prevent.
+        """
+        with self._audit_lock, self._ledger_file_lock():
+            self._sync_ledger_head()
+            h = self.ledger.append(
+                ts=self.clock.now_iso(), module=module, **fields
+            )
+            self._ledger_size = self._file_size(self._ledger_path)
+            self._ledger_head = h
+            self._ledger_count = self.ledger.count
+            return h
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -307,22 +547,32 @@ class Kernel:
                **extra: Any) -> str:
         """Append one audit line. Called AFTER the DB commit, so the ledger can
         never claim a transition that did not persist."""
-        with self._audit_lock:
-            return self.ledger.append(
-                ts=self.clock.now_iso(),
-                module=MODULE,
-                event=event,
-                nonce=it.nonce,
-                session_id=it.session_id,
-                cycle=it.cycle,
-                amount_paise=it.amount_paise,
-                from_state=from_state,
-                to_state=it.state,
-                payment_id=it.payment_id,
-                reason=it.reason,
-                needs_human=it.needs_human,
-                **extra,
-            )
+        return self.audit_append(
+            MODULE,
+            event=event,
+            nonce=it.nonce,
+            session_id=it.session_id,
+            cycle=it.cycle,
+            amount_paise=it.amount_paise,
+            from_state=from_state,
+            to_state=it.state,
+            payment_id=it.payment_id,
+            reason=it.reason,
+            needs_human=it.needs_human,
+            **extra,
+        )
+
+    def close(self) -> None:
+        """Release the ledger lock fd. Idempotent; the DB holds no open handle."""
+        fd, self._lock_fd = getattr(self, "_lock_fd", None), None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:                     # pragma: no cover
+                pass
+
+    def __del__(self) -> None:                  # pragma: no cover - GC timing
+        self.close()
 
     # ------------------------------------------------------------ reads
 
@@ -378,6 +628,15 @@ class Kernel:
             ).fetchall()
         return [_row_to_intent(r) for r in rows]
 
+    def escalated_intents(self) -> list[Intent]:
+        """Rows the machine gave up on. The operator's queue, and nothing else."""
+        with self._conn() as con:
+            rows = con.execute(
+                f"SELECT {_COLS} FROM intents WHERE state=? ORDER BY created_ts, nonce",
+                (ESCALATED,),
+            ).fetchall()
+        return [_row_to_intent(r) for r in rows]
+
     # ------------------------------------------------------------ step 1
 
     def create_intent(self, session_id: str, amount_paise: int,
@@ -427,7 +686,8 @@ class Kernel:
                     payment_id: str | None = None, reason: str | None = None,
                     bump_attempts: bool = False,
                     bump_retrieve: bool = False,
-                    needs_human: bool | None = None) -> Intent:
+                    needs_human: bool | None = None,
+                    audit_extra: Mapping[str, Any] | None = None) -> Intent:
         with self._tx() as con:
             row = con.execute(
                 f"SELECT {_COLS} FROM intents WHERE nonce=?", (nonce,)
@@ -465,7 +725,8 @@ class Kernel:
             ).fetchone()
         # connection closed here
         it = _row_to_intent(row)
-        self._audit(event, it, from_state=cur.state)
+        self._audit(event, it, from_state=cur.state,
+                    **(dict(audit_extra) if audit_extra else {}))
         return it
 
     def mark_calling(self, nonce: str) -> Intent:
@@ -530,12 +791,25 @@ class Kernel:
         twice, or a hundred times, cannot move money twice.
         """
         cur = self.get(nonce)
-        if cur.is_terminal:
-            return cur  # already decided; do not disturb it
+        if cur.machine_done:
+            # SETTLED/FAILED are decided; ESCALATED belongs to a person now.
+            # Either way the gateway is not called: `gateway_lookup_fn` is never
+            # reached, which is what makes repeated sweeps free.
+            return cur
         if cur.state in (NEW, CALLING):
             raise IllegalTransition(
                 f"{nonce} is {cur.state}: mark_indeterminate() it first. "
                 "Reconciling a live call would race the call itself."
+            )
+        if cur.retrieve_attempts >= self._max_retrieve:
+            # The budget is spent. Abstaining once more would just re-queue the
+            # same question forever; hand it to a human instead. Note where this
+            # sits: BEFORE the lookup, so escalation costs nothing and, more
+            # importantly, cannot be reached from a code path that charges.
+            return self._escalate(
+                nonce,
+                f"retrieve_budget_exhausted:{cur.retrieve_attempts}"
+                f"/{self._max_retrieve}",
             )
         if cur.state == INDETERMINATE:
             cur = self._transition(nonce, RETRIEVE, event="intent.retrieve",
@@ -607,8 +881,79 @@ class Kernel:
         self._audit("intent.parked", it, from_state=cur.state)
         return it
 
+    def _escalate(self, nonce: str, reason: str) -> Intent:
+        """The machine is out of budget. Stop, flag a human, charge nothing.
+
+        This is the terminal case of INVARIANT 7: after N honest attempts the
+        gateway still will not say what happened, and the only remaining moves
+        are "guess" or "ask a person". It parks in ESCALATED, which no sweep
+        reads, so the abstention loop is bounded by construction rather than by
+        an operator remembering to look.
+        """
+        spent = self.get(nonce).retrieve_attempts
+        return self._transition(
+            nonce, ESCALATED, event="intent.escalated", reason=reason,
+            needs_human=True, audit_extra={
+                "retrieve_attempts": spent,
+                "max_retrieve_attempts": self._max_retrieve,
+            },
+        )
+
+    def resolve_escalated(
+        self,
+        nonce: str,
+        outcome: str,
+        *,
+        operator: str,
+        payment_id: str | None = None,
+        note: str = "",
+    ) -> Intent:
+        """A human closes an ESCALATED row. Takes no gateway: it cannot charge.
+
+        `outcome` is SETTLED (a person found the payment on the gateway's own
+        dashboard and is copying its id in) or FAILED (a person confirmed no
+        money moved). needs_human stays raised afterwards so the row keeps its
+        "a person decided this" mark in every later report.
+        """
+        if not isinstance(operator, str) or not operator.strip():
+            raise KernelError(
+                "resolve_escalated needs a non-empty operator: an unattributed "
+                "manual settlement is indistinguishable from a bug."
+            )
+        if outcome not in (SETTLED, FAILED):
+            raise KernelError(
+                f"a human may resolve an escalated intent to {SETTLED} or "
+                f"{FAILED}, not {outcome!r}."
+            )
+        if outcome == SETTLED and not (isinstance(payment_id, str) and payment_id.strip()):
+            raise KernelError(
+                "resolving to SETTLED needs the gateway's payment_id. Without a "
+                "reference this is a guess, and INVARIANT 7 forbids guessing."
+            )
+        cur = self.get(nonce)
+        if cur.state != ESCALATED:
+            raise IllegalTransition(
+                f"{nonce} is {cur.state}, not {ESCALATED}; resolve_escalated is "
+                "only for rows the machine has given up on."
+            )
+        reason = f"human_resolved:{operator.strip()}"
+        if note:
+            reason = f"{reason}:{note}"
+        return self._transition(
+            nonce, outcome, event="intent.resolved",
+            payment_id=payment_id if outcome == SETTLED else None,
+            reason=reason, needs_human=True,
+            audit_extra={"operator": operator.strip(), "note": note},
+        )
+
     def sweep(self, gateway_lookup_fn: GatewayLookup) -> list[Intent]:
-        """Reconcile every machine-resolvable unknown. Safe to run on a timer."""
+        """Reconcile every machine-resolvable unknown. Safe to run on a timer.
+
+        Bounded work: `intents_needing_retrieve` already excludes ESCALATED and
+        parked rows, and `reconcile` escalates anything out of budget, so the
+        set this iterates over strictly shrinks even against a gateway that
+        never answers.
+        """
         return [self.reconcile(it.nonce, gateway_lookup_fn)
                 for it in self.intents_needing_retrieve()]
 
@@ -617,5 +962,6 @@ __all__ = [
     "Kernel", "Intent", "GatewayResult", "KernelError", "IllegalTransition",
     "UnknownIntent", "idem_key", "new_nonce",
     "NEW", "CALLING", "SETTLED", "INDETERMINATE", "RETRIEVE", "FAILED",
-    "ALL_STATES", "TERMINAL", "LEGAL",
+    "ESCALATED", "DEFAULT_MAX_RETRIEVE_ATTEMPTS",
+    "ALL_STATES", "TERMINAL", "MACHINE_TERMINAL", "LEGAL",
 ]

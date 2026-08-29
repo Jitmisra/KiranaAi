@@ -9,24 +9,33 @@ Nothing on this page was typed by a person. Each row is rebuilt from
 character, so a stale number is a build failure rather than a rounding
 story.
 
-- generated at `2026-08-28T21:22:49.041+00:00` <!--@ generated_at -->
-- git sha `4581dd047afd98e358be6073185afa25b7f13f5d-dirty` <!--@ git_sha -->
+- generated at `2026-08-28T22:00:47.960+00:00` <!--@ generated_at -->
+- git sha `650fe9a726c5a18e70c1acfa71fda88737c10b70-dirty` <!--@ git_sha -->
 - seeds `[0, 1, 2]` <!--@ seeds -->
 - bench version `1` <!--@ bench_version -->
-- deterministic content hash `08fe8224a43d3e39a054f83b8cdb89f5494cf535c7b78ced5f7b4fa6a75a7f93` <!--@ content_hash -->
+- deterministic content hash `3381b2313bb69ff39afe0f25699d08b43c02646661543d12f8c9244af640ccd8` <!--@ content_hash -->
 
 ## Results
 
 `worst` is the worst single sample across every seed, never the best and
-never only the mean.
+never only the mean. `worst seed` is the seed that owned that sample;
+ties go to the lowest seed number.
 
-| benchmark | status | unit | n | mean | worst | best | median | p95 | worst seed | <!-- bench:ignore -->
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| plane_reproj_rmse_px | OK | px | 27 | 0.2307 | 0.2755 | 0.1282 | 0.2412 | 0.2729 | 1 | <!--@row bench:plane_reproj_rmse_px -->
-| placement_footprint_err_mm | OK | mm | 30 | 0.476 | 0.702 | 0.354 | 0.457 | 0.696 | 2 | <!--@row bench:placement_footprint_err_mm -->
-| sellevent_recall | OK | fraction | 3 | 0.9583 | 0.8750 | 1.0000 | 1.0000 | 0.8750 | 1 | <!--@row bench:sellevent_recall -->
-| kernel_exactly_once | OK | fraction | 6 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0 | <!--@row bench:kernel_exactly_once -->
-| ledger_verify_throughput | OK | lines/s | 9 | 224441 | 219406 | 230664 | 225021 | 219406 | 0 | <!--@row bench:ledger_verify_throughput -->
+Both percentile columns are true nearest-rank percentiles of the same
+sample distribution, computed the same way for every row. Which end is
+the bad one depends on the benchmark's direction, so the row names it
+rather than one header claiming it for every row.
+
+A benchmark whose row reads NOT_MEASURED ran without raising and came
+back with no samples at all. It publishes nothing; see Findings.
+
+| benchmark | status | unit | n | mean | worst | best | median | p95 | p5 | bad tail | worst seed | <!-- bench:ignore -->
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| plane_reproj_rmse_px | OK | px | 27 | 0.2307 | 0.2755 | 0.1282 | 0.2412 | 0.2729 | 0.1282 | p95 | 1 | <!--@row bench:plane_reproj_rmse_px -->
+| placement_footprint_err_mm | OK | mm | 30 | 0.476 | 0.702 | 0.354 | 0.457 | 0.696 | 0.380 | p95 | 2 | <!--@row bench:placement_footprint_err_mm -->
+| sellevent_recall | OK | fraction | 3 | 0.9583 | 0.8750 | 1.0000 | 1.0000 | 1.0000 | 0.8750 | p5 | 1 | <!--@row bench:sellevent_recall -->
+| kernel_exactly_once | OK | fraction | 6 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | p5 | 0 | <!--@row bench:kernel_exactly_once -->
+| ledger_verify_throughput | OK | lines/s | 9 | 221101 | 218947 | 222161 | 221484 | 222161 | 218947 | p5 | 0 | <!--@row bench:ledger_verify_throughput -->
 
 ## Worst case per seed
 
@@ -36,7 +45,7 @@ never only the mean.
 | placement_footprint_err_mm | OK | 0.510 | 0.696 | 0.702 | <!--@row seed:placement_footprint_err_mm -->
 | sellevent_recall | OK | 1.0000 | 0.8750 | 1.0000 | <!--@row seed:sellevent_recall -->
 | kernel_exactly_once | OK | 1.0000 | 1.0000 | 1.0000 | <!--@row seed:kernel_exactly_once -->
-| ledger_verify_throughput | OK | 219406 | 220954 | 225021 | <!--@row seed:ledger_verify_throughput -->
+| ledger_verify_throughput | OK | 218947 | 221170 | 219650 | <!--@row seed:ledger_verify_throughput -->
 
 ## What each benchmark measures
 
@@ -93,5 +102,10 @@ Things the run said that nobody asked it. Each number is anchored to
   not — see Findings above, and do not read a recall below one here as
   the abstention machinery working until that split is closed.
 - A benchmark reported NOT BUILT has measured nothing at all. Its absence
-  is not evidence of anything.
+  is not evidence of anything. Neither is a benchmark reported
+  NOT_MEASURED: that one ran, and still has nothing to say.
+- The two percentile columns are nearest-rank over the pooled samples of
+  every seed. With a handful of samples per benchmark they are coarse,
+  and on a benchmark that reports one sample per seed they are just
+  order statistics of that short list. Read `worst`.
 

@@ -24,8 +24,9 @@
       ],
       "n": 6,
       "nondeterministic": {
-        "wall_s": 1.195
+        "wall_s": 0.936
       },
+      "p5": 1.0,
       "p95": 1.0,
       "per_seed": {
         "0": {
@@ -33,8 +34,10 @@
           "mean": 1.0,
           "median": 1.0,
           "n": 2,
+          "p5": 1.0,
           "p95": 1.0,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 1.0
         },
         "1": {
@@ -42,8 +45,10 @@
           "mean": 1.0,
           "median": 1.0,
           "n": 2,
+          "p5": 1.0,
           "p95": 1.0,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 1.0
         },
         "2": {
@@ -51,21 +56,25 @@
           "mean": 1.0,
           "median": 1.0,
           "n": 2,
+          "p5": 1.0,
           "p95": 1.0,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 1.0
         }
       },
       "polarity": "higher_is_better",
+      "seeds_with_no_samples": [],
       "status": "OK",
       "stdev": 0.0,
+      "tail_percentile": "p5",
       "unit": "fraction",
       "what": "rounds where racing threads produced exactly one debit",
       "worst": 1.0,
       "worst_seed": 0
     },
     "ledger_verify_throughput": {
-      "best": 230663.879468089,
+      "best": 222161.029185454,
       "decimals": 0,
       "detail": {
         "all_chains_verified": true,
@@ -74,8 +83,8 @@
         "repeats_per_chain": 3
       },
       "deterministic": false,
-      "mean": 224440.961296566,
-      "median": 225020.919894072,
+      "mean": 221101.099375076,
+      "median": 221483.942387791,
       "modules": [
         "gawaah.ledger",
         "gawaah.clock"
@@ -83,45 +92,54 @@
       "n": 9,
       "nondeterministic": {
         "bytes_written": 3401970,
-        "mean_build_s": 0.1431,
-        "wall_s": 0.592
+        "mean_build_s": 0.1377,
+        "wall_s": 0.579
       },
-      "p95": 219405.999958415,
+      "p5": 218947.13792582,
+      "p95": 222161.029185454,
       "per_seed": {
         "0": {
-          "best": 222516.859266093,
-          "mean": 220535.171124437,
-          "median": 219682.654148803,
+          "best": 222161.029185454,
+          "mean": 220657.834389044,
+          "median": 220865.336055857,
           "n": 3,
-          "p95": 219405.999958415,
-          "stdev": 1405.809447341,
-          "worst": 219405.999958415
+          "p5": 218947.13792582,
+          "p95": 222161.029185454,
+          "stdev": 1320.244160117,
+          "tail_percentile": "p5",
+          "worst": 218947.13792582
         },
         "1": {
-          "best": 227825.566701241,
-          "mean": 225013.231819701,
-          "median": 226260.340822622,
+          "best": 221976.10006688,
+          "mean": 221651.880500307,
+          "median": 221809.926859399,
           "n": 3,
-          "p95": 220953.787935242,
-          "stdev": 2940.725137454,
-          "worst": 220953.787935242
+          "p5": 221169.614574641,
+          "p95": 221976.10006688,
+          "stdev": 347.695940936,
+          "tail_percentile": "p5",
+          "worst": 221169.614574641
         },
         "2": {
-          "best": 230663.879468089,
-          "mean": 227774.480945561,
-          "median": 227638.643474523,
+          "best": 221846.832744202,
+          "mean": 220993.583235877,
+          "median": 221483.942387791,
           "n": 3,
-          "p95": 225020.919894072,
-          "stdev": 2305.730116095,
-          "worst": 225020.919894072
+          "p5": 219649.974575639,
+          "p95": 221846.832744202,
+          "stdev": 961.556213158,
+          "tail_percentile": "p5",
+          "worst": 219649.974575639
         }
       },
       "polarity": "higher_is_better",
+      "seeds_with_no_samples": [],
       "status": "OK",
-      "stdev": 3769.862931865,
+      "stdev": 1048.797863694,
+      "tail_percentile": "p5",
       "unit": "lines/s",
       "what": "from-genesis chain re-verification rate",
-      "worst": 219405.999958415,
+      "worst": 218947.13792582,
       "worst_seed": 0
     },
     "placement_footprint_err_mm": {
@@ -169,8 +187,9 @@
       ],
       "n": 30,
       "nondeterministic": {
-        "wall_s": 0.349
+        "wall_s": 0.352
       },
+      "p5": 0.379547093,
       "p95": 0.695785838,
       "per_seed": {
         "0": {
@@ -178,8 +197,10 @@
           "mean": 0.458518729,
           "median": 0.446898258,
           "n": 10,
+          "p5": 0.420074829,
           "p95": 0.510253669,
           "stdev": 0.031972167,
+          "tail_percentile": "p95",
           "worst": 0.510253669
         },
         "1": {
@@ -187,8 +208,10 @@
           "mean": 0.485724585,
           "median": 0.472110815,
           "n": 10,
+          "p5": 0.379547093,
           "p95": 0.695785838,
           "stdev": 0.089813915,
+          "tail_percentile": "p95",
           "worst": 0.695785838
         },
         "2": {
@@ -196,14 +219,18 @@
           "mean": 0.483148702,
           "median": 0.471227479,
           "n": 10,
+          "p5": 0.35356144,
           "p95": 0.701597351,
           "stdev": 0.090606818,
+          "tail_percentile": "p95",
           "worst": 0.701597351
         }
       },
       "polarity": "lower_is_better",
+      "seeds_with_no_samples": [],
       "status": "OK",
       "stdev": 0.076918783,
+      "tail_percentile": "p95",
       "unit": "mm",
       "what": "worse of the two measured edges vs the pasted truth",
       "worst": 0.701597351,
@@ -238,8 +265,9 @@
       ],
       "n": 27,
       "nondeterministic": {
-        "wall_s": 0.453
+        "wall_s": 0.443
       },
+      "p5": 0.128186386,
       "p95": 0.272943661,
       "per_seed": {
         "0": {
@@ -247,8 +275,10 @@
           "mean": 0.225461843,
           "median": 0.239749792,
           "n": 9,
+          "p5": 0.128186386,
           "p95": 0.272943661,
           "stdev": 0.044085593,
+          "tail_percentile": "p95",
           "worst": 0.272943661
         },
         "1": {
@@ -256,8 +286,10 @@
           "mean": 0.234533678,
           "median": 0.241200837,
           "n": 9,
+          "p5": 0.128186386,
           "p95": 0.275546488,
           "stdev": 0.040384953,
+          "tail_percentile": "p95",
           "worst": 0.275546488
         },
         "2": {
@@ -265,14 +297,18 @@
           "mean": 0.232184438,
           "median": 0.246819033,
           "n": 9,
+          "p5": 0.128186386,
           "p95": 0.272296381,
           "stdev": 0.039605271,
+          "tail_percentile": "p95",
           "worst": 0.272296381
         }
       },
       "polarity": "lower_is_better",
+      "seeds_with_no_samples": [],
       "status": "OK",
       "stdev": 0.041582842,
+      "tail_percentile": "p95",
       "unit": "px",
       "what": "marker reprojection RMSE across tilts and sensor noise",
       "worst": 0.275546488,
@@ -310,17 +346,20 @@
       ],
       "n": 3,
       "nondeterministic": {
-        "wall_s": 0.01
+        "wall_s": 0.012
       },
-      "p95": 0.875,
+      "p5": 0.875,
+      "p95": 1.0,
       "per_seed": {
         "0": {
           "best": 1.0,
           "mean": 1.0,
           "median": 1.0,
           "n": 1,
+          "p5": 1.0,
           "p95": 1.0,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 1.0
         },
         "1": {
@@ -328,8 +367,10 @@
           "mean": 0.875,
           "median": 0.875,
           "n": 1,
+          "p5": 0.875,
           "p95": 0.875,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 0.875
         },
         "2": {
@@ -337,14 +378,18 @@
           "mean": 1.0,
           "median": 1.0,
           "n": 1,
+          "p5": 1.0,
           "p95": 1.0,
           "stdev": 0.0,
+          "tail_percentile": "p5",
           "worst": 1.0
         }
       },
       "polarity": "higher_is_better",
+      "seeds_with_no_samples": [],
       "status": "OK",
       "stdev": 0.058925565,
+      "tail_percentile": "p5",
       "unit": "fraction",
       "what": "scripted OUT crossings the zone actually counted",
       "worst": 0.875,
@@ -355,9 +400,9 @@
     "only": [],
     "scale": 1.0
   },
-  "content_hash": "08fe8224a43d3e39a054f83b8cdb89f5494cf535c7b78ced5f7b4fa6a75a7f93",
-  "generated_at": "2026-08-28T21:22:49.041+00:00",
-  "git_sha": "4581dd047afd98e358be6073185afa25b7f13f5d-dirty",
+  "content_hash": "3381b2313bb69ff39afe0f25699d08b43c02646661543d12f8c9244af640ccd8",
+  "generated_at": "2026-08-28T22:00:47.960+00:00",
+  "git_sha": "650fe9a726c5a18e70c1acfa71fda88737c10b70-dirty",
   "modules": {
     "gawaah.chilla": {
       "built": true,

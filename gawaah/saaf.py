@@ -25,6 +25,17 @@ Two separate things, and they must not be conflated:
    `test_saaf.py::test_glare_frame_beats_sharp_frame_on_RAW_vlap` pins that
    failure as an executable fact.
 
+   Sitting under it, an ABSOLUTE focus floor, because the vLap gate has a blind
+   spot it cannot see out of. Both of its halves are burst-relative in effect:
+   `blur_rel_min * max(vLap)` obviously is, and `blur_var_min` only looks
+   absolute — vLap is quadratic in contrast and grows with texture density, so
+   across four in-focus synthetic scenes it spans a factor of 538 and one
+   number cannot mean "in focus" on all of them. A burst where EVERY frame is
+   defocused therefore has no worst frame, the relative floor sinks with it,
+   and the result comes back with `warning=""` — a confident super-resolution
+   claim built entirely out of mush. `blur_score` is scale-free and closes
+   that: see its docstring, and section 5b of `stack`.
+
 2. THE STACK (measured, reported with its number whatever it says). Shift-and-add
    super-resolution: register each admitted frame to the sharpest one with
    `cv2.findTransformECC`, splat every low-resolution sample into a `scale`x grid
@@ -89,6 +100,32 @@ DEFAULT_MAX_SHIFT_PX = 10.0    # beyond this the crop shows different content, n
 DEFAULT_SAT_LEVEL = 250        # 8-bit level counted as "blown"
 DEFAULT_SAT_FRAC_MAX = 0.02    # >2% blown pixels == specular glare, reject
 
+# --- the ABSOLUTE focus floor (see blur_score) -------------------------------
+# THE MEASURED BLIND SPOT THIS CLOSES. Both gates above are burst-RELATIVE in
+# effect: `blur_rel_min * max(vLap)` sinks with the burst, and `blur_var_min` is
+# an absolute number on a quantity (vLap) that is not absolute at all -- a sharp
+# dense-text crop scores 3.3e5 and a sharp low-texture packet crop 6.1e2, so one
+# threshold cannot mean the same thing on both. Measured consequence: a text
+# burst uniformly defocused to sigma 2.4 px keeps vLap at 97, sails past the
+# 60.0 floor, has no worst frame for the relative floor to find, and is returned
+# with warning="" and used=8/8. The identical frame inside a SHARP burst is
+# rejected. Same image, opposite verdict, decided by its neighbours.
+#
+# blur_score is scale-free by construction and does not have that problem.
+BLUR_SCORE_SPAN = 9            # Crete's published low-pass width, in px
+DEFAULT_MAX_BLUR_SCORE = 0.46  # above this the crop is out of focus, full stop
+
+# What that number MEANS, measured against this module's own ISO-12233
+# instrument (test_ACCEPTANCE_blur_score_is_calibrated_against_MTF50): across
+# 10 independent scenes -- base PSF 1.5 to 8.0 HR px x 2 edge slants, spanning
+# in-focus MTF50 from 0.179 to 0.513 cyc/px -- the blur score at
+# MTF50 = 0.15 cyc/px lands in 0.4573..0.4684, a spread of 0.0112 (+-1.2 %).
+# Re-measured on REGISTERED MEANS rather than single frames it lands in
+# 0.4594..0.4682, the same window, which is what licenses one constant for
+# both applications. So the ceiling is a threshold on RESOLUTION, not texture:
+BLUR_SCORE_MTF50_CYC_PX = 0.15   # == 30 % of the low-resolution Nyquist limit
+                                 # == a total Gaussian PSF wider than ~1.25 px
+
 # Reconstruction-kernel width, HR px. Swept against ground truth, not guessed;
 # see BurstStacker._splat_path.
 DEFAULT_SPLAT_SIGMA = 0.30
@@ -110,6 +147,7 @@ R_GLARE = "glare"
 R_ECC_FAILED = "ecc_failed"
 R_SHIFT_TOO_LARGE = "shift_too_large"
 R_WARP_NOT_FINITE = "warp_not_finite"
+R_DEFOCUS = "defocus"
 
 # --- warning codes -----------------------------------------------------------
 W_NONE = ""
@@ -117,6 +155,7 @@ W_ALL_REJECTED = "ALL_FRAMES_REJECTED"
 W_SINGLE_FRAME = "SINGLE_FRAME"
 W_NO_DIVERSITY = "NO_SUBPIXEL_DIVERSITY"
 W_DEGENERATE_PHASE = "DEGENERATE_SAMPLING_PHASE"
+W_UNIFORMLY_DEFOCUSED = "BURST_UNIFORMLY_DEFOCUSED"
 
 
 class SaafError(ValueError):
@@ -171,6 +210,82 @@ def variance_of_laplacian(gray: np.ndarray, sat_level: int | None = None) -> flo
     if keep.size < max(64, lap.size // 20):
         return 0.0
     return float(keep.var())
+
+
+def blur_score(gray: np.ndarray, span: int = BLUR_SCORE_SPAN) -> float:
+    """No-reference DEFOCUS score in [0, 1]. Higher is blurrier. Scale-free.
+
+    Crete et al. 2007, "The blur effect: perception and estimation with a new
+    no-reference perceptual blur metric". Blur the image again along one axis
+    and ask how much neighbour-to-neighbour variation that SECOND blur was able
+    to destroy. A sharp image has a lot left to lose; an already-defocused one
+    has almost nothing, because its high frequencies are gone already.
+
+        D_f = |first difference of the frame|
+        D_b = |first difference of the re-blurred frame|
+        lost = max(0, D_f - D_b)              # variation the re-blur removed
+        score = (sum(D_f) - sum(lost)) / sum(D_f)
+
+    WHY THIS AND NOT AN ABSOLUTE vLap THRESHOLD, which is what stood here
+    before. The score is a RATIO of the same functional applied twice, so every
+    multiplicative property of the scene cancels: contrast, exposure, albedo,
+    and the sheer amount of texture. Measured on the synthetic targets, vLap
+    spans 6.1e2 to 3.3e5 across scenes that are all perfectly in focus -- a
+    factor of 500, which is why a single absolute vLap number cannot mean
+    "in focus" -- while blur_score holds 0.11..0.30 across the same set and
+    rises monotonically with defocus on every one of them.
+
+    It is calibrated, not guessed: across 10 independent scenes the score at
+    MTF50 = 0.15 cycles/px lands in 0.457..0.469 (spread 0.012), so
+    DEFAULT_MAX_BLUR_SCORE = 0.46 is a threshold on RESOLUTION.
+
+    Two honest limits, both pinned by tests rather than left to be discovered:
+
+    - ADDITIVE NOISE MAKES A BLURRED FRAME LOOK SHARP. Noise is white, the
+      re-blur destroys it completely, so `lost` is large and the score falls.
+      Measured per-frame: a burst defocused to 2.4 px scores 0.476 clean and
+      0.264 with 4 grey levels of sensor noise, and the per-frame gate stops
+      firing from 1 LSB upward. That is why the check is ALSO asked of the
+      registered mean (stack step 5b), where noise is down by sqrt(N) and the
+      defocus is untouched: the same question, asked of an image that can
+      answer it. Tolerance measured there is 2-8 LSB depending on the scene.
+      Beyond that envelope the burst is admitted and NOTHING in this module
+      catches it -- noise inflates vLap too, so the vLap floors are blinded in
+      the same direction, and one grey level is enough to take a 4.0 px
+      defocus from vLap 19 (rejected) to 105 (admitted). Both halves are
+      pinned: test_HONEST_enough_noise_still_hides_a_defocused_burst and
+      test_HONEST_sensor_noise_inverts_the_absolute_vLap_floor. The bias has
+      ONE direction -- noise can hide a bad burst, it can never condemn a good
+      one -- so the gate never causes a false abstention.
+    - A FEATURELESS frame scores 0.0, i.e. "sharp". Nothing here can tell a
+      blank wall from perfect focus. That case is caught upstream by the
+      absolute vLap floor, which a flat frame fails outright.
+
+    Returns the worse (higher) of the two axes: defocus is isotropic, so a
+    frame that is sharp along one axis only is motion-smeared, not focused,
+    and the smeared axis is the honest one to report.
+    """
+    if int(span) < 2:
+        raise SaafError(f"blur_score span must be >= 2 px, got {span!r}")
+    g = _as_gray_u8(gray).astype(np.float64)
+    if g.shape[0] < 2 or g.shape[1] < 2:
+        raise SaafError(f"blur_score needs at least 2x2 px, got {g.shape}")
+    worst = 0.0
+    # cv2 Size is (width, height): (1, span) averages down a column, which is
+    # the axis-0 difference; (span, 1) averages along a row, i.e. axis 1.
+    for axis, ksize in ((0, (1, int(span))), (1, (int(span), 1))):
+        b = cv2.blur(g, ksize, borderType=cv2.BORDER_REPLICATE)
+        d_f = np.abs(np.diff(g, axis=axis))
+        d_b = np.abs(np.diff(b, axis=axis))
+        # NOT named `total`: tools/lint_no_float.py reads that as a money
+        # identifier, and invariant 1 says money is integer paise. This is
+        # summed edge energy in grey levels and has nothing to do with money.
+        edge_energy = float(d_f.sum())
+        if edge_energy <= 1e-12:
+            continue        # no variation along this axis: it has no opinion
+        lost = float(np.maximum(0.0, d_f - d_b).sum())
+        worst = max(worst, (edge_energy - lost) / edge_energy)
+    return float(worst)
 
 
 def mtf50_slanted_edge(roi: np.ndarray, bin_width: float = 0.25,
@@ -286,6 +401,7 @@ class FrameReport:
     dx: float | None = None          # translation at ROI centre, frame px
     dy: float | None = None
     shift_px: float | None = None    # mean corner displacement (captures rotation)
+    blur_score: float = 0.0          # absolute, scale-free defocus score, 0..1
 
     @property
     def code(self) -> str:
@@ -321,6 +437,10 @@ class StackResult:
     diversity_x: float = 0.0
     diversity_y: float = 0.0
     baseline: np.ndarray | None = None  # the fair single-frame comparison
+    # blur_score of the REGISTERED MEAN: the burst's absolute focus, measured
+    # on an image with sqrt(N) less noise than any single frame. 0.0 when the
+    # burst never got far enough to have one.
+    burst_blur_score: float = 0.0
 
     @property
     def degraded(self) -> bool:
@@ -424,11 +544,19 @@ class BurstStacker:
                  min_shift_px: float = DEFAULT_MIN_SHIFT_PX,
                  min_diversity: float = DEFAULT_MIN_DIVERSITY,
                  motion: str = "euclidean",
-                 splat_sigma: float = DEFAULT_SPLAT_SIGMA) -> None:
+                 splat_sigma: float = DEFAULT_SPLAT_SIGMA,
+                 max_blur_score: float = DEFAULT_MAX_BLUR_SCORE) -> None:
         if not isinstance(scale, (int, np.integer)) or scale < 1:
             raise SaafError(f"scale must be an integer >= 1, got {scale!r}")
         if motion not in ("euclidean", "translation"):
             raise SaafError(f"motion must be 'euclidean' or 'translation', got {motion!r}")
+        if not (0.0 < float(max_blur_score) <= 1.0):
+            raise SaafError(
+                f"max_blur_score must be in (0, 1]; got {max_blur_score!r}. "
+                f"1.0 disables the absolute focus gate, which is only ever a "
+                f"control condition -- see the uniformly-defocused burst tests"
+            )
+        self.max_blur_score = float(max_blur_score)
         self.splat_sigma = float(splat_sigma)
         self.scale = int(scale)
         self.blur_var_min = float(blur_var_min)
@@ -463,14 +591,13 @@ class BurstStacker:
         sat = [saturated_fraction(g, self.sat_level) for g in grays]
         vlap_raw = [variance_of_laplacian(g) for g in grays]
         vlap = [variance_of_laplacian(g, sat_level=self.sat_level) for g in grays]
+        bscore = [blur_score(g) for g in grays]
 
-        # The blur floor is the stricter of an ABSOLUTE threshold (catches a
-        # burst that is uniformly unusable, where a purely relative gate would
-        # happily admit the best of a bad lot) and a BURST-RELATIVE one
-        # (catches the bad frames inside an otherwise good burst, which an
-        # absolute threshold tuned for one scene's texture cannot do).
-        # Frames blown past the glare gate are excluded from setting the
-        # reference level, so one glare frame cannot raise the bar for the rest.
+        # The vLap floor is the stricter of a nominally absolute threshold and
+        # a BURST-RELATIVE one (which catches the bad frames inside an
+        # otherwise good burst). Frames blown past the glare gate are excluded
+        # from setting the reference level, so one glare frame cannot raise the
+        # bar for the rest.
         clean = [vlap[i] for i in range(n) if sat[i] <= self.sat_frac_max]
         vmax = max(clean) if clean else 0.0
         floor = max(self.blur_var_min, self.blur_rel_min * vmax)
@@ -482,25 +609,60 @@ class BurstStacker:
                 reports[i] = FrameReport(
                     i, False,
                     f"{R_GLARE}: saturated fraction {sat[i]:.4f} > {self.sat_frac_max:.4f}",
-                    vlap[i], vlap_raw[i], sat[i])
+                    vlap[i], vlap_raw[i], sat[i], blur_score=bscore[i])
             elif vlap[i] < floor:
                 which = ("absolute" if self.blur_var_min >= self.blur_rel_min * vmax
                          else f"{self.blur_rel_min:.0%} of burst best {vmax:.1f}")
                 reports[i] = FrameReport(
                     i, False,
                     f"{R_BLUR}: guarded vLap {vlap[i]:.1f} < {floor:.1f} ({which})",
-                    vlap[i], vlap_raw[i], sat[i])
+                    vlap[i], vlap_raw[i], sat[i], blur_score=bscore[i])
+            elif bscore[i] > self.max_blur_score:
+                # THE ABSOLUTE FOCUS FLOOR. Ordered AFTER the vLap gate on
+                # purpose: when a frame fails both, R_BLUR is the more
+                # actionable label (its neighbours are fine, re-shoot that
+                # frame) while R_DEFOCUS means the optics were never in focus
+                # and the whole burst has to be re-captured. The escalation to
+                # the burst level happens below, when EVERY frame lands here.
+                reports[i] = FrameReport(
+                    i, False,
+                    f"{R_DEFOCUS}: blur score {bscore[i]:.3f} > "
+                    f"{self.max_blur_score:.3f}, i.e. MTF50 below about "
+                    f"{BLUR_SCORE_MTF50_CYC_PX:.2f} cyc/px "
+                    f"({BLUR_SCORE_MTF50_CYC_PX * 200:.0f}% of Nyquist). Out of "
+                    f"focus in absolute terms, not merely worse than its "
+                    f"neighbours",
+                    vlap[i], vlap_raw[i], sat[i], blur_score=bscore[i])
             else:
                 admitted.append(i)
 
         if not admitted:
             # Invariant 7: abstain. Do NOT enrol the least-bad blurred crop.
-            return StackResult(
-                None, 0, n, 0.0, 0.0,
-                f"{W_ALL_REJECTED}: all {n} frames failed the blur/glare gate "
-                f"(best guarded vLap {max(vlap):.1f} < floor {floor:.1f}, "
-                f"min saturated fraction {min(sat):.4f}); no image returned",
-                tuple(reports[i] for i in range(n)), -1)
+            report_all = tuple(reports[i] for i in range(n))
+            if all(rep.code == R_DEFOCUS for rep in report_all):
+                # Named separately from W_ALL_REJECTED because the cause and
+                # the remedy are different, and because this is precisely the
+                # case a burst-relative floor cannot see: with every frame
+                # equally bad, the relative floor sinks with the burst and
+                # rejects nothing.
+                warn = (
+                    f"{W_UNIFORMLY_DEFOCUSED}: all {n} frames are out of focus "
+                    f"(blur score {min(bscore):.3f}-{max(bscore):.3f}, all above "
+                    f"the {self.max_blur_score:.2f} absolute ceiling; guarded vLap "
+                    f"{min(vlap):.1f}-{max(vlap):.1f} was NOT the discriminator "
+                    f"and would have admitted every one of them). No image "
+                    f"returned: the camera was not focused, so re-focus and "
+                    f"re-capture rather than re-shoot one frame"
+                )
+            else:
+                warn = (
+                    f"{W_ALL_REJECTED}: all {n} frames failed the blur/glare/focus "
+                    f"gate (best guarded vLap {max(vlap):.1f} vs floor {floor:.1f}, "
+                    f"best blur score {min(bscore):.3f} vs ceiling "
+                    f"{self.max_blur_score:.2f}, min saturated fraction "
+                    f"{min(sat):.4f}); no image returned"
+                )
+            return StackResult(None, 0, n, 0.0, 0.0, warn, report_all, -1)
 
         # ---- 2. reference := the sharpest ADMITTED frame --------------------
         # This is also the fair single-frame baseline: the honest question is
@@ -512,7 +674,7 @@ class BurstStacker:
         # ---- 3. register every other admitted frame to it -------------------
         warps: dict[int, np.ndarray] = {ref: np.eye(2, 3, dtype=np.float64)}
         reports[ref] = FrameReport(ref, True, R_REFERENCE, vlap[ref], vlap_raw[ref],
-                                   sat[ref], 0.0, 0.0, 0.0)
+                                   sat[ref], 0.0, 0.0, 0.0, bscore[ref])
         used = [ref]
         ref_f = grays[ref].astype(np.float32) / 255.0
 
@@ -525,12 +687,12 @@ class BurstStacker:
                     i, False,
                     f"{R_ECC_FAILED}: findTransformECC did not converge "
                     f"(treated as frame rejected, NOT as zero motion)",
-                    vlap[i], vlap_raw[i], sat[i])
+                    vlap[i], vlap_raw[i], sat[i], blur_score=bscore[i])
                 continue
             if not np.isfinite(W).all():
                 reports[i] = FrameReport(
                     i, False, f"{R_WARP_NOT_FINITE}: ECC returned a non-finite warp",
-                    vlap[i], vlap_raw[i], sat[i])
+                    vlap[i], vlap_raw[i], sat[i], blur_score=bscore[i])
                 continue
             disp = _corner_displacement(W, shape)
             dx, dy = _centre_translation(W, shape)
@@ -539,12 +701,12 @@ class BurstStacker:
                     i, False,
                     f"{R_SHIFT_TOO_LARGE}: displacement {disp:.2f}px > "
                     f"{self.max_shift_px:.2f}px; the crop no longer shows the same region",
-                    vlap[i], vlap_raw[i], sat[i], dx, dy, disp)
+                    vlap[i], vlap_raw[i], sat[i], dx, dy, disp, bscore[i])
                 continue
             warps[i] = W
             used.append(i)
             reports[i] = FrameReport(i, True, R_OK, vlap[i], vlap_raw[i], sat[i],
-                                     dx, dy, disp)
+                                     dx, dy, disp, bscore[i])
 
         used.sort()
         report_tuple = tuple(reports[i] for i in range(n))
@@ -569,7 +731,60 @@ class BurstStacker:
                 self._gain(baseline, baseline),
                 f"{W_SINGLE_FRAME}: only 1 of {n} frames passed the gate, so no "
                 f"stacking was possible; returned the cubic upscale of frame {ref}",
-                report_tuple, ref, 0.0, div_x, div_y, baseline)
+                report_tuple, ref, 0.0, div_x, div_y, baseline,
+                burst_blur_score=bscore[ref])
+
+        # ---- 5b. THE ABSOLUTE FOCUS FLOOR, RE-ASKED OF THE WHOLE BURST ------
+        # The per-frame focus gate above is blinded by sensor noise: noise is
+        # white, blur_score's own re-blur destroys it completely, and the frame
+        # therefore looks as though it had detail to lose. Measured on a text
+        # burst defocused to 2.4 px, the per-frame score falls 0.476 clean ->
+        # 0.264 under 4 grey levels of noise, and the per-frame gate stops
+        # firing at 1 LSB (0.436, already under the ceiling).
+        #
+        # The burst itself is the way out, and it is the same argument the rest
+        # of this module runs on. Noise is INDEPENDENT between frames and falls
+        # as 1/sqrt(N) under the registered average; defocus is COMMON to every
+        # frame and does not fall at all. So the aligned mean carries the same
+        # optical resolution with a fraction of the noise, and the identical
+        # ceiling means the identical thing on it -- verified, not assumed:
+        # calibrated against MTF50 on registered means the ceiling comes out at
+        # 0.4594..0.4682 (spread 0.009), the same window as the per-frame
+        # calibration. One constant, two applications.
+        #
+        # Measured gain: at the same ceiling the burst-level check catches a
+        # 2.4 px defocus up to 3 LSB of sensor noise, where the per-frame gate
+        # manages it only at 0 LSB. Full envelope in
+        # test_HONEST_enough_noise_still_hides_a_defocused_burst: 2 to 8 LSB
+        # depending on the scene and the depth of the defocus.
+        burst_focus = blur_score(self._aligned_mean(grays, used, warps))
+        if burst_focus > self.max_blur_score:
+            # The per-frame verdicts were not wrong, they were under-powered.
+            # Revise them explicitly rather than leave reports that say "ok"
+            # attached to a burst that returned nothing.
+            revised = tuple(
+                rep if not rep.used else FrameReport(
+                    rep.index, False,
+                    f"{R_DEFOCUS}: admitted per-frame at blur score "
+                    f"{rep.blur_score:.3f}, then rejected with the burst: the "
+                    f"registered mean of {n_used} frames scores {burst_focus:.3f} "
+                    f"> {self.max_blur_score:.3f}, and averaging removes noise "
+                    f"but not defocus",
+                    rep.vlap, rep.vlap_raw, rep.sat_frac, rep.dx, rep.dy,
+                    rep.shift_px, rep.blur_score)
+                for rep in report_tuple)
+            return StackResult(
+                None, 0, n, mean_shift, 0.0,
+                f"{W_UNIFORMLY_DEFOCUSED}: the burst is out of focus. Per-frame "
+                f"blur scores {min(bscore):.3f}-{max(bscore):.3f} were not "
+                f"conclusive, but the registered mean of {n_used} frames -- which "
+                f"has {n_used ** 0.5:.1f}x less noise and exactly the same "
+                f"defocus -- scores {burst_focus:.3f} > {self.max_blur_score:.3f}, "
+                f"i.e. MTF50 below about {BLUR_SCORE_MTF50_CYC_PX:.2f} cyc/px. "
+                f"Guarded vLap {min(vlap):.1f}-{max(vlap):.1f} was NOT the "
+                f"discriminator. No image returned: re-focus and re-capture.",
+                revised, -1, diversity, div_x, div_y, None,
+                burst_blur_score=burst_focus)
 
         # ---- 6. THE HONEST CHECK -------------------------------------------
         if diversity < self.min_diversity:
@@ -586,12 +801,14 @@ class BurstStacker:
                         f"{diversity:.4f} < {self.min_diversity:.2f}), e.g. a whole-pixel "
                         f"shift. DENOISING ONLY, not super-resolution.")
             return StackResult(img, n_used, n_rej, mean_shift, self._gain(img, baseline),
-                               warn, report_tuple, ref, diversity, div_x, div_y, baseline)
+                               warn, report_tuple, ref, diversity, div_x, div_y, baseline,
+                               burst_blur_score=burst_focus)
 
         # ---- 7. shift-and-add --------------------------------------------
         img = self._splat_path(grays, used, warps, hr, ref)
         return StackResult(img, n_used, n_rej, mean_shift, self._gain(img, baseline),
-                           W_NONE, report_tuple, ref, diversity, div_x, div_y, baseline)
+                           W_NONE, report_tuple, ref, diversity, div_x, div_y, baseline,
+                           burst_blur_score=burst_focus)
 
     # --------------------------------------------------------------- private
     def _register(self, template_f: np.ndarray, input_f: np.ndarray) -> np.ndarray | None:
@@ -696,16 +913,18 @@ class BurstStacker:
             out[~filled] = prior[~filled]
         return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
-    def _denoise_path(self, grays: list[np.ndarray], used: list[int],
-                      warps: dict[int, np.ndarray], hr: tuple[int, int]) -> np.ndarray:
-        """The degenerate-diversity fallback: register, average, cubic upscale.
+    @staticmethod
+    def _aligned_mean(grays: list[np.ndarray], used: list[int],
+                      warps: dict[int, np.ndarray]) -> np.ndarray:
+        """Registered average of the used frames, at LOW resolution, float64.
 
-        Used when the sampling phases collapse. It is a legitimately BETTER
-        image than any single frame (the noise is down by ~sqrt(N)) and is never
-        worse than the baseline — it simply contains no detail beyond the LR
-        Nyquist limit, which is precisely what the warning says.
+        Two callers want exactly this image for two different reasons, and it
+        is the same image: the degenerate-diversity fallback wants it because
+        averaging N registered frames is genuinely better than any one of them,
+        and the burst-level focus check wants it because averaging attenuates
+        the NOISE that blinds a no-reference focus metric while leaving the
+        DEFOCUS, which is common to every frame, completely untouched.
         """
-        HH, HW = hr
         h, w = grays[used[0]].shape
         acc = np.zeros((h, w), np.float64)
         for i in used:
@@ -716,7 +935,19 @@ class BurstStacker:
                 grays[i].astype(np.float32), warps[i].astype(np.float32), (w, h),
                 flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                 borderMode=cv2.BORDER_REFLECT).astype(np.float64)
-        mean_lr = acc / len(used)
+        return acc / len(used)
+
+    def _denoise_path(self, grays: list[np.ndarray], used: list[int],
+                      warps: dict[int, np.ndarray], hr: tuple[int, int]) -> np.ndarray:
+        """The degenerate-diversity fallback: register, average, cubic upscale.
+
+        Used when the sampling phases collapse. It is a legitimately BETTER
+        image than any single frame (the noise is down by ~sqrt(N)) and is never
+        worse than the baseline — it simply contains no detail beyond the LR
+        Nyquist limit, which is precisely what the warning says.
+        """
+        HH, HW = hr
+        mean_lr = self._aligned_mean(grays, used, warps)
         out = cv2.resize(mean_lr, (HW, HH), interpolation=cv2.INTER_CUBIC)
         return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
@@ -730,12 +961,14 @@ class BurstStacker:
 __all__ = [
     "BurstStacker", "StackResult", "FrameReport", "SaafError",
     "variance_of_laplacian", "saturated_fraction", "mtf50_slanted_edge",
+    "blur_score",
     "DEFAULT_SCALE", "DEFAULT_BLUR_VAR_MIN", "DEFAULT_BLUR_REL_MIN",
     "DEFAULT_MAX_SHIFT_PX",
     "DEFAULT_SAT_LEVEL", "DEFAULT_SAT_FRAC_MAX", "DEFAULT_SPLAT_SIGMA",
     "DEFAULT_MIN_SHIFT_PX", "DEFAULT_MIN_DIVERSITY",
+    "DEFAULT_MAX_BLUR_SCORE", "BLUR_SCORE_SPAN", "BLUR_SCORE_MTF50_CYC_PX",
     "R_REFERENCE", "R_OK", "R_BLUR", "R_GLARE", "R_ECC_FAILED",
-    "R_SHIFT_TOO_LARGE", "R_WARP_NOT_FINITE",
+    "R_SHIFT_TOO_LARGE", "R_WARP_NOT_FINITE", "R_DEFOCUS",
     "W_NONE", "W_ALL_REJECTED", "W_SINGLE_FRAME", "W_NO_DIVERSITY",
-    "W_DEGENERATE_PHASE",
+    "W_DEGENERATE_PHASE", "W_UNIFORMLY_DEFOCUSED",
 ]

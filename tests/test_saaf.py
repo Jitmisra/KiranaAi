@@ -37,10 +37,13 @@ import numpy as np
 import pytest
 
 from gawaah.saaf import (
-    DEFAULT_SPLAT_SIGMA, BurstStacker, SaafError, StackResult,
+    BLUR_SCORE_MTF50_CYC_PX, DEFAULT_BLUR_VAR_MIN, DEFAULT_MAX_BLUR_SCORE,
+    DEFAULT_SPLAT_SIGMA,
+    BurstStacker, SaafError, StackResult,
     W_ALL_REJECTED, W_DEGENERATE_PHASE, W_NO_DIVERSITY, W_SINGLE_FRAME,
-    R_BLUR, R_ECC_FAILED, R_GLARE, R_SHIFT_TOO_LARGE,
-    mtf50_slanted_edge, saturated_fraction, variance_of_laplacian,
+    W_UNIFORMLY_DEFOCUSED,
+    R_BLUR, R_DEFOCUS, R_ECC_FAILED, R_GLARE, R_SHIFT_TOO_LARGE,
+    blur_score, mtf50_slanted_edge, saturated_fraction, variance_of_laplacian,
 )
 
 SR = 8                      # ground-truth oversampling of the LR grid
@@ -648,6 +651,600 @@ def test_ACCEPTANCE_ecc_failure_is_a_frame_rejection_never_zero_motion():
         "central honesty check"
     )
     assert r.warning.startswith(W_SINGLE_FRAME)
+
+
+# =========================================================================
+# 5b. THE ABSOLUTE FOCUS FLOOR — a burst that is bad EVERYWHERE
+#
+# Both older gates are burst-relative in effect. `blur_rel_min * max(vLap)`
+# obviously is. `blur_var_min` looks absolute but is not, because vLap is not
+# an absolute quantity: it scales with the scene's own texture and contrast,
+# and this file measures a 500x spread across scenes that are all in focus. So
+# a burst where EVERY frame is defocused has no worst frame, the relative floor
+# sinks with it, and the result comes back with warning="" — a confident
+# super-resolution claim built entirely out of mush. Invariant 7 says abstain.
+# =========================================================================
+
+def _registered_mean(frames) -> np.ndarray:
+    """The image the burst-level focus check actually scores.
+
+    Registration and averaging both come from the module (`_register` and
+    `_aligned_mean`), so the arithmetic under calibration cannot drift from the
+    arithmetic that ships. Only the reference choice is repeated here, using
+    the module's own rule (sharpest frame by guarded vLap), because these
+    calibration bursts deliberately sweep past every quality gate and
+    `stack()` would refuse them long before it reached this step.
+    """
+    st = BurstStacker(scale=2)
+    grays = [np.ascontiguousarray(f) for f in frames]
+    ref = max(range(len(grays)),
+              key=lambda i: (variance_of_laplacian(grays[i], sat_level=250), -i))
+    ref_f = grays[ref].astype(np.float32) / 255.0
+    warps = {ref: np.eye(2, 3, dtype=np.float64)}
+    used = [ref]
+    for i in range(len(grays)):
+        if i == ref:
+            continue
+        W = st._register(ref_f, grays[i].astype(np.float32) / 255.0)
+        if W is not None and np.isfinite(W).all():
+            warps[i] = W
+            used.append(i)
+    used.sort()
+    assert len(used) > 1, "nothing registered; the calibration harness broke"
+    return np.clip(np.rint(st._aligned_mean(grays, used, warps)),
+                   0, 255).astype(np.uint8)
+
+
+def defocused_burst(scene, sigma: float, n: int = 8, **kw):
+    """A burst that is UNIFORMLY out of focus: the defocus is applied to every
+    frame, so no frame is worse than any other and nothing is relatively bad.
+    Sensor noise, when asked for, is added AFTER the defocus — optics blur the
+    scene before the sensor ever sees it, and the order matters to the metric.
+    """
+    frames = make_burst(scene, golden_shifts(n), **kw)
+    return [cv2.GaussianBlur(f, (0, 0), sigma) for f in frames]
+
+
+def test_ACCEPTANCE_uniformly_defocused_burst_abstains():
+    """THE MEASURED BLIND SPOT, closed. The burst must come back with NO image
+    and a warning that names defocus as the cause, not a generic rejection."""
+    scene = hr_edge_scene()
+    frames = defocused_burst(scene, 1.6)
+    r = BurstStacker(scale=2).stack(frames)
+
+    # what the burst's resolution actually was, on this module's own
+    # ISO-12233 instrument -- not an opinion about the blur radius
+    m = mtf50_slanted_edge(frames[0][(slice(25, 103), slice(39, 89))].astype(np.float64))
+    scores = [rep.blur_score for rep in r.reports]
+    record("uniform_defocus_abstain",
+           f"8 frames uniformly defocused to MTF50={m:.4f} cyc/px "
+           f"({m * 200:.0f}% of Nyquist): blur score "
+           f"{min(scores):.3f}-{max(scores):.3f} > {DEFAULT_MAX_BLUR_SCORE}, "
+           f"guarded vLap {min(rep.vlap for rep in r.reports):.1f}-"
+           f"{max(rep.vlap for rep in r.reports):.1f} (all above the {60.0} "
+           f"floor, so vLap was NOT the discriminator) -> image=None, "
+           f"warning={r.warning.split(':')[0]}")
+
+    assert r.image is None, (
+        f"a uniformly defocused burst was enrolled anyway: used={r.used}/8, "
+        f"warning={r.warning!r}"
+    )
+    assert r.warning.startswith(W_UNIFORMLY_DEFOCUSED), r.warning
+    assert r.used == 0 and r.rejected == 8
+    assert r.reference_index == -1
+    assert all(rep.code == R_DEFOCUS for rep in r.reports), \
+        [rep.reason for rep in r.reports]
+    # the OLD gate is proved not to have been what fired
+    assert all(rep.vlap > 60.0 for rep in r.reports), (
+        "this burst must clear the absolute vLap floor, or it proves nothing "
+        "about the blind spot: " + str([round(rep.vlap, 1) for rep in r.reports])
+    )
+
+
+def test_CONTROL_without_the_absolute_floor_the_same_burst_is_enrolled():
+    """Proof that the acceptance test above is not vacuous, and the exact
+    record of the defect that was fixed: with the absolute focus ceiling
+    disabled, the identical burst comes back as a confident, UNWARNED
+    super-resolution result."""
+    frames = defocused_burst(hr_edge_scene(), 1.6)
+    r = BurstStacker(scale=2, max_blur_score=1.0).stack(frames)
+    record("uniform_defocus_control",
+           f"same burst with the absolute floor disabled: used={r.used}/8, "
+           f"image={'None' if r.image is None else 'RETURNED'}, "
+           f"warning={r.warning!r} -- this is what shipped before the fix")
+    assert r.used == 8 and r.image is not None
+    assert r.warning == "", (
+        "the control failed to reproduce the defect, so the acceptance test "
+        "is not proving anything"
+    )
+
+
+def test_the_same_frame_was_admitted_or_rejected_by_its_NEIGHBOURS():
+    """The sharpest statement of why a relative gate alone is not enough.
+
+    One pixel-for-pixel identical frame is put into two bursts. In a sharp
+    burst the relative floor throws it out. In a uniformly defocused burst the
+    relative floor admits it. Nothing about the frame changed.
+    """
+    scene = hr_text_scene()
+    sharp = make_burst(scene, golden_shifts(8))
+    subject = cv2.GaussianBlur(sharp[3], (0, 0), 2.4)
+
+    mixed = list(sharp)
+    mixed[3] = subject
+    uniform = [cv2.GaussianBlur(f, (0, 0), 2.4) for f in sharp]
+    uniform[3] = subject
+    assert np.array_equal(mixed[3], uniform[3])
+
+    old = dict(max_blur_score=1.0)   # the gate as it stood before the fix
+    r_mixed = BurstStacker(scale=2, **old).stack(mixed)
+    r_uniform = BurstStacker(scale=2, **old).stack(uniform)
+    record("neighbour_dependence",
+           f"the SAME frame (vLap {r_mixed.reports[3].vlap:.1f}, blur score "
+           f"{r_mixed.reports[3].blur_score:.3f}): inside a sharp burst -> "
+           f"{r_mixed.reports[3].code}; inside a uniformly defocused burst -> "
+           f"{r_uniform.reports[3].code}. Under the absolute floor both are "
+           f"{BurstStacker(scale=2).stack(uniform).reports[3].code}.")
+
+    assert r_mixed.reports[3].code == R_BLUR
+    assert r_uniform.reports[3].used, "the relative gate admitted the same frame"
+    # with the absolute floor armed, the frame is judged on its own merits
+    assert BurstStacker(scale=2).stack(uniform).reports[3].code == R_DEFOCUS
+
+
+def test_ACCEPTANCE_blur_score_is_calibrated_against_MTF50():
+    """DEFAULT_MAX_BLUR_SCORE is a threshold on RESOLUTION, and this is the
+    measurement that makes that sentence true rather than a claim.
+
+    Ten independent scenes — base PSF 1.5 to 8.0 HR px crossed with two edge
+    slants — are each swept through extra defocus. For every one of them the
+    blur score at MTF50 = 0.15 cyc/px is interpolated. If the score were a
+    proxy for scene content rather than for resolution, those ten numbers
+    would scatter; the spread is what licenses a single constant.
+    """
+    roi = (slice(25, 103), slice(39, 89))
+    at_target, rows = {}, []
+    for psf in (1.5, 3.0, 4.5, 6.0, 8.0):
+        for ang in (5.0, 8.0):
+            scene = hr_edge_scene(psf, ang)
+            ms, bs = [], []
+            for s in (0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 2.6):
+                f = make_burst(scene, [(0.0, 0.0)])[0]
+                if s > 0:
+                    f = cv2.GaussianBlur(f, (0, 0), s)
+                ms.append(mtf50_slanted_edge(f[roi].astype(np.float64)))
+                bs.append(blur_score(f))
+            assert all(bs[i] > bs[i - 1] for i in range(1, len(bs))), (psf, ang, bs)
+            assert all(ms[i] < ms[i - 1] for i in range(1, len(ms))), (psf, ang, ms)
+            order = np.argsort(ms)
+            at_target[(psf, ang)] = float(
+                np.interp(BLUR_SCORE_MTF50_CYC_PX,
+                          np.array(ms)[order], np.array(bs)[order]))
+            rows.append((psf, ang, ms[0], at_target[(psf, ang)]))
+
+    vals = list(at_target.values())
+    spread = max(vals) - min(vals)
+    record("blur_score_mtf50_calibration",
+           f"blur score at MTF50={BLUR_SCORE_MTF50_CYC_PX} cyc/px over "
+           f"{len(vals)} scenes (base PSF 1.5-8.0 HR px x 2 slants): "
+           f"{min(vals):.4f}..{max(vals):.4f}, spread {spread:.4f} "
+           f"(+-{100 * spread / 2 / np.mean(vals):.1f}%). Those scenes span "
+           f"in-focus MTF50 {min(r[2] for r in rows):.3f}.."
+           f"{max(r[2] for r in rows):.3f} cyc/px, so the constant is not "
+           f"tracking scene content. DEFAULT_MAX_BLUR_SCORE={DEFAULT_MAX_BLUR_SCORE}")
+
+    assert spread < 0.02, (
+        f"the blur score does not collapse onto MTF50 (spread {spread:.4f}); "
+        f"a single absolute ceiling would then be a scene threshold in "
+        f"disguise, exactly the flaw it replaced: {at_target}"
+    )
+    assert min(vals) < DEFAULT_MAX_BLUR_SCORE < max(vals) + 0.02, (
+        f"DEFAULT_MAX_BLUR_SCORE={DEFAULT_MAX_BLUR_SCORE} no longer sits at "
+        f"MTF50={BLUR_SCORE_MTF50_CYC_PX} cyc/px: measured {min(vals):.4f}.."
+        f"{max(vals):.4f}"
+    )
+
+
+def test_blur_score_is_free_of_the_scale_dependence_that_broke_vLap():
+    """The property that makes an absolute threshold possible at all.
+
+    vLap is quadratic in contrast and grows with texture density, so "60" means
+    something different on every scene. The blur score is a ratio of the same
+    functional applied twice, so contrast and exposure cancel exactly.
+    """
+    base = make_burst(hr_text_scene(), [(0.0, 0.0)])[0].astype(np.float64)
+    ref = blur_score(base)
+    rows = []
+    for label, img in (("x0.5 contrast", base * 0.5 + 64),
+                       ("x0.8 contrast", base * 0.8 + 24),
+                       ("-40 exposure", np.clip(base - 40, 0, 255)),
+                       ("+40 exposure", np.clip(base + 15, 0, 255))):
+        rows.append((label, blur_score(np.clip(img, 0, 255).astype(np.uint8))))
+
+    scenes = {"dense text": make_burst(hr_text_scene(), [(0.0, 0.0)])[0],
+              "slanted edge": make_burst(hr_edge_scene(), [(0.0, 0.0)])[0],
+              "low-texture packet": packet(0.2),
+              "high-texture packet": packet(0.6)}
+    v = {k: (variance_of_laplacian(im, sat_level=250), blur_score(im))
+         for k, im in scenes.items()}
+    vl = [a for a, _ in v.values()]
+    bl = [b for _, b in v.values()]
+    record("scale_invariance",
+           f"four in-focus scenes: guarded vLap spans {min(vl):.1f}..{max(vl):.1f} "
+           f"({max(vl) / min(vl):.0f}x, which is why an absolute vLap floor is "
+           f"meaningless) while blur score spans {min(bl):.3f}..{max(bl):.3f} "
+           f"and every one of them clears the {DEFAULT_MAX_BLUR_SCORE} ceiling. "
+           f"Contrast/exposure changes move the score by at most "
+           f"{max(abs(s - ref) for _, s in rows):.4f}")
+
+    for label, got in rows:
+        assert got == pytest.approx(ref, abs=0.03), (label, got, ref)
+    assert max(vl) / min(vl) > 100, (
+        "vLap no longer has the scene spread this test contrasts against; "
+        f"re-derive the argument: {v}"
+    )
+    assert max(bl) < DEFAULT_MAX_BLUR_SCORE, (
+        f"an in-focus scene would be rejected by the absolute floor: {v}"
+    )
+
+
+def test_blur_score_rises_monotonically_with_defocus_on_every_scene():
+    """A gate whose metric is not monotone would call an extremely defocused
+    frame sharp again. Checked on four scenes, not one."""
+    sigmas = (0.0, 0.5, 0.8, 1.2, 1.6, 2.0, 2.4, 3.0, 4.0)
+    table = {}
+    for name, img in (("dense text", make_burst(hr_text_scene(), [(0.0, 0.0)])[0]),
+                      ("slanted edge", make_burst(hr_edge_scene(), [(0.0, 0.0)])[0]),
+                      ("band-limited edge",
+                       make_burst(hr_edge_scene(PSF_BANDLIMITED), [(0.0, 0.0)])[0]),
+                      ("low-texture packet", packet(0.2))):
+        vals = [blur_score(cv2.GaussianBlur(img, (0, 0), s) if s else img)
+                for s in sigmas]
+        table[name] = vals
+        assert all(vals[i] > vals[i - 1] for i in range(1, len(vals))), (name, vals)
+
+    print("\nblur score vs defocus sigma (px), by scene:")
+    print("  " + "scene".ljust(20) + "".join(f"{s:>7.1f}" for s in sigmas))
+    for name, vals in table.items():
+        print("  " + name.ljust(20) + "".join(f"{v:>7.3f}" for v in vals))
+
+
+def test_the_defocus_gate_leaves_every_burst_the_suite_relies_on_alone():
+    """A false abstention is as dishonest as a false enrolment. Every burst
+    this file requires to succeed is measured against the ceiling, and its
+    headroom is reported so a future retune cannot silently eat it."""
+    cases = {
+        "text, aliased": make_burst(hr_text_scene(), golden_shifts(12)),
+        "text, band-limited": make_burst(hr_text_scene(PSF_BANDLIMITED),
+                                         golden_shifts(12)),
+        "edge, aliased": make_burst(hr_edge_scene(), golden_shifts(12)),
+        "edge, band-limited (the published negative result)":
+            make_burst(hr_edge_scene(PSF_BANDLIMITED), golden_shifts(12)),
+        "edge + sensor noise sigma 6": make_burst(hr_edge_scene(), golden_shifts(12),
+                                                  noise=6.0, seed=7),
+        "one softened frame (order-invariance burst)":
+            make_burst(hr_text_scene(), golden_shifts(8), blur_idx=(0,),
+                       blur_sigma=0.5),
+    }
+    worst = {}
+    for name, frames in cases.items():
+        worst[name] = max(blur_score(f) for f in frames)
+
+    tightest = max(worst, key=worst.__getitem__)
+    record("defocus_gate_headroom",
+           f"worst blur score over every burst the suite requires to pass: "
+           f"{worst[tightest]:.3f} ({tightest}), against the "
+           f"{DEFAULT_MAX_BLUR_SCORE} ceiling = {DEFAULT_MAX_BLUR_SCORE - worst[tightest]:+.3f} "
+           f"headroom ({100 * (DEFAULT_MAX_BLUR_SCORE - worst[tightest]) / DEFAULT_MAX_BLUR_SCORE:.0f}%)")
+
+    print("\nheadroom to the absolute focus ceiling, per required burst:")
+    for name, w in sorted(worst.items(), key=lambda kv: -kv[1]):
+        print(f"  {w:.3f}  ({DEFAULT_MAX_BLUR_SCORE - w:+.3f})  {name}")
+    for name, w in worst.items():
+        assert w < DEFAULT_MAX_BLUR_SCORE - 0.05, (
+            f"{name} is within 0.05 of the focus ceiling at {w:.3f}; the gate "
+            f"is one refactor away from abstaining on a good burst"
+        )
+
+
+def test_a_partially_defocused_burst_keeps_its_good_frames():
+    """The gate is per-frame and only escalates to the burst when EVERY frame
+    fails. Half a burst out of focus must cost exactly half the burst."""
+    sharp = make_burst(hr_text_scene(), golden_shifts(8))
+    mixed = [cv2.GaussianBlur(f, (0, 0), 3.0) if i in (1, 4, 6) else f
+             for i, f in enumerate(sharp)]
+    r = BurstStacker(scale=2).stack(mixed)
+    rejected = {rep.index for rep in r.reports if not rep.used}
+    assert rejected == {1, 4, 6}, [(rep.index, rep.reason) for rep in r.reports]
+    assert r.used == 5 and r.image is not None
+    assert not r.warning.startswith(W_UNIFORMLY_DEFOCUSED)
+
+
+def test_defocus_precedence_keeps_the_relative_gate_label_intact():
+    """When a frame fails BOTH gates the report says R_BLUR, because that is
+    the actionable message: its neighbours are fine, so re-shoot the frame. A
+    frame that fails only the absolute gate says R_DEFOCUS, which means the
+    optics were never focused and the whole burst must be re-captured. The
+    precedence is deliberate, so it is pinned."""
+    sharp = make_burst(hr_text_scene(), golden_shifts(8))
+    one_bad = list(sharp)
+    one_bad[2] = cv2.GaussianBlur(sharp[2], (0, 0), 2.4)
+    assert blur_score(one_bad[2]) > DEFAULT_MAX_BLUR_SCORE, "frame 2 must fail both"
+    r = BurstStacker(scale=2).stack(one_bad)
+    assert r.reports[2].code == R_BLUR, r.reports[2].reason
+    assert r.reports[2].blur_score > DEFAULT_MAX_BLUR_SCORE, (
+        "the measured defocus is still reported even when the label is R_BLUR"
+    )
+
+
+def noisy_defocused_burst(scene, sigma: float, noise: float, n: int = 8):
+    """Defocus first (optics), THEN sensor noise. The order is not cosmetic:
+    the blur happens in front of the sensor, so the noise is not blurred, and
+    a harness that noises-then-blurs quietly smooths its own noise away and
+    makes the metric look far more robust than it is."""
+    frames = [cv2.GaussianBlur(f, (0, 0), sigma)
+              for f in make_burst(scene, golden_shifts(n))]
+    rng = np.random.default_rng(11)
+    return [np.clip(f + rng.normal(0, noise, f.shape), 0, 255).astype(np.uint8)
+            for f in frames]
+
+
+def test_ACCEPTANCE_the_burst_is_what_defeats_sensor_noise():
+    """A per-frame focus measure cannot survive sensor noise, and the burst can.
+
+    Every no-reference focus metric is fooled the same way: noise is white, the
+    metric's own re-blur destroys it completely, and a defocused frame
+    therefore looks as though it had detail to lose. Measured below: the
+    per-frame score of a 2.4 px defocus collapses from 0.483 to 0.262 under
+    4 grey levels of noise and stops firing from 2 LSB upward.
+
+    The burst is the way out, and it is the same argument the rest of this
+    module runs on. Noise is INDEPENDENT between frames and falls as 1/sqrt(N)
+    under the registered average. Defocus is COMMON to every frame and does not
+    fall at all. So the aligned mean is the honest place to ask the question.
+    """
+    scene = hr_text_scene()
+    noises = (0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0)
+    per_frame, burst_level, verdict = {}, {}, {}
+    for nz in noises:
+        frames = noisy_defocused_burst(scene, 2.4, nz)
+        per_frame[nz] = float(np.median([blur_score(f) for f in frames]))
+        # measured with the per-frame gate OFF, so the burst-level number is
+        # always the real one rather than 0.0 from an early return
+        burst_level[nz] = blur_score(_registered_mean(frames))
+        verdict[nz] = BurstStacker(scale=2).stack(frames)
+
+    print("\n  a 2.4 px defocus, seen per-frame and seen through the burst:")
+    print(f"  {'noise LSB':>10} {'per-frame':>11} {'reg. mean':>12}   end-to-end")
+    for nz in noises:
+        pf, bl, r = per_frame[nz], burst_level[nz], verdict[nz]
+        where = ("abstains (per-frame gate)" if r.warning.startswith(W_ALL_REJECTED)
+                 or (r.image is None and all(
+                     "registered mean" not in rep.reason for rep in r.reports))
+                 else "abstains (burst gate)" if r.image is None
+                 else "ENROLLED")
+        print(f"  {nz:>10.1f} {pf:>10.3f}{'*' if pf > DEFAULT_MAX_BLUR_SCORE else ' '}"
+              f" {bl:>11.3f}{'*' if bl > DEFAULT_MAX_BLUR_SCORE else ' '}   {where}")
+
+    pf_ok = [nz for nz in noises if per_frame[nz] > DEFAULT_MAX_BLUR_SCORE]
+    bl_ok = [nz for nz in noises if burst_level[nz] > DEFAULT_MAX_BLUR_SCORE]
+    record("burst_beats_noise",
+           f"a 2.4 px defocus is caught per-frame only up to {max(pf_ok):.0f} LSB "
+           f"of sensor noise (score {per_frame[0.0]:.3f} clean, "
+           f"{per_frame[8.0]:.3f} at 8 LSB) but through the registered mean up "
+           f"to {max(bl_ok):.0f} LSB ({burst_level[0.0]:.3f} -> "
+           f"{burst_level[8.0]:.3f}) -- the noise tolerance of the focus gate "
+           f"goes up by {max(bl_ok) - max(pf_ok):.0f} LSB for one extra average "
+           f"over frames the stacker had already registered.")
+
+    assert max(bl_ok) > max(pf_ok), (
+        f"the burst-level check bought no noise tolerance over the per-frame "
+        f"one, which is its entire justification: {per_frame} vs {burst_level}"
+    )
+    # end to end, at the noise level where ONLY the burst-level check can fire
+    hardest = max(bl_ok)
+    assert hardest not in pf_ok, hardest
+    r = verdict[hardest]
+    assert r.image is None and r.warning.startswith(W_UNIFORMLY_DEFOCUSED), r.warning
+    assert "registered mean" in r.warning, r.warning
+    assert all(rep.code == R_DEFOCUS for rep in r.reports), \
+        [rep.reason for rep in r.reports]
+    assert r.used == 0 and r.rejected == len(r.reports)
+    assert sum(rep.used for rep in r.reports) == r.used
+
+
+def test_the_burst_level_ceiling_is_the_SAME_constant_re_measured_on_means():
+    """One constant, two applications — checked, not assumed.
+
+    The registered mean is a slightly different image from any frame in it
+    (sub-pixel warping low-passes a little), so re-using the per-frame ceiling
+    on it needs justifying. It is justified the same way it was derived: by
+    interpolating the mean-image blur score at the mean-image MTF50 of
+    0.15 cyc/px, over the same ten independent scenes.
+    """
+    roi = (slice(25, 103), slice(39, 89))
+    at_target = {}
+    for psf in (1.5, 3.0, 4.5, 6.0, 8.0):
+        for ang in (5.0, 8.0):
+            scene = hr_edge_scene(psf, ang)
+            ms, bs = [], []
+            for s in (0.0, 0.4, 0.8, 1.2, 1.6, 2.0, 2.6):
+                frames = make_burst(scene, golden_shifts(8))
+                if s > 0:
+                    frames = [cv2.GaussianBlur(f, (0, 0), s) for f in frames]
+                mean = _registered_mean(frames)
+                ms.append(mtf50_slanted_edge(mean[roi].astype(np.float64)))
+                bs.append(blur_score(mean))
+            o = np.argsort(ms)
+            at_target[(psf, ang)] = float(
+                np.interp(BLUR_SCORE_MTF50_CYC_PX,
+                          np.array(ms)[o], np.array(bs)[o]))
+
+    v = list(at_target.values())
+    spread = max(v) - min(v)
+    record("burst_ceiling_recalibration",
+           f"blur score of the REGISTERED MEAN of 8 frames at "
+           f"MTF50={BLUR_SCORE_MTF50_CYC_PX} "
+           f"cyc/px over 10 scenes: {min(v):.4f}..{max(v):.4f} (spread "
+           f"{spread:.4f}). The per-frame calibration gives the same window, so "
+           f"DEFAULT_MAX_BLUR_SCORE={DEFAULT_MAX_BLUR_SCORE} means the same "
+           f"thing on a frame and on a burst mean — one constant, not two.")
+    assert spread < 0.02, at_target
+    assert min(v) < DEFAULT_MAX_BLUR_SCORE < max(v) + 0.02, (
+        f"the shared ceiling no longer sits at MTF50={BLUR_SCORE_MTF50_CYC_PX} "
+        f"on registered means ({min(v):.4f}..{max(v):.4f}); the burst-level "
+        f"check needs its own measured constant"
+    )
+
+
+def test_HONEST_enough_noise_still_hides_a_defocused_burst():
+    """THE REMAINING LIMIT, measured and published rather than discovered.
+
+    Averaging cuts noise by sqrt(N), it does not abolish it, so a burst that is
+    noisy enough still slips through. The exact envelope is measured here. The
+    bias has ONE direction — noise can hide a defocused burst, it can never
+    condemn a sharp one — so the gate never causes a false abstention, and that
+    half is asserted too.
+    """
+    noises = (0.0, 2.0, 4.0, 8.0)
+    grid, caught = {}, {}
+    for scene_name, scene in (("dense text", hr_text_scene()),
+                              ("slanted edge", hr_edge_scene())):
+        for sigma in (1.6, 2.4, 3.2):
+            row = []
+            for nz in noises:
+                # measured on the registered mean directly, so the number is
+                # always the measurement and never an early return from an
+                # upstream gate
+                s = blur_score(_registered_mean(
+                    noisy_defocused_burst(scene, sigma, nz)))
+                row.append((nz, s, s > DEFAULT_MAX_BLUR_SCORE))
+            grid[(scene_name, sigma)] = row
+            ok = [nz for nz, _, hit in row if hit]
+            caught[(scene_name, sigma)] = max(ok) if ok else None
+
+    print("\n  burst-mean blur score vs sensor noise; * = over the focus ceiling")
+    print(f"  {'scene / defocus':<24}" + "".join(f"{nz:>10.0f} LSB" for nz in noises))
+    for (name, sigma), row in grid.items():
+        print(f"  {name + f' sigma {sigma}':<24}" +
+              "".join(f"{s:>12.3f}{'*' if hit else ' '}" for _, s, hit in row))
+
+    # cases the gate is SUPPOSED to catch are the ones it catches with no
+    # noise at all; a defocus above the 0.15 cyc/px line is out of scope by
+    # design and its absence from the table is not a miss.
+    in_scope = {k: v for k, v in caught.items() if grid[k][0][2]}
+    out_of_scope = sorted(k for k in caught if not grid[k][0][2])
+    assert in_scope, grid
+    worst = min(in_scope.values())
+    record("defocus_noise_envelope",
+           f"noise tolerance of the burst-level focus check (8-frame bursts), "
+           f"per case: " +
+           ", ".join(f"{k[0]} sigma {k[1]}: {v:.0f} LSB"
+                     for k, v in sorted(in_scope.items())) +
+           f". HONEST LIMIT: beyond ~{worst:.0f} LSB of sensor noise on the "
+           f"hardest in-scope case a defocused burst is admitted, and NOTHING "
+           f"else in this module catches it either -- noise inflates vLap, so "
+           f"the vLap floors are blinded in the same direction "
+           f"(test_HONEST_sensor_noise_inverts_the_absolute_vLap_floor). Out of "
+           f"scope by design (resolution still above the "
+           f"{BLUR_SCORE_MTF50_CYC_PX} cyc/px line, so NOT a miss): " +
+           ", ".join(f"{k[0]} sigma {k[1]}" for k in out_of_scope))
+
+    assert any(v < 8.0 for v in in_scope.values()), (
+        "nothing in this sweep escaped the gate; if noise genuinely no longer "
+        f"hides defocus, the published limit must be re-derived: {caught}"
+    )
+    # every in-scope case must survive at least a little noise, or the gate is
+    # useless on any real capture
+    assert worst >= 2.0, (
+        f"the focus gate is defeated by {worst:.0f} LSB of sensor noise on "
+        f"{min(in_scope, key=in_scope.get)}, which is an ordinary capture; the "
+        f"burst-level check is not buying enough: {in_scope}"
+    )
+    # the safety direction: a SHARP burst is never condemned, at any noise
+    for nz in (0.0, 2.0, 4.0, 6.0, 8.0):
+        frames = make_burst(hr_text_scene(), golden_shifts(8), noise=nz, seed=11)
+        r = BurstStacker(scale=2).stack(frames)
+        assert r.burst_blur_score < DEFAULT_MAX_BLUR_SCORE, (
+            f"noise sigma {nz} pushed a SHARP burst over the focus ceiling "
+            f"({r.burst_blur_score:.3f}); the gate would abstain on a good burst"
+        )
+        assert r.image is not None
+
+
+def test_HONEST_sensor_noise_inverts_the_absolute_vLap_floor():
+    """Why the old absolute floor could not be repaired by re-tuning it.
+
+    DEFAULT_BLUR_VAR_MIN is a floor on variance-of-Laplacian, and the Laplacian
+    of white noise is enormous. So sensor noise does not merely weaken that
+    gate, it REVERSES it: the noisier a destroyed frame gets, the more
+    confidently it clears the floor. Measured below on a burst defocused into
+    unusability — one grey level of noise is enough to take it from rejected to
+    admitted, and eight grey levels put it two orders of magnitude clear.
+
+    This is the fact that makes an absolute vLap threshold unfixable and a
+    scale-free focus measure necessary. It is also the reason the honest limit
+    of the new gate is stated as "nothing catches it" rather than "the vLap
+    floor catches it".
+    """
+    rows = []
+    for nz in (0.0, 1.0, 2.0, 4.0, 8.0):
+        frames = noisy_defocused_burst(hr_text_scene(), 4.0, nz)
+        v = [variance_of_laplacian(f, sat_level=250) for f in frames]
+        rows.append((nz, min(v), max(v), min(v) >= DEFAULT_BLUR_VAR_MIN))
+
+    print("\n  a burst defocused to sigma 4.0 px (unusable by any measure):")
+    print(f"  {'noise LSB':>10} {'guarded vLap':>26}   vs the "
+          f"{DEFAULT_BLUR_VAR_MIN} floor")
+    for nz, lo, hi, passes in rows:
+        print(f"  {nz:>10.1f} {lo:>11.1f}..{hi:<12.1f}   "
+              f"{'ADMITTED' if passes else 'rejected'}")
+
+    record("vlap_floor_inverted_by_noise",
+           f"a burst defocused to sigma 4.0 px scores guarded vLap "
+           f"{rows[0][1]:.1f} clean and is correctly rejected by the "
+           f"{DEFAULT_BLUR_VAR_MIN} floor; add {rows[1][0]:.0f} grey level of "
+           f"sensor noise and the same burst scores {rows[1][1]:.1f} and is "
+           f"ADMITTED, rising to {rows[-1][1]:.0f} at {rows[-1][0]:.0f} LSB. "
+           f"The absolute vLap floor is not just scene-dependent, it is "
+           f"inverted by noise, which is why the focus gate had to be "
+           f"scale-free rather than re-tuned.")
+
+    assert not rows[0][3], "the clean defocused burst should fail the vLap floor"
+    assert rows[1][3], (
+        "one grey level of noise no longer flips the vLap floor; the argument "
+        f"for a scale-free focus measure must be re-derived: {rows}"
+    )
+    assert rows[-1][1] > 50 * rows[0][2], rows
+
+
+def test_blur_score_edge_cases_and_validation():
+    assert blur_score(np.full((64, 64), 128, np.uint8)) == 0.0   # nothing to lose
+    with pytest.raises(SaafError):
+        blur_score(np.zeros((64, 64), np.uint8), span=1)
+    with pytest.raises(SaafError):
+        blur_score(np.zeros((1, 1), np.uint8))
+    with pytest.raises(SaafError, match="max_blur_score"):
+        BurstStacker(max_blur_score=0.0)
+    with pytest.raises(SaafError, match="max_blur_score"):
+        BurstStacker(max_blur_score=1.5)
+    # colour in, same answer as its grey conversion
+    grey = make_burst(hr_text_scene(), [(0.0, 0.0)])[0]
+    bgr = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
+    assert blur_score(bgr) == pytest.approx(blur_score(grey), abs=1e-9)
+
+
+def test_defocus_rejection_carries_its_measured_number():
+    frames = defocused_burst(hr_edge_scene(), 1.6)
+    r = BurstStacker(scale=2).stack(frames)
+    for rep in r.reports:
+        assert rep.code == R_DEFOCUS
+        assert f"{rep.blur_score:.3f}" in rep.reason, rep.reason
+        assert rep.blur_score > DEFAULT_MAX_BLUR_SCORE
+    assert "vLap" in r.warning, (
+        "the burst warning must say what did NOT fire, or the next reader "
+        "will re-tune the wrong knob"
+    )
 
 
 def test_reports_cover_every_frame_exactly_once():

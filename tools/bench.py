@@ -15,7 +15,9 @@ aspirational. It does three things:
   2. MEASURE    run every benchmark whose modules ARE present, across N
                 committed seeds, and report the MEAN and the WORST CASE.
                 Never the best. A harness that quotes its best seed is a
-                marketing document, not a measurement.
+                marketing document, not a measurement. A benchmark that runs
+                and comes back with no samples reports NOT MEASURED, which is
+                not the same thing as a pass.
 
   3. VERIFY     verify_claims() re-reads a markdown file and re-checks every
                 number in it against results/metrics.json. A number that has
@@ -74,6 +76,11 @@ STATUS_OK = "OK"
 STATUS_NOT_BUILT = "NOT_BUILT"
 STATUS_ERROR = "ERROR"
 STATUS_SKIPPED = "SKIPPED"
+# A benchmark that RAN, did not raise, and came back with no samples from any
+# seed. It used to report OK with `n/a` in every column, which is
+# indistinguishable from a benchmark that was simply not selected. Invariant 7:
+# abstain with a name.
+STATUS_NOT_MEASURED = "NOT_MEASURED"
 
 LOWER_BETTER = "lower_is_better"
 HIGHER_BETTER = "higher_is_better"
@@ -208,7 +215,11 @@ def _round(v: float, nd: int = 9) -> float:
 
 def _percentile(sorted_vals: list[float], q: float) -> float:
     """Nearest-rank percentile. No interpolation: an interpolated p95 invents a
-    value that was never measured, and this file only reports measurements."""
+    value that was never measured, and this file only reports measurements.
+
+    The rank is rounded UP. Rounding it down reports a smaller tail than was
+    actually measured, which is the flattering direction.
+    """
     if not sorted_vals:
         return float("nan")
     k = max(1, math.ceil(q * len(sorted_vals)))
@@ -216,6 +227,17 @@ def _percentile(sorted_vals: list[float], q: float) -> float:
 
 
 def summarise(samples: list[float], polarity: str) -> dict[str, Any]:
+    """Both percentiles, always the same way round, plus which one is the tail.
+
+    This used to publish ONE column called `p95` that held
+    `_percentile(s, 0.95)` for a lower-is-better benchmark and
+    `_percentile(s, 0.05)` for a higher-is-better one. The intent was right —
+    for recall, the bad tail IS the fifth percentile — but the header said p95
+    over a p5 for three of the five benchmarks, which is a labelling lie of
+    exactly the kind this file exists to prevent. So `p95` is now always the
+    95th percentile and `p5` is always the 5th, and `tail_percentile` names
+    which of the two is the end that matters for this benchmark's direction.
+    """
     if not samples:
         return {"n": 0}
     s = sorted(samples)
@@ -226,7 +248,9 @@ def summarise(samples: list[float], polarity: str) -> dict[str, Any]:
         "worst": _round(s[-1] if hi else s[0]),
         "best": _round(s[0] if hi else s[-1]),
         "median": _round(statistics.median(s)),
-        "p95": _round(_percentile(s, 0.95) if hi else _percentile(s, 0.05)),
+        "p95": _round(_percentile(s, 0.95)),
+        "p5": _round(_percentile(s, 0.05)),
+        "tail_percentile": "p95" if hi else "p5",
         "stdev": _round(statistics.pstdev(s)),
     }
 
@@ -942,14 +966,30 @@ def run_benchmarks(seeds: list[int], *, scale: float = 1.0,
             results[b.name] = block
             continue
 
-        block["status"] = STATUS_OK
-        block.update(summarise(samples.all(), b.polarity))
         block["per_seed"] = {
             str(s): summarise(v, b.polarity) for s, v in sorted(samples.per_seed.items())
         }
-        block["worst_seed"] = _worst_seed(samples, b.polarity)
+        block["seeds_with_no_samples"] = [
+            s for s, v in sorted(samples.per_seed.items()) if not v
+        ]
         block["detail"] = samples.detail
         block["nondeterministic"] = samples.nondeterministic
+
+        # A body that ran, did not raise, and produced NOTHING. summarise([])
+        # is {"n": 0}, so the block used to say OK with n/a in every column --
+        # visually identical to a benchmark that was never selected. Say it.
+        if not samples.all():
+            block["status"] = STATUS_NOT_MEASURED
+            block["n"] = 0
+            block["worst_seed"] = None
+            results[b.name] = block
+            log(f"  {b.name:<28} NOT MEASURED  (no samples from any seed; "
+                f"nothing is published for it)")
+            continue
+
+        block["status"] = STATUS_OK
+        block.update(summarise(samples.all(), b.polarity))
+        block["worst_seed"] = _worst_seed(samples, b.polarity)
         results[b.name] = block
         log(f"  {b.name:<28} OK  mean={_fmt(block.get('mean'), b.decimals)} "
             f"worst={_fmt(block.get('worst'), b.decimals)} {b.unit}")
@@ -975,8 +1015,24 @@ def _real_now() -> str:
 
 
 def _worst_seed(samples: Samples, polarity: str) -> int | None:
+    """The seed the report blames, judged by that seed's OWN worst sample.
+
+    Three things here are load-bearing and each is pinned by a test, because
+    every one of them changes a published cell without changing anything a
+    plumbing test can see:
+
+      direction   the answer is the seed that did WORST. Inverting the sign
+                  prints the best seed under a column headed `worst seed`.
+      reduction   a seed is judged by its worst sample, not its best. A seed
+                  with one catastrophic sample and one excellent one is a bad
+                  seed.
+      tie-break   `kernel_exactly_once` scores 1.0 on every seed, so its
+                  published `worst seed` is decided ENTIRELY by the tie-break.
+                  Iterating the dict left that to insertion order; sorting
+                  makes it the lowest seed number, deterministically.
+    """
     best: tuple[float, int] | None = None
-    for seed, vals in samples.per_seed.items():
+    for seed, vals in sorted(samples.per_seed.items()):
         if not vals:
             continue
         v = max(vals) if polarity == LOWER_BETTER else min(vals)
@@ -1028,8 +1084,12 @@ def _fmt(v: Any, decimals: int) -> str:
     return str(v)
 
 
+# `p95` and `p5` are both true nearest-rank percentiles of the sample
+# distribution. `bad tail` names which of the two is the end that matters for
+# that row's direction, because a single header cannot be honest about both a
+# lower-is-better and a higher-is-better benchmark at once.
 _BENCH_COLUMNS = ("benchmark", "status", "unit", "n", "mean", "worst", "best",
-                  "median", "p95", "worst seed")
+                  "median", "p95", "p5", "bad tail", "worst seed")
 _SEED_COLUMNS_HEAD = ("benchmark", "status")
 _MODULE_COLUMNS = ("module", "built")
 
@@ -1039,12 +1099,13 @@ def bench_row(name: str, metrics: dict[str, Any]) -> list[str]:
     d = int(b.get("decimals", 4))
     status = b.get("status", STATUS_ERROR)
     if status != STATUS_OK:
-        return [name, status, b.get("unit", "-"), "n/a", "n/a", "n/a", "n/a",
-                "n/a", "n/a", "n/a"]
+        return ([name, status, b.get("unit", "-")]
+                + ["n/a"] * (len(_BENCH_COLUMNS) - 3))
     return [
         name, status, b.get("unit", "-"), _fmt(b.get("n"), 0),
         _fmt(b.get("mean"), d), _fmt(b.get("worst"), d), _fmt(b.get("best"), d),
-        _fmt(b.get("median"), d), _fmt(b.get("p95"), d),
+        _fmt(b.get("median"), d), _fmt(b.get("p95"), d), _fmt(b.get("p5"), d),
+        str(b.get("tail_percentile", "-")),
         _fmt(b.get("worst_seed"), 0),
     ]
 
@@ -1120,9 +1181,19 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     A("## Results")
     A("")
     A("`worst` is the worst single sample across every seed, never the best and")
-    A("never only the mean.")
+    A("never only the mean. `worst seed` is the seed that owned that sample;")
+    A("ties go to the lowest seed number.")
     A("")
-    A(_md_row(_BENCH_COLUMNS) + " <!-- bench:ignore -->")   # "p95" is a header
+    A("Both percentile columns are true nearest-rank percentiles of the same")
+    A("sample distribution, computed the same way for every row. Which end is")
+    A("the bad one depends on the benchmark's direction, so the row names it")
+    A("rather than one header claiming it for every row.")
+    A("")
+    A("A benchmark whose row reads NOT_MEASURED ran without raising and came")
+    A("back with no samples at all. It publishes nothing; see Findings.")
+    A("")
+    # exempt: "p95" and "p5" are column HEADINGS, not measurements
+    A(_md_row(_BENCH_COLUMNS) + " <!-- bench:ignore -->")
     A(_md_row(["---"] * len(_BENCH_COLUMNS)))
     for name in metrics.get("benchmarks", {}):
         A(_md_row(bench_row(name, metrics)) + f" <!--@row bench:{name} -->")
@@ -1157,6 +1228,15 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     A("`results/metrics.json` like every other number on this page.")
     A("")
     found = False
+    for name, b in metrics.get("benchmarks", {}).items():
+        if b.get("status") != STATUS_NOT_MEASURED:
+            continue
+        found = True
+        A(f"- `{name}` ran to completion and measured nothing. Every seed came")
+        A("  back with no samples at all, so it publishes no figure and its row")
+        A("  above is n/a in every column. Its status is")
+        A(f"  `{STATUS_NOT_MEASURED}` <!--@ {name}.status -->, which is a"
+          " different thing from a pass.")
     if _ok(metrics, "plane_reproj_rmse_px"):
         found = True
         A("- `MatLock.reproj_rmse_px` is an exact-fit residual, not a measurement."
@@ -1207,7 +1287,12 @@ def render_markdown(metrics: dict[str, Any]) -> str:
     A("  not — see Findings above, and do not read a recall below one here as")
     A("  the abstention machinery working until that split is closed.")
     A("- A benchmark reported NOT BUILT has measured nothing at all. Its absence")
-    A("  is not evidence of anything.")
+    A("  is not evidence of anything. Neither is a benchmark reported")
+    A("  NOT_MEASURED: that one ran, and still has nothing to say.")
+    A("- The two percentile columns are nearest-rank over the pooled samples of")
+    A("  every seed. With a handful of samples per benchmark they are coarse,")
+    A("  and on a benchmark that reports one sample per seed they are just")
+    A("  order statistics of that short list. Read `worst`.")
     A("")
     return "\n".join(L) + "\n"
 

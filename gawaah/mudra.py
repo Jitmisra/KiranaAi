@@ -73,9 +73,23 @@ PX2_PER_MM2 = PX_PER_MM_X * PX_PER_MM_Y
 
 STATES = ("NONE", "OPEN", "FIST", "GOODS", "AMBIGUOUS")
 
-# Every abstention this module can emit, named. Published so a caller can
+# Every verdict cause this module can emit, named. Published so a caller can
 # aggregate abstention rate *by cause* -- SIX.md makes abstention rate per
 # feature a first-class number, and a rate without causes is not diagnosable.
+#
+# THIS TUPLE IS A CONTRACT, ENFORCED FROM BOTH ENDS.
+#   soundness    GestureState.__post_init__ REFUSES to carry a reason whose
+#                head is not in here, so an unpublished code cannot escape
+#                this module at runtime even once.
+#   completeness tests/test_mudra.py AST-walks this file, enumerates every
+#                literal that can reach a reason position, and fails if the
+#                two sets differ in either direction -- or if a reason
+#                position holds an expression it cannot enumerate.
+#   liveness     the same test drives a shape through every emission SITE and
+#                line-traces mudra.py to prove each one is reachable.
+# A regex over the source is NOT sufficient for the completeness half; the
+# measured miss rate of the regex that used to stand here is 5 of 7 smuggling
+# routes (test_the_reason_enumerator_sees_what_a_regex_cannot).
 REASONS = (
     "no_occluder",
     "occluder_too_large",
@@ -170,6 +184,17 @@ class GestureState:
             raise MudraError(f"state {self.state!r} not in {STATES}")
         if self.raw_state not in STATES:
             raise MudraError(f"raw_state {self.raw_state!r} not in {STATES}")
+        # SOUNDNESS half of the REASONS contract. A reason code that is not
+        # published cannot be aggregated by a caller, which silently turns a
+        # published abstention-rate-by-cause into a lie. Refuse to construct
+        # the record at all rather than let one escape. The head is the part
+        # before the "|" because update() appends dwell telemetry.
+        head = self.reason.split("|", 1)[0]
+        if head and head not in REASONS:
+            raise MudraError(
+                f"reason {head!r} is not published in REASONS; an unpublished "
+                f"cause cannot be aggregated, so it must not escape this module"
+            )
 
     @property
     def decided(self) -> bool:
