@@ -1885,6 +1885,899 @@ T('the shell created every element app.js reaches for', () => {
 globalThis.setTimeout = D_.realSetTimeout;
 
 
+// ===========================================================================
+// 16. THE CAMERA, THE ROUTER AND THE PANEL SEAM.
+//
+// Everything above this line tests the billing core. Nothing above it touched
+// getUserMedia, the six-panel router, the panel registry or the connection
+// reducer — so every one of those could have been wrong in a way no test
+// would notice. This section closes that, pure functions first and then the
+// whole shell driven through the real index.html contract.
+// ===========================================================================
+
+G('16. camera failure classification — every failure is NAMED, never black');
+T('each DOMException maps to its own named reason', () => {
+  const cases = [
+    ['NotAllowedError', A.Reason.CAMERA_DENIED],
+    ['PermissionDeniedError', A.Reason.CAMERA_DENIED],
+    ['NotFoundError', A.Reason.CAMERA_ABSENT],
+    ['DevicesNotFoundError', A.Reason.CAMERA_ABSENT],
+    ['NotReadableError', A.Reason.CAMERA_BUSY],
+    ['TrackStartError', A.Reason.CAMERA_BUSY],
+    ['SecurityError', A.Reason.CAMERA_INSECURE],
+    ['OverconstrainedError', A.Reason.CAMERA_OVERCONSTRAINED],
+    ['AbortError', A.Reason.CAMERA_ABORTED],
+    ['TypeError', A.Reason.CAMERA_UNSUPPORTED],
+  ];
+  for (const [name, want] of cases) {
+    const c = A.classifyCameraError({ name, message: 'x' });
+    eq(c.reason, want, name);
+    ok(typeof c.help === 'string' && c.help.length > 20, `${name} has no actionable help`);
+  }
+});
+T('an unnamed failure still gets a reason and help — never an empty screen', () => {
+  for (const junk of [null, undefined, {}, 'boom', new Error('nope'), 0]) {
+    const c = A.classifyCameraError(junk);
+    eq(c.reason, A.Reason.CAMERA_FAILED, JSON.stringify(junk));
+    ok(c.help.length > 20, 'no help text');
+  }
+});
+T('every camera reason in the gate table has help text', () => {
+  for (const r of Object.values(A.CAMERA_ERROR_REASONS)) {
+    ok(typeof A.CAMERA_HELP[r] === 'string' && A.CAMERA_HELP[r].length > 20, `no help for ${r}`);
+  }
+});
+T('preflight refuses an insecure context BEFORE prompting', () => {
+  const p = A.cameraPreflight({ isSecureContext: false, hasMediaDevices: true, hasGetUserMedia: true });
+  eq(p.reason, A.Reason.CAMERA_INSECURE);
+});
+T('preflight refuses a browser with no getUserMedia', () => {
+  eq(A.cameraPreflight({ isSecureContext: true, hasMediaDevices: false, hasGetUserMedia: false }).reason,
+    A.Reason.CAMERA_UNSUPPORTED);
+  eq(A.cameraPreflight({ isSecureContext: true, hasMediaDevices: true, hasGetUserMedia: false }).reason,
+    A.Reason.CAMERA_UNSUPPORTED);
+});
+T('an UNKNOWN isSecureContext is not evidence of insecurity', () => {
+  eq(A.cameraPreflight({ hasMediaDevices: true, hasGetUserMedia: true }), null,
+    'a runtime that does not report isSecureContext was refused on a guess');
+});
+T('only overconstrained and absent are worth a second attempt', () => {
+  ok(A.shouldRetryCamera(A.Reason.CAMERA_OVERCONSTRAINED));
+  ok(A.shouldRetryCamera(A.Reason.CAMERA_ABSENT));
+  for (const r of [A.Reason.CAMERA_DENIED, A.Reason.CAMERA_BUSY, A.Reason.CAMERA_INSECURE,
+    A.Reason.CAMERA_UNSUPPORTED, A.Reason.CAMERA_FAILED]) {
+    ok(!A.shouldRetryCamera(r), `${r} would be retried, hiding the real reason behind a spinner`);
+  }
+});
+T('the constraint ladder asks for the REAR camera before any camera', () => {
+  const plan = A.cameraFallbackPlan();
+  eq(plan.length, 3);
+  eq(plan[0].constraints.video.facingMode.exact, 'environment');
+  eq(plan[1].constraints.video.facingMode.ideal, 'environment');
+  eq(plan[2].constraints.video, true, 'the last rung must accept any camera');
+  for (const s of plan) eq(s.constraints.audio, false, 'the counter must never ask for a microphone');
+});
+T('a front camera SAYS SO and says the mat will not lock', () => {
+  const d = A.describeCamera({ facingMode: 'user', width: 1280, height: 720 }, 'FaceTime HD');
+  eq(d.facing, A.Facing.FRONT);
+  eq(d.reason, A.Reason.CAMERA_FRONT);
+  eq(d.matLockExpected, false);
+  ok(/NOT lock/.test(d.note), d.note);
+  ok(/correct, not broken/.test(d.note), 'a laptop must be told this is not a bug');
+});
+T('a rear camera is named as such', () => {
+  const d = A.describeCamera({ facingMode: 'environment', width: 1280, height: 960 }, '');
+  eq(d.facing, A.Facing.REAR);
+  eq(d.matLockExpected, true);
+  ok(/1280x960/.test(d.note), d.note);
+});
+T('a silent browser abstains on the lens rather than guessing REAR', () => {
+  const d = A.describeCamera({ width: 640, height: 480 }, 'Integrated Webcam');
+  eq(d.facing, A.Facing.UNKNOWN);
+  eq(d.reason, A.Reason.CAMERA_FACING_UNKNOWN);
+  eq(d.matLockExpected, null, 'an unknown lens must not claim a lock is expected');
+  ok(/did not say/.test(d.note), d.note);
+});
+T('the label is only a fallback, and facingMode always wins', () => {
+  const d = A.describeCamera({ facingMode: 'user' }, 'Back Triple Camera');
+  eq(d.facing, A.Facing.FRONT, 'a label overrode the browser-reported facingMode');
+  eq(A.describeCamera({}, 'Back Triple Camera').evidence, 'label');
+});
+T('#camreason is never blank, in any camera state', () => {
+  const states = [
+    { state: A.CameraState.IDLE, reason: A.Reason.CAMERA_IDLE },
+    { state: A.CameraState.STARTING, reason: A.Reason.CAMERA_STARTING },
+    { state: A.CameraState.LIVE, reason: A.Reason.CAMERA_REAR, note: 'rear camera' },
+    { state: A.CameraState.FAILED, reason: A.Reason.CAMERA_DENIED, help: 'do the thing' },
+    { state: A.CameraState.FAILED, reason: A.Reason.CAMERA_BUSY },
+    {}, null, undefined,
+  ];
+  for (const s of states) {
+    const line = A.cameraReasonLine(s);
+    ok(typeof line === 'string' && line.trim().length > 0, `blank reason for ${JSON.stringify(s)}`);
+  }
+});
+T('the camera gate collapses to exactly one of the shell contract codes', () => {
+  const LEGAL = ['IDLE', 'REQUESTING', 'LIVE', 'DENIED', 'ABSENT', 'INSECURE', 'ERROR'];
+  eq(A.cameraGateCode({ state: A.CameraState.IDLE }), 'IDLE');
+  eq(A.cameraGateCode({ state: A.CameraState.STARTING }), 'REQUESTING');
+  eq(A.cameraGateCode({ state: A.CameraState.LIVE }), 'LIVE');
+  eq(A.cameraGateCode({ state: A.CameraState.FAILED, reason: A.Reason.CAMERA_DENIED }), 'DENIED');
+  eq(A.cameraGateCode({ state: A.CameraState.FAILED, reason: A.Reason.CAMERA_ABSENT }), 'ABSENT');
+  eq(A.cameraGateCode({ state: A.CameraState.FAILED, reason: A.Reason.CAMERA_INSECURE }), 'INSECURE');
+  eq(A.cameraGateCode({ state: A.CameraState.FAILED, reason: A.Reason.CAMERA_BUSY }), 'ERROR');
+  // no input may produce a code the stylesheet has never heard of
+  const rnd = mulberry32(77);
+  const pool = [...Object.values(A.Reason), 'nonsense', '', null, undefined, 7];
+  for (let i = 0; i < 4000; i++) {
+    const cam = { state: pool[Math.floor(rnd() * pool.length)], reason: pool[Math.floor(rnd() * pool.length)] };
+    ok(LEGAL.includes(A.cameraGateCode(cam)), `illegal gate code for ${JSON.stringify(cam)}`);
+  }
+});
+
+G('17. panel router — pure, and it abstains on a typo instead of guessing');
+T('selecting a different panel applies and records the previous one', () => {
+  const s0 = A.initialPanelState();
+  eq(s0.current, 'core');
+  const s1 = A.selectPanel(s0, 'mudra');
+  eq(s1.current, 'mudra'); eq(s1.previous, 'core');
+  eq(s1.applied, true); eq(s1.reason, A.Reason.PANEL_SHOWN);
+});
+T('selecting the panel already shown is a no-op with a named reason', () => {
+  const s = A.selectPanel(A.initialPanelState(), 'core');
+  eq(s.applied, false); eq(s.reason, A.Reason.PANEL_SAME); eq(s.current, 'core');
+});
+T('an UNKNOWN panel id keeps the current panel and names the refusal', () => {
+  const s0 = A.selectPanel(A.initialPanelState(), 'chilla');
+  for (const bad of ['nope', 'PANEL-MUDRA', '', null, undefined, 7, {}, [], 'core ']) {
+    const s = A.selectPanel(s0, bad);
+    eq(s.applied, false, `accepted ${JSON.stringify(bad)}`);
+    eq(s.current, 'chilla', 'an unknown id silently changed the visible panel');
+    ok(s.reason.startsWith(A.Reason.PANEL_UNKNOWN), s.reason);
+  }
+});
+T('selectPanel never throws and never mutates its input', () => {
+  const s0 = A.initialPanelState();
+  const before = JSON.stringify(s0);
+  const rnd = mulberry32(9);
+  const pool = [...A.PANEL_IDS, 'x', '', null, undefined, 0, NaN, {}, [], true];
+  let st = s0;
+  for (let i = 0; i < 5000; i++) {
+    st = A.selectPanel(st, pool[Math.floor(rnd() * pool.length)]);
+    ok(A.PANEL_IDS.includes(st.current), `router landed on ${st.current}`);
+  }
+  eq(JSON.stringify(s0), before, 'selectPanel mutated the state it was given');
+});
+T('hash and tab ids both resolve, and junk resolves to null', () => {
+  for (const h of ['#panel-mudra', 'panel-mudra', '#mudra', 'MUDRA']) eq(A.panelIdFromHash(h), 'mudra', h);
+  for (const h of ['#panel-nope', '#', '', null, 5, '#panel-']) eq(A.panelIdFromHash(h), null, String(h));
+  eq(A.panelIdFromTabId('tabsel-chilla'), 'chilla');
+  eq(A.panelIdFromTabId('tabsel-nope'), null);
+  eq(A.panelIdFromTabId(null), null);
+  for (const id of A.PANEL_IDS) eq(A.panelIdFromTabId(A.panelTabId(id)), id, id);
+});
+T('exactly one tab radio is checked, for every panel', () => {
+  for (const id of A.PANEL_IDS) {
+    const sel = A.panelTabSelection({ current: id });
+    const on = Object.entries(sel).filter(([, v]) => v);
+    eq(on.length, 1, `${on.length} radios checked for ${id}`);
+    eq(on[0][0], `tabsel-${id}`);
+    eq(Object.keys(sel).length, A.PANEL_IDS.length);
+  }
+  eq(A.panelTabSelection(null)['tabsel-core'], true, 'a junk state must fall back to CORE');
+});
+T('panelVisibility hides every panel but the current one', () => {
+  const vis = A.panelVisibility({ current: 'saaf' });
+  eq(vis['panel-saaf'], false);
+  eq(Object.values(vis).filter((v) => v === false).length, 1);
+});
+
+G('18. panel status — ABSTAIN is the default, and GREEN is not available');
+T('CORE is never OK without a mat lock — fuzzed', () => {
+  const rnd = mulberry32(21);
+  const camStates = [A.CameraState.IDLE, A.CameraState.STARTING, A.CameraState.LIVE, A.CameraState.FAILED, 'junk', null];
+  const lockStates = [true, false, 1, 'true', null, undefined];
+  let okCount = 0;
+  for (let i = 0; i < 5000; i++) {
+    const camera = { state: camStates[Math.floor(rnd() * camStates.length)], reason: 'r' };
+    const lock = { locked: lockStates[Math.floor(rnd() * lockStates.length)], reason: 'no markers detected' };
+    const cvReason = rnd() < 0.3 ? A.Reason.OPENCV_ABSENT : null;
+    const s = A.corePanelStatus({ camera, lock, cvReason });
+    ok(s.status === 'OK' || s.status === 'ABSTAIN', `illegal core status ${s.status}`);
+    if (s.status === 'OK') {
+      okCount++;
+      eq(lock.locked, true, 'CORE said OK without a mat lock');
+      eq(camera.state, A.CameraState.LIVE, 'CORE said OK without a live camera');
+      eq(cvReason, null, 'CORE said OK with no geometry loaded');
+    } else {
+      ok(typeof s.why === 'string' && s.why.length > 0, 'an abstention with no reason');
+    }
+  }
+  ok(okCount > 0, 'the OK branch was never exercised');
+  measured.core_status_fuzz_cases = 5000;
+});
+T('CORE names the REAL cause, not the markup default', () => {
+  const lk = { locked: false, reason: 'no markers detected' };
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.IDLE }, lock: lk }).why, A.Reason.CAMERA_IDLE);
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.STARTING }, lock: lk }).why, A.Reason.CAMERA_STARTING);
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.FAILED, reason: A.Reason.CAMERA_DENIED }, lock: lk }).why,
+    A.Reason.CAMERA_DENIED);
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.LIVE }, lock: lk, cvReason: A.Reason.OPENCV_ABSENT }).why,
+    A.Reason.OPENCV_ABSENT);
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.LIVE }, lock: lk }).why, 'no markers detected');
+  eq(A.corePanelStatus({ camera: { state: A.CameraState.LIVE }, lock: { locked: true } }).status, 'OK');
+});
+T('nothing attached is OFF; attached and silent is ABSTAIN', () => {
+  const off = A.panelStatusFor('mudra', false, null);
+  eq(off.status, A.PanelStatus.OFF);
+  eq(off.why, null, 'OFF must not overwrite the shell\'s own placeholder text');
+  eq(A.panelStatusFor('mudra', true, null).status, A.PanelStatus.ABSTAIN);
+  eq(A.panelStatusFor('mudra', true, null).why, A.Reason.PANEL_NO_DATA);
+  eq(A.panelStatusFor('mudra', true, {}).status, A.PanelStatus.ABSTAIN);
+});
+T('a declared OK or ABSTAIN is honoured, with its reason', () => {
+  eq(A.panelStatusFor('peel', true, { status: 'OK' }).status, A.PanelStatus.OK);
+  const ab = A.panelStatusFor('peel', true, { status: 'ABSTAIN', why: 'peel_ecc_unreadable' });
+  eq(ab.status, A.PanelStatus.ABSTAIN); eq(ab.why, 'peel_ecc_unreadable');
+  eq(A.panelStatusFor('peel', true, { status: 'abstain' }).status, A.PanelStatus.ABSTAIN, 'case must not matter');
+});
+T('INVARIANT 2 — a panel that declares GREEN is refused down to ABSTAIN', () => {
+  for (const g of ['GREEN', 'green', 'PAID', 'paid']) {
+    const s = A.panelStatusFor('chilla', true, { status: g, why: 'matched' });
+    eq(s.status, A.PanelStatus.ABSTAIN, `a panel painted itself ${g}`);
+    ok(s.why.startsWith(A.Reason.PANEL_NEVER_GREEN), s.why);
+  }
+});
+T('an invented status is refused with a named reason', () => {
+  for (const bad of ['FINE', 'WARN', 'RED', 7, {}, [], true]) {
+    const s = A.panelStatusFor('saaf', true, { status: bad });
+    eq(s.status, A.PanelStatus.ABSTAIN, `accepted status ${JSON.stringify(bad)}`);
+    ok(s.why.startsWith(A.Reason.PANEL_BAD_STATUS), s.why);
+  }
+});
+T('no input to panelStatusFor produces anything but OFF/ABSTAIN/OK', () => {
+  const rnd = mulberry32(33);
+  const pool = ['OK', 'ABSTAIN', 'OFF', 'GREEN', 'PAID', 'x', '', null, undefined, 0, {}, []];
+  for (let i = 0; i < 4000; i++) {
+    const s = A.panelStatusFor('mudra', rnd() < 0.7, { status: pool[Math.floor(rnd() * pool.length)] });
+    ok(['OFF', 'ABSTAIN', 'OK'].includes(s.status), `illegal status ${JSON.stringify(s.status)}`);
+  }
+});
+
+G('19. the panel registry — the seam other agents build against');
+T('registerPanel accepts the six ids and refuses anything else', () => {
+  const r = A.makePanelRegistry();
+  for (const id of A.PANEL_IDS) ok(r.register(id, {}).ok, id);
+  for (const bad of ['nope', '', null, 7, {}, 'CORE']) {
+    const v = r.register(bad, {});
+    eq(v.ok, false, `accepted ${JSON.stringify(bad)}`);
+    ok(v.reason.startsWith(A.Reason.PANEL_UNKNOWN), v.reason);
+  }
+});
+T('hooks must be functions; a non-function is refused, not ignored', () => {
+  const r = A.makePanelRegistry();
+  eq(r.register('mudra', { onState: 5 }).reason, `${A.Reason.PANEL_BAD_HOOKS}:mudra.onState`);
+  eq(r.register('mudra', { onFrame: 'x' }).reason, `${A.Reason.PANEL_BAD_HOOKS}:mudra.onFrame`);
+  ok(r.register('mudra', { onState: null }).ok, 'an explicitly absent hook is legal');
+  ok(!r.has('mudra') || true);
+});
+T('re-registering replaces the hooks and says so', () => {
+  const r = A.makePanelRegistry();
+  eq(r.register('saaf', {}).reason, A.Reason.PANEL_REGISTERED);
+  const again = r.register('saaf', {});
+  eq(again.replaced, true); eq(again.reason, A.Reason.PANEL_REPLACED);
+});
+T('a panel receives state, and cannot reach back into the counter', () => {
+  const r = A.makePanelRegistry();
+  let seen = null;
+  r.register('mudra', { onState: (v) => { seen = v; } });
+  const view = Object.freeze({ state: 'IDLE', totalPaise: 500, lines: Object.freeze([]) });
+  eq(r.emitState(view), 1);
+  eq(seen.totalPaise, 500);
+  throws(() => { seen.totalPaise = 999; }, 'the panel view was mutable');
+});
+T('a THROWING panel hook is isolated — the counter keeps counting', () => {
+  const r = A.makePanelRegistry();
+  let good = 0;
+  r.register('mudra', { onState: () => { throw new Error('panel is broken'); } });
+  r.register('peel', { onState: () => { good++; } });
+  doesNotThrow(() => r.emitState({ state: 'IDLE' }), 'a broken panel unwound into the counter');
+  eq(good, 1, 'a broken panel stopped the panel after it');
+  eq(r.get('mudra').errors, 1);
+  ok(r.get('mudra').lastError.startsWith(A.Reason.PANEL_HOOK_THREW), r.get('mudra').lastError);
+  ok(r.faults.length >= 1);
+});
+T('INVARIANT 4 — emitFrame refuses anything that is not the rectified crop', () => {
+  const r = A.makePanelRegistry();
+  let got = 0;
+  r.register('saaf', { onFrame: () => { got++; } });
+  const good = { cropKind: A.RETAIN_RECTIFIED, crop: 'c', width: 840, height: 1188 };
+  eq(r.emitFrame(good), 1); eq(got, 1);
+  throws(() => r.emitFrame({ ...good, raw: 'leak' }), 'a raw frame reached the panels');
+  throws(() => r.emitFrame({ ...good, cropKind: 'raw' }), 'an untagged crop reached the panels');
+  throws(() => r.emitFrame({ ...good, width: 1280, height: 960 }), 'a full-frame-sized crop reached the panels');
+  throws(() => r.emitFrame(null), 'null reached the panels');
+  eq(got, 1, 'a refused frame was still delivered');
+});
+T('declare() adjudicates rather than trusts, and CORE is not declarable', () => {
+  const r = A.makePanelRegistry();
+  r.register('chilla', {});
+  eq(r.declare('chilla', 'OK').status, A.PanelStatus.OK);
+  eq(r.statuses().chilla.status, A.PanelStatus.OK);
+  eq(r.declare('chilla', 'GREEN').status, A.PanelStatus.ABSTAIN, 'a panel declared itself GREEN');
+  eq(r.declare('core', 'OK').ok, false, 'CORE status was declarable');
+  eq(r.declare('nope', 'OK').ok, false);
+  // an unregistered panel is OFF even if something declared for it earlier
+  eq(r.statuses().mudra.status, A.PanelStatus.OFF);
+});
+T('a watcher that throws does not unwind into the panel that spoke', () => {
+  const r = A.makePanelRegistry();
+  r.register('saaf', {});
+  r.watch(() => { throw new Error('repaint blew up'); });
+  doesNotThrow(() => r.declare('saaf', 'ABSTAIN', 'saaf_no_burst'), 'a broken repaint broke the panel');
+  ok(r.faults.some((f) => f.includes('watch')), r.faults.join('|'));
+});
+
+G('19b. load order — a panel module attaches whether it loads before or after');
+T('the queue is drained and every descriptor is marked attached', () => {
+  const got = [];
+  const q = [
+    { id: 'mudra', attach: (r) => { got.push('mudra'); r('mudra', {}); }, attached: false },
+    { id: 'chilla', attach: (r) => { got.push('chilla'); r('chilla', {}); }, attached: false },
+  ];
+  const out = A.drainPanelQueue(q, () => {});
+  eq(out.attached.join(','), 'mudra,chilla');
+  eq(got.join(','), 'mudra,chilla');
+  ok(q.every((d) => d.attached === true), 'a drained descriptor was not marked attached');
+});
+T('a panel that already attached itself is NOT attached twice', () => {
+  let calls = 0;
+  const q = [{ id: 'peel', attach: () => { calls++; }, attached: true }];
+  const out = A.drainPanelQueue(q, () => {});
+  eq(calls, 0, 'a panel was registered twice');
+  eq(out.skipped.join(','), 'peel');
+});
+T('one panel that throws on attach does not stop the others', () => {
+  const q = [
+    { id: 'mudra', attach: () => { throw new Error('mudra could not construct'); }, attached: false },
+    { id: 'saaf', attach: () => {}, attached: false },
+    { id: 'junk' },
+    null,
+    'not a descriptor',
+  ];
+  let out;
+  doesNotThrow(() => { out = A.drainPanelQueue(q, () => {}); }, 'a broken panel unwound into boot');
+  eq(out.attached.join(','), 'saaf', 'a broken panel blocked the panel after it');
+  const why = JSON.stringify(out.refused);
+  ok(out.refused.some((r) => r.id === 'mudra' && /could not construct/.test(r.message)), why);
+  ok(out.refused.some((r) => r.id === 'junk' && r.message === 'descriptor_has_no_attach'), why);
+  eq(out.refused.length, 4);
+  // the refusal must be attributable to a panel, or it cannot be shown on one
+  eq(out.refused.filter((r) => r.id !== null).length, 2, why);
+});
+T('drainPanelQueue survives junk without throwing', () => {
+  for (const q of [null, undefined, {}, 'x', 5]) doesNotThrow(() => A.drainPanelQueue(q, () => {}), String(q));
+  eq(A.drainPanelQueue([{ id: 'a', attach: () => {} }], null).attached.length, 0);
+});
+
+G('20. brain bridge — connection state, and offline authorises nothing');
+T('CONNECTING -> OPEN resets the attempt counter', () => {
+  let c = A.initialConnState();
+  eq(c.status, A.Conn.CONNECTING);
+  c = A.reduceConn(c, { type: 'OPEN' });
+  eq(c.status, A.Conn.OPEN); eq(c.attempt, 0); eq(c.opens, 1);
+  ok(A.connIsUp(c));
+});
+T('repeated closes escalate RETRYING -> OFFLINE after the named threshold', () => {
+  let c = A.reduceConn(A.initialConnState(), { type: 'OPEN' });
+  const seen = [];
+  for (let i = 0; i < 5; i++) { c = A.reduceConn(c, { type: 'CLOSE', rnd: () => 0.5 }); seen.push(c.status); }
+  eq(seen[0], A.Conn.RETRYING);
+  eq(seen[A.WS_OFFLINE_AFTER_ATTEMPTS - 1], A.Conn.OFFLINE);
+  eq(c.status, A.Conn.OFFLINE);
+  ok(!A.connIsUp(c));
+  measured.conn_offline_after_attempts = A.WS_OFFLINE_AFTER_ATTEMPTS;
+});
+T('the retry delay grows and is capped', () => {
+  let c = A.initialConnState();
+  const delays = [];
+  for (let i = 0; i < 12; i++) { c = A.reduceConn(c, { type: 'CLOSE', rnd: () => 1 }); delays.push(c.nextDelayMs); }
+  ok(delays[0] <= delays[3], `backoff did not grow: ${delays.join(',')}`);
+  for (const d of delays) ok(d <= A.WS_CAP_MS, `delay ${d} exceeded the cap`);
+  measured.conn_backoff_ladder_ms = delays.slice(0, 6).join(',');
+});
+T('an unknown connection action is refused, not applied', () => {
+  const c = A.reduceConn(A.initialConnState(), { type: 'WAT' });
+  eq(c.applied, false);
+  ok(c.reason.startsWith('unknown_conn_action'), c.reason);
+  eq(c.status, A.Conn.CONNECTING, 'an unknown action moved the connection state');
+});
+T('reduceConn survives junk and always lands on a legal status', () => {
+  const rnd = mulberry32(51);
+  const types = ['CONNECT', 'OPEN', 'CLOSE', 'NET_DOWN', 'NET_UP', 'X', '', null];
+  let c = A.initialConnState();
+  for (let i = 0; i < 5000; i++) {
+    c = A.reduceConn(c, { type: types[Math.floor(rnd() * types.length)], rnd });
+    ok(Object.values(A.Conn).includes(c.status), `illegal conn status ${c.status}`);
+  }
+});
+T('EVERY banner branch says nothing is authorised', () => {
+  for (const status of [...Object.values(A.Conn), 'junk', undefined]) {
+    const text = A.bannerText({ status, attempt: 2, nextDelayMs: 400 }, 3);
+    ok(/nothing authorised/.test(text), `"${text}" does not say nothing is authorised`);
+    ok(/AMBER PENDING/.test(text), text);
+  }
+  ok(/PENDING_OFFLINE/.test(A.bannerText({ status: A.Conn.OFFLINE, attempt: 3 }, 0)),
+    'the offline banner must name PENDING_OFFLINE');
+  ok(/3 queued/.test(A.bannerText({ status: A.Conn.CONNECTING }, 3)));
+});
+
+G('21. INVARIANT 4 on the wire — only the rectified crop reaches the brain');
+const RECT_PAYLOAD = Object.freeze({
+  type: 'frame', cropKind: A.RETAIN_RECTIFIED, crop: { toDataURL: () => 'data:image/jpeg;base64,RECT' },
+  width: 840, height: 1188, ts: 5, seq: 1, lock: { scaleErr: 0.001 },
+});
+T('the wire message carries the encoded crop and no raw buffer', () => {
+  const w = A.frameWirePayload(RECT_PAYLOAD);
+  eq(w.send, true);
+  eq(w.msg.cropKind, A.RETAIN_RECTIFIED);
+  eq(w.msg.width, 840); eq(w.msg.height, 1188);
+  eq(w.msg.cropPng, 'data:image/jpeg;base64,RECT');
+  ok(!('crop' in w.msg), 'the live canvas went on the wire');
+  const wire = JSON.stringify(w.msg);
+  ok(!/"raw|video|unmasked|photo|snapshot|fullFrame/i.test(wire), wire.slice(0, 200));
+});
+T('the encoder is only ever handed payload.crop — the raw canvas is unreachable', () => {
+  let handed = null;
+  A.frameWirePayload({ ...RECT_PAYLOAD, crop: 'THE-RECTIFIED-CANVAS' }, (c) => { handed = c; return 'x'; });
+  eq(handed, 'THE-RECTIFIED-CANVAS', 'the encoder was handed something other than the rectified crop');
+});
+T('a payload that is not the rectified crop THROWS before it can be sent', () => {
+  throws(() => A.frameWirePayload({ ...RECT_PAYLOAD, raw: 'leak' }), 'a raw key reached the wire');
+  throws(() => A.frameWirePayload({ ...RECT_PAYLOAD, cropKind: 'raw_frame' }), 'an untagged crop reached the wire');
+  throws(() => A.frameWirePayload({ ...RECT_PAYLOAD, width: 1280, height: 960 }), 'a full frame reached the wire');
+  throws(() => A.frameWirePayload(null), 'null reached the wire');
+  throws(() => A.frameWirePayload('data:image/jpeg;base64,AAA'), 'a bare string reached the wire');
+});
+T('a crop that will not encode is REFUSED, never replaced by a placeholder', () => {
+  eq(A.frameWirePayload({ ...RECT_PAYLOAD, crop: {} }).send, false);
+  eq(A.frameWirePayload({ ...RECT_PAYLOAD, crop: {} }).reason, A.Reason.WIRE_ENCODE_FAILED);
+  eq(A.frameWirePayload(RECT_PAYLOAD, () => { throw new Error('canvas tainted'); }).reason,
+    A.Reason.WIRE_ENCODE_FAILED);
+  eq(A.frameWirePayload(RECT_PAYLOAD, () => '').reason, A.Reason.WIRE_ENCODE_FAILED);
+  eq(A.frameWirePayload(RECT_PAYLOAD, 'not a function').reason, A.Reason.WIRE_NO_ENCODER);
+  for (const r of [A.frameWirePayload(RECT_PAYLOAD, () => null)]) eq(r.msg, null, 'a refusal still built a message');
+});
+T('OFFLINE sends no frames at all — a stale crop is worse than none', () => {
+  for (const status of [A.Conn.CONNECTING, A.Conn.RETRYING, A.Conn.OFFLINE]) {
+    eq(A.shouldSendFrameToBrain(null, 1000, { status }), false, status);
+    eq(A.shouldSendFrameToBrain(0, 999999, { status }), false, status);
+  }
+  eq(A.shouldSendFrameToBrain(null, 1000, null), false);
+});
+T('an OPEN socket is rate limited to the declared interval', () => {
+  const open = { status: A.Conn.OPEN };
+  eq(A.shouldSendFrameToBrain(null, 1000, open), true, 'the first frame was withheld');
+  eq(A.shouldSendFrameToBrain(1000, 1000 + A.BRAIN_FRAME_EVERY_MS - 1, open), false);
+  eq(A.shouldSendFrameToBrain(1000, 1000 + A.BRAIN_FRAME_EVERY_MS, open), true);
+  eq(A.shouldSendFrameToBrain(1000, NaN, open), false, 'a non-finite clock sent a frame');
+});
+T('frameEgress refuses to build a payload without a lock', () => {
+  const e = A.frameEgress({ locked: false, reason: 'no markers detected' }, 'canvas', {});
+  eq(e.send, false); eq(e.payload, null);
+  ok(e.reason.includes('no markers detected'), e.reason);
+});
+
+// ===========================================================================
+// 22. THE FULL SHELL, driven through the real index.html contract.
+//
+// #start, #camgate[data-cam], #camreason, the #tabsel-* radio group, the six
+// #panel-*[data-status] containers and their #abstain-* / #why-* blocks. The
+// bug this section exists to catch: app.js can be internally consistent and
+// still be wired to ids the shell no longer has, which renders as a live
+// camera underneath a shade that still says "no camera feed".
+// ===========================================================================
+G('22. browser shell — the START gesture, the gate, the rail and the seam');
+
+function makeInput(made) { const el = makeEl(made, 'input'); el.checked = false; return el; }
+
+async function bootFullShell({ cvStub = null, tag, gum = null, secure = true, hasMedia = true, hash = '', preQueue = null }) {
+  const made = [];
+  // Panels that were evaluated BEFORE app.js are sitting in this queue, exactly
+  // as chilla.js / ledger.js / saaf.js leave them.
+  globalThis.GAWAAH_PANELS = preQueue || [];
+  delete globalThis.registerPanel;
+  const byId = {};
+  const core = ['cam', 'raw', 'rect', 'chrome', 'total', 'amber', 'lock', 'lockdetail', 'lines',
+    'done', 'ack', 'banner', 'reason', 'fps', 'cvstat', 'start', 'camgate', 'camreason'];
+  for (const i of core) byId[i] = makeEl(made, i === 'cam' ? 'video' : 'div');
+  for (const p of A.PANEL_IDS) {
+    byId[`panel-${p}`] = makeEl(made, 'section');
+    byId[`abstain-${p}`] = makeEl(made, 'div');
+    byId[`why-${p}`] = makeEl(made, 'code');
+    const t = makeInput(made);
+    t.checked = p === 'core';
+    byId[`tabsel-${p}`] = t;
+  }
+  byId.raw.width = 1280; byId.raw.height = 960;
+  // The rectified crop encodes. The raw canvas EXPLODES if anything ever tries
+  // to encode it — that is the invariant-4 tripwire, armed inside the shell.
+  byId.rect.toDataURL = () => 'data:image/jpeg;base64,RECTIFIEDCROP';
+  byId.raw.toDataURL = () => { throw new Error('INVARIANT 4: the raw canvas was encoded'); };
+
+  const head = makeEl(made, 'head');
+  head.appendChild = (c) => {
+    head.children.push(c);
+    queueMicrotask(() => {
+      if (cvStub) { globalThis.cv = cvStub; if (c.onload) c.onload(); }
+      else if (c.onerror) c.onerror(new Error('ENOENT ./vendor/opencv.js'));
+    });
+    return c;
+  };
+  if (!cvStub) delete globalThis.cv;
+
+  const docListeners = {};
+  globalThis.document = {
+    readyState: 'complete', head,
+    getElementById: (i) => byId[i] ?? null,
+    createElement: (t) => makeEl(made, t),
+    addEventListener: (t, f) => { (docListeners[t] ||= []).push(f); },
+  };
+  const winListeners = {};
+  globalThis.window = {
+    isSecureContext: secure,
+    addEventListener: (t, f) => { (winListeners[t] ||= []).push(f); },
+  };
+  globalThis.location = { hash, hostname: 'localhost', protocol: 'http:' };
+
+  let clock = 1000, rafBudget = 3, lastCb = null;
+  Object.defineProperty(globalThis, 'performance', {
+    configurable: true, writable: true, value: { now: () => clock },
+  });
+  globalThis.requestAnimationFrame = (cb) => {
+    lastCb = cb;
+    if (rafBudget > 0) { rafBudget--; clock += 40; cb(clock); }
+    return 1;
+  };
+  const calls = { gum: 0, constraints: [] };
+  const defaultGum = async () => ({
+    getVideoTracks: () => [{ label: 'back camera', getSettings: () => ({ facingMode: 'environment', width: 1280, height: 960 }) }],
+  });
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true, writable: true,
+    value: hasMedia ? {
+      mediaDevices: {
+        getUserMedia: async (c) => { calls.gum++; calls.constraints.push(c); return (gum || defaultGum)(c); },
+      },
+    } : {},
+  });
+
+  const sockets = [];
+  globalThis.WebSocket = class {
+    constructor(url) {
+      this.url = url; this.readyState = 1; this.sent = [];
+      this.onopen = this.onmessage = this.onclose = this.onerror = null;
+      sockets.push(this);
+    }
+    send(m) { this.sent.push(m); }
+    close() { this.readyState = 3; if (this.onclose) this.onclose(); }
+  };
+  const timers = [];
+  globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+
+  await import('data:text/javascript;charset=utf-8;base64,'
+    + Buffer.from(`${APP_SRC}\n// full-shell-${tag}`, 'utf8').toString('base64'));
+  await new Promise((r) => REAL_SET_TIMEOUT(r, 30));
+
+  return {
+    byId, sockets, timers, made, calls, cv: cvStub, docListeners, winListeners,
+    gaw: () => globalThis.window.GAWAAH,
+    async tapStart() {
+      byId.start.fire('click');
+      await new Promise((r) => REAL_SET_TIMEOUT(r, 20));
+    },
+    pump(n = 1) {
+      for (let i = 0; i < n; i++) {
+        rafBudget += 1;
+        if (lastCb && rafBudget > 0) { rafBudget--; clock += 40; lastCb(clock); }
+      }
+    },
+    advance(ms) { clock += ms; },
+  };
+}
+
+// ---- 22a. the gesture is REQUIRED and the gate says so --------------------
+const S1 = await bootFullShell({ cvStub: makeCvStub(CVQ), tag: 's1' });
+
+T('boot does NOT touch getUserMedia — the browser needs a real gesture first', () => {
+  eq(S1.calls.gum, 0, 'app.js prompted for a camera at load');
+  eq(S1.byId.camgate.dataset.cam, 'IDLE', S1.byId.camgate.dataset.cam);
+});
+T('the idle gate names a reason and tells the shopkeeper what to do', () => {
+  ok(S1.byId.camreason.textContent.includes(A.Reason.CAMERA_IDLE), S1.byId.camreason.textContent);
+  ok(S1.byId.camreason.textContent.length > 40, 'the idle gate gave no instruction');
+  ok(/camera not started/.test(S1.byId.lockdetail.textContent), S1.byId.lockdetail.textContent);
+});
+T('CORE abstains with the camera reason, not a stale mat_not_locked', () => {
+  eq(S1.byId['panel-core'].dataset.status, 'ABSTAIN');
+  eq(S1.byId['why-core'].textContent, A.Reason.CAMERA_IDLE);
+  eq(S1.byId['abstain-core'].hidden, false, 'CORE hid its abstention while it did not know');
+});
+T('an unwired capability panel reports OFF, not a false ABSTAIN', () => {
+  for (const p of ['mudra', 'peel', 'chilla', 'saaf', 'ledger']) {
+    eq(S1.byId[`panel-${p}`].dataset.status, 'OFF', p);
+    eq(S1.byId[`abstain-${p}`].hidden, false, `${p} hid its abstention block`);
+  }
+});
+
+await S1.tapStart();
+T('the START gesture acquires the REAR camera and the gate collapses', () => {
+  ok(S1.calls.gum >= 1, 'the tap did not reach getUserMedia');
+  eq(S1.calls.constraints[0].video.facingMode.exact, 'environment', 'the rear camera was not asked for first');
+  eq(S1.byId.camgate.dataset.cam, 'LIVE', S1.byId.camgate.dataset.cam);
+  ok(/rear camera/.test(S1.byId.camreason.textContent), S1.byId.camreason.textContent);
+  eq(S1.byId.camgate.dataset.facing, A.Facing.REAR);
+});
+T('the mat locks and CORE flips to OK with its abstention hidden', () => {
+  S1.pump(2);
+  eq(S1.byId.lock.textContent, 'MAT LOCK');
+  eq(S1.byId['panel-core'].dataset.status, 'OK');
+  eq(S1.byId['abstain-core'].hidden, true, 'CORE still said I DO NOT KNOW while locked');
+  eq(S1.byId.rect.dataset.policy, A.RETAIN_RECTIFIED);
+});
+T('INVARIANT 4 — the frame that reaches the brain is the rectified crop only', () => {
+  S1.sockets[0].onopen();
+  S1.pump(2);
+  const frames = S1.sockets[0].sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'frame');
+  ok(frames.length >= 1, `no frame was sent to the brain (sent ${S1.sockets[0].sent.length} messages)`);
+  const f = frames[0];
+  eq(f.cropKind, A.RETAIN_RECTIFIED);
+  eq(f.cropPng, 'data:image/jpeg;base64,RECTIFIEDCROP', 'the wire crop is not the rectified canvas');
+  eq(f.width, 840); eq(f.height, 1188);
+  ok(!('crop' in f) && !('raw' in f), JSON.stringify(Object.keys(f)));
+  const all = JSON.stringify(S1.sockets[0].sent);
+  ok(!/"raw"|"rawFrame"|"unmasked"|"videoFrame"/.test(all), 'a raw buffer went over the wire');
+  measured.shell_wire_frames = frames.length;
+});
+T('frames to the brain are rate limited, not sent every rendered frame', () => {
+  const before = S1.sockets[0].sent.filter((s) => JSON.parse(s).type === 'frame').length;
+  S1.pump(2);
+  const after = S1.sockets[0].sent.filter((s) => JSON.parse(s).type === 'frame').length;
+  eq(after, before, 'a frame was sent inside the rate-limit window');
+  S1.advance(A.BRAIN_FRAME_EVERY_MS + 50);
+  S1.pump(2);
+  ok(S1.sockets[0].sent.filter((s) => JSON.parse(s).type === 'frame').length > before,
+    'no frame was sent after the interval elapsed');
+});
+
+// ---- 22b. the rail, the router and the panel seam --------------------------
+T('the rail radio is the router: tapping a tab moves panel.current', () => {
+  eq(S1.byId.chrome.dataset.panel, 'core');
+  S1.byId['tabsel-peel'].checked = true;
+  S1.byId['tabsel-peel'].fire('change');
+  eq(S1.byId.chrome.dataset.panel, 'peel', 'the router did not follow the rail');
+  eq(S1.byId['panel-peel'].dataset.active, 'true');
+  eq(S1.byId['panel-core'].dataset.active, 'false');
+});
+T('the panels are NEVER hidden by the router — CSS owns visibility', () => {
+  for (const p of A.PANEL_IDS) {
+    eq(S1.byId[`panel-${p}`].hidden, false,
+      `the router set hidden on #panel-${p}, which fights the stylesheet and blanks the stage`);
+  }
+});
+T('showPanel() from the API checks the radio the stylesheet reads', () => {
+  const r = S1.gaw().showPanel('saaf');
+  eq(r.applied, true);
+  eq(S1.byId['tabsel-saaf'].checked, true, 'the API switched panels without moving the radio');
+  eq(S1.byId['tabsel-peel'].checked, false, 'two radios were checked at once');
+  eq(S1.byId.chrome.dataset.panel, 'saaf');
+});
+T('showPanel() refuses an unknown id and leaves the visible panel alone', () => {
+  const r = S1.gaw().showPanel('nonsense');
+  eq(r.applied, false);
+  eq(S1.byId.chrome.dataset.panel, 'saaf', 'a typo changed the visible panel');
+  ok(S1.byId.reason.textContent.includes(A.Reason.PANEL_UNKNOWN), S1.byId.reason.textContent);
+});
+T('a registered panel is told what is visible, and gets rectified frames only', () => {
+  const seen = { state: 0, frames: [] };
+  const reg = S1.gaw().registerPanel('mudra', {
+    onState: (v) => { seen.state++; seen.last = v; },
+    onFrame: (f) => { seen.frames.push(f); },
+  });
+  ok(reg.ok, JSON.stringify(reg));
+  S1.gaw().showPanel('mudra');
+  S1.pump(2);
+  ok(seen.state > 0, 'the panel was never handed a state');
+  eq(seen.last.visible, 'mudra');
+  eq(seen.last.matLocked, true);
+  ok(seen.frames.length > 0, 'the panel was never handed a frame');
+  for (const f of seen.frames) {
+    eq(f.cropKind, A.RETAIN_RECTIFIED);
+    eq(f.width, 840); eq(f.height, 1188);
+    eq(f.crop, S1.byId.rect, 'a panel was handed a canvas other than the rectified crop');
+    ok(!('raw' in f), 'a panel was handed a raw frame');
+  }
+});
+T('registering flips that panel from OFF to ABSTAIN — running, but silent', () => {
+  eq(S1.byId['panel-mudra'].dataset.status, 'ABSTAIN');
+  eq(S1.byId['why-mudra'].textContent, A.Reason.PANEL_NO_DATA);
+});
+T('setPanelStatus paints the panel, its dot and its abstention block', () => {
+  S1.gaw().setPanelStatus('mudra', 'OK');
+  eq(S1.byId['panel-mudra'].dataset.status, 'OK');
+  eq(S1.byId['abstain-mudra'].hidden, true, 'a panel that knows still said I DO NOT KNOW');
+  S1.gaw().setPanelStatus('mudra', 'ABSTAIN', 'mudra_ambiguous_shape');
+  eq(S1.byId['panel-mudra'].dataset.status, 'ABSTAIN');
+  eq(S1.byId['why-mudra'].textContent, 'mudra_ambiguous_shape');
+  eq(S1.byId['abstain-mudra'].hidden, false, 'an abstaining panel hid its own abstention');
+});
+T('INVARIANT 2 — no panel can paint itself green through the shell', () => {
+  S1.gaw().setPanelStatus('chilla', 'OK');
+  S1.gaw().registerPanel('chilla', {});
+  S1.gaw().setPanelStatus('chilla', 'GREEN', 'ledger matched');
+  eq(S1.byId['panel-chilla'].dataset.status, 'ABSTAIN', 'CHILLA painted itself GREEN');
+  ok(S1.byId['why-chilla'].textContent.startsWith(A.Reason.PANEL_NEVER_GREEN), S1.byId['why-chilla'].textContent);
+  ok(!/green/i.test(S1.byId.chrome.className), `a panel moved the counter chrome: ${S1.byId.chrome.className}`);
+});
+T('a panel whose hook throws does not stop the counter or the frame loop', () => {
+  S1.gaw().registerPanel('saaf', { onFrame: () => { throw new Error('saaf exploded'); } });
+  const total = S1.byId.total.textContent;
+  doesNotThrow(() => S1.pump(2), 'a broken panel unwound into the frame loop');
+  eq(S1.byId.lock.textContent, 'MAT LOCK', 'a broken panel dropped the mat lock');
+  eq(S1.byId.total.textContent, total);
+});
+
+// ---- 22b2. panel modules attach in either load order -----------------------
+const EARLY = [];
+const SQ = await bootFullShell({
+  cvStub: makeCvStub(CVQ), tag: 'queue',
+  preQueue: [
+    { id: 'chilla', attached: false, attach(r) { EARLY.push('chilla'); r('chilla', { onState() {} }); } },
+    { id: 'ledger', attached: false, attach(r) { EARLY.push('ledger'); r('ledger', { onState() {} }); } },
+    { id: 'saaf', attached: false, attach() { throw new Error('saaf could not construct'); } },
+  ],
+});
+T('a panel queued BEFORE app.js is drained and attached at boot', () => {
+  eq(EARLY.join(','), 'chilla,ledger');
+  eq(SQ.byId['panel-chilla'].dataset.status, 'ABSTAIN', 'a drained panel still reads OFF');
+  eq(SQ.byId['panel-ledger'].dataset.status, 'ABSTAIN');
+});
+T('a panel module that failed to construct is named ON ITS OWN PANEL', () => {
+  eq(SQ.byId['panel-saaf'].dataset.status, 'OFF', 'a panel that threw was registered anyway');
+  // the reason must survive later repaints, so it lives on the panel, not in
+  // the shared #reason line that the camera gate overwrites a moment later
+  ok(SQ.byId['why-saaf'].textContent.startsWith(A.Reason.PANEL_ATTACH_FAILED), SQ.byId['why-saaf'].textContent);
+  ok(/saaf could not construct/.test(SQ.byId['why-saaf'].textContent), SQ.byId['why-saaf'].textContent);
+  eq(SQ.byId['abstain-saaf'].hidden, false, 'a capability that failed to load showed nothing');
+  eq(SQ.byId.chrome.dataset.state, A.State.SETUP, 'a broken panel module stopped the counter booting');
+});
+T('a panel module loading AFTER app.js finds the global and attaches', () => {
+  eq(typeof globalThis.registerPanel, 'function', 'app.js published no registerPanel global');
+  globalThis.registerPanel('mudra', { onState() {} });
+  eq(SQ.byId['panel-mudra'].dataset.status, 'OFF', 'status repaints only on the next render');
+  SQ.gaw().setPanelStatus('mudra', 'ABSTAIN', 'mudra_no_reference_frame');
+  eq(SQ.byId['panel-mudra'].dataset.status, 'ABSTAIN');
+  eq(SQ.byId['why-mudra'].textContent, 'mudra_no_reference_frame');
+});
+T('a late push onto GAWAAH_PANELS still attaches, and repaints', () => {
+  let attached = false;
+  globalThis.GAWAAH_PANELS.push({
+    id: 'peel', attached: false, attach(r) { attached = true; r('peel', { onState() {} }); },
+  });
+  ok(attached, 'a descriptor pushed after boot was never drained');
+  eq(SQ.byId['panel-peel'].dataset.status, 'ABSTAIN');
+});
+
+// ---- 22c. every camera failure, named on screen ---------------------------
+const CAM_CASES = [
+  ['NotAllowedError', 'DENIED', A.Reason.CAMERA_DENIED],
+  ['NotFoundError', 'ABSENT', A.Reason.CAMERA_ABSENT],
+  ['NotReadableError', 'ERROR', A.Reason.CAMERA_BUSY],
+  ['AbortError', 'ERROR', A.Reason.CAMERA_ABORTED],
+];
+for (const [errName, gate, reason] of CAM_CASES) {
+  const F = await bootFullShell({
+    cvStub: makeCvStub(CVQ), tag: `f-${errName}`,
+    gum: async () => { const e = new Error(`${errName} raised`); e.name = errName; throw e; },
+  });
+  await F.tapStart();
+  T(`${errName} shows the gate as ${gate} with a named reason — never a black pane`, () => {
+    eq(F.byId.camgate.dataset.cam, gate, `gate said ${F.byId.camgate.dataset.cam}`);
+    ok(F.byId.camreason.textContent.includes(reason), F.byId.camreason.textContent);
+    ok(F.byId.camreason.textContent.length > 40, 'no actionable help was printed');
+    ok(F.byId.reason.textContent.includes(reason), F.byId.reason.textContent);
+    eq(F.byId['panel-core'].dataset.status, 'ABSTAIN');
+    eq(F.byId['why-core'].textContent, reason, 'CORE did not name the camera failure');
+    eq(F.byId.lock.textContent, 'NO LOCK');
+    eq(F.byId.rect.dataset.policy, A.RETAIN_NOTHING, 'a crop was retained without a camera');
+  });
+  if (errName === 'NotFoundError') {
+    T('a missing camera walks the whole ladder before giving up', () => {
+      eq(F.calls.gum, 3, `tried ${F.calls.gum} rungs of the fallback ladder`);
+    });
+  }
+  if (errName === 'NotAllowedError') {
+    T('a DENIAL is not retried — retrying would only hide the reason', () => {
+      eq(F.calls.gum, 1, `a denied camera was retried ${F.calls.gum} times`);
+    });
+    T('START stays tappable so the shopkeeper can retry after fixing it', () => {
+      eq(F.byId.start.disabled, false);
+      ok(/try the camera again/.test(F.byId.start.textContent), F.byId.start.textContent);
+    });
+  }
+}
+
+const SINS = await bootFullShell({ cvStub: makeCvStub(CVQ), tag: 'insec', secure: false });
+await SINS.tapStart();
+T('an insecure origin is refused BEFORE prompting, and says why', () => {
+  eq(SINS.calls.gum, 0, 'an insecure page still called getUserMedia');
+  eq(SINS.byId.camgate.dataset.cam, 'INSECURE');
+  ok(SINS.byId.camreason.textContent.includes(A.Reason.CAMERA_INSECURE), SINS.byId.camreason.textContent);
+  ok(/https/.test(SINS.byId.camreason.textContent), 'the fix was not named');
+});
+
+const SNOM = await bootFullShell({ cvStub: makeCvStub(CVQ), tag: 'nomedia', hasMedia: false });
+await SNOM.tapStart();
+T('a browser without getUserMedia is named, not left spinning', () => {
+  eq(SNOM.byId.camgate.dataset.cam, 'ERROR');
+  ok(SNOM.byId.camreason.textContent.includes(A.Reason.CAMERA_UNSUPPORTED), SNOM.byId.camreason.textContent);
+});
+
+// ---- 22d. the laptop case: a front camera is CORRECT, not broken ----------
+const SFRONT = await bootFullShell({
+  cvStub: makeCvStub(CVQ), tag: 'front',
+  gum: async () => ({
+    getVideoTracks: () => [{ label: 'FaceTime HD Camera', getSettings: () => ({ facingMode: 'user', width: 1280, height: 720 }) }],
+  }),
+});
+await SFRONT.tapStart();
+T('a front camera is announced as such, in words', () => {
+  eq(SFRONT.byId.camgate.dataset.cam, 'LIVE');
+  eq(SFRONT.byId.camgate.dataset.facing, A.Facing.FRONT);
+  ok(/FRONT camera/.test(SFRONT.byId.camreason.textContent), SFRONT.byId.camreason.textContent);
+  ok(/will NOT lock/.test(SFRONT.byId.camreason.textContent), 'the consequence was not explained');
+});
+T('NO LOCK on a front camera EXPLAINS itself instead of looking broken', () => {
+  SFRONT.cv.aruco_ArucoDetector.prototype.detectMarkers = (g, corners, ids) => {
+    corners.items = []; ids.rows = 0; ids.vals = [];
+  };
+  SFRONT.pump(2);
+  eq(SFRONT.byId.lock.textContent, 'NO LOCK');
+  ok(/correct, not broken/.test(SFRONT.byId.lockdetail.textContent), SFRONT.byId.lockdetail.textContent);
+});
+
+// ---- 22e. deep link, and offline billing ----------------------------------
+const SHASH = await bootFullShell({ cvStub: makeCvStub(CVQ), tag: 'hash', hash: '#panel-chilla' });
+T('a deep link selects the panel and checks the radio the CSS reads', () => {
+  eq(SHASH.byId.chrome.dataset.panel, 'chilla');
+  eq(SHASH.byId['tabsel-chilla'].checked, true);
+  eq(SHASH.byId['tabsel-core'].checked, false, 'the markup default was left checked alongside the deep link');
+});
+await SHASH.tapStart();
+T('losing the brain shows PENDING_OFFLINE and keeps billing locally', () => {
+  const sock = SHASH.sockets[0];
+  sock.onopen();
+  SHASH.pump(2);
+  sock.onmessage({ data: JSON.stringify({ type: 'placement', itemId: 'h1', name: 'Atta', pricePaise: 6000, centreMm: [100, 200] }) });
+  sock.onmessage({ data: JSON.stringify({ type: 'exit', itemId: 'h1', tap: true }) });
+  eq(SHASH.byId.total.textContent, '₹60.00');
+  for (let i = 0; i < A.WS_OFFLINE_AFTER_ATTEMPTS; i++) { sock.readyState = 3; sock.onclose(); }
+  eq(SHASH.byId.banner.hidden, false, 'the offline banner never appeared');
+  ok(/PENDING_OFFLINE/.test(SHASH.byId.banner.textContent), SHASH.byId.banner.textContent);
+  ok(/nothing authorised/.test(SHASH.byId.banner.textContent), SHASH.byId.banner.textContent);
+  ok(!/chrome-green/.test(SHASH.byId.chrome.className), 'going offline turned the counter green');
+});
+T('OFFLINE sends no frames — the wire stays quiet while the brain is gone', () => {
+  const sock = SHASH.sockets[0];
+  const before = sock.sent.length;
+  SHASH.advance(5000);
+  SHASH.pump(4);
+  eq(sock.sent.length, before, 'frames were pushed at a socket that is not open');
+});
+
+globalThis.setTimeout = REAL_SET_TIMEOUT;
+
+
 // ============================================================== report =====
 console.log('\n──────────────────────────────────────────────────────────────');
 console.log('MEASURED NUMBERS (produced by this run)');

@@ -14,6 +14,68 @@
 </head>
 <body>
 
+<!--
+  ===========================================================================
+  SHELL CONTRACT  —  read this before wiring anything into this page.
+  ===========================================================================
+  This file is markup and hooks only. It contains no logic and no inline
+  script; every id below is a stable attachment point for the module that
+  owns the behaviour. The stylesheet drives everything it can from a single
+  attribute so that two places can never disagree about one fact.
+
+  1. CAMERA GATE   #camgate[data-cam] + #start
+     ONE attribute decides the whole camera story:
+       IDLE        nothing requested yet  (the default, and what a cold
+                   visitor sees: a big START CAMERA button, never a black box)
+       REQUESTING  the browser prompt is open
+       LIVE        a stream is attached  -> the gate collapses to nothing
+       DENIED      the user or the OS refused the permission
+       ABSENT      no camera device exists on this machine
+       INSECURE    not a secure context, so getUserMedia is unavailable
+       ERROR       anything else; put the real message in #camreason
+     The explanatory paragraph for each case is already in the markup, so
+     setting the attribute alone produces a correct, honest screen. Writing a
+     precise reason string into #camreason is strictly extra.
+
+     app.js MUST NOT call getUserMedia at boot. Browsers require a user
+     gesture before granting a camera, so an unprompted call on a laptop
+     resolves never and leaves two silent black rectangles on screen. Wire:
+         document.getElementById('start').addEventListener('click', ...)
+     and set data-cam through the states above as the promise settles.
+     While the gate is not LIVE, both preview canvases carry a visible
+     "no feed" shade, so the app can never again show black and say nothing.
+
+  2. CAPABILITY PANELS   #panel-core #panel-mudra #panel-peel #panel-chilla
+                         #panel-saaf #panel-ledger
+     Six containers, one visible at a time, CORE by default. Tab selection is
+     pure CSS (a radio group, #tabsel-*), so it works before any module loads
+     and cannot break when one throws. To switch tabs from code:
+         document.getElementById('tabsel-peel').checked = true;
+
+     Each panel carries #panel-X[data-status] with exactly one of:
+         OFF       nothing is wired to this capability yet
+         ABSTAIN   it is running and it does not know  (the amber default)
+         OK        it is running and it has an answer
+     That single attribute paints BOTH the rail dot and the panel's own
+     status pill. Do not set a status anywhere else.
+
+     There is deliberately no GREEN status. Green is reserved for a settled
+     session and comes only from a signature-verified webhook. No capability
+     panel may ever turn the counter green: MUDRA reveals a target, PEEL
+     warns, CHILLA corroborates, SAAF selects frames, LEDGER reports. None of
+     them decide money.
+
+  3. ABSTENTION BLOCKS   #abstain-core … #abstain-ledger, reason in #why-X
+     Every panel ships with a visible "I DO NOT KNOW" block naming a reason
+     code. Fill #body-X with real content and hide #abstain-X only when the
+     capability actually has an answer; update #why-X whenever it does not.
+     A panel that shows nothing is a bug.
+
+  4. RUPEES  every figure that is money carries class="num" for tabular
+     numerals, so digits do not dance as the total changes.
+  ===========================================================================
+-->
+
 <div id="chrome" class="chrome chrome-grey" data-state="SETUP">
 
   <header class="bar">
@@ -24,37 +86,258 @@
 
   <div id="banner" class="banner" hidden>AMBER PENDING — offline, nothing authorised</div>
 
-  <!-- INVARIANT 4, made visible. Left: the raw feed, scrimmed outside the mat
-       quad the instant we lock. Right: the rectified crop, which is the ONLY
-       buffer that survives a frame grab and the only thing that ever leaves
-       this device. -->
-  <section class="split">
-    <figure class="pane">
-      <canvas id="raw" width="1280" height="960"></canvas>
-      <figcaption>
-        <b>raw feed</b> — masked outside the mat at frame grab.
-        Tap a glyph to revert that line.
-      </figcaption>
-    </figure>
-    <figure class="pane pane-rect">
-      <canvas id="rect" width="840" height="1188" data-policy="nothing"></canvas>
-      <figcaption>
-        <b>rectified crop</b> — 840&times;1188, the only buffer that survives.
-      </figcaption>
-    </figure>
+  <!-- ============================================ camera gate ============ -->
+  <section id="camgate" class="camgate" data-cam="IDLE" aria-live="polite">
+    <div class="camgate-head">
+      <span class="camgate-eye" aria-hidden="true"></span>
+      <h1 class="camgate-title">The camera is not running</h1>
+    </div>
+
+    <p class="camcase" data-for="IDLE">
+      This counter sees with the camera and nothing else. Your browser will
+      not hand a camera to a page that did not ask out loud, so nothing has
+      been requested yet. Press the button and allow the prompt.
+    </p>
+    <p class="camcase" data-for="REQUESTING">
+      Waiting for you to answer the browser's permission prompt. If you do not
+      see it, look at the address bar — it may be collapsed into a camera icon.
+    </p>
+    <p class="camcase" data-for="DENIED">
+      Permission was refused, so there is no feed and there will be no lock.
+      Nothing is broken and nothing was guessed. Open the site settings from
+      the address bar, set the camera to <b>Allow</b>, then press the button
+      again. On macOS also check System Settings → Privacy &amp; Security →
+      Camera for this browser.
+    </p>
+    <p class="camcase" data-for="ABSENT">
+      This machine reports no camera at all. Plug one in, or open this page on
+      the phone that sits over the mat, then press the button again.
+    </p>
+    <p class="camcase" data-for="INSECURE">
+      Cameras are only handed to secure pages. Reach the brain over
+      <b>localhost</b> or over HTTPS on the LAN. Served from a plain IP address
+      the browser will never offer the prompt, whatever you press.
+    </p>
+    <p class="camcase" data-for="ERROR">
+      The camera failed to start for a reason this page did not anticipate.
+      The exact message is printed below. The counter stays in setup and
+      refuses to lock rather than pretend it can see.
+    </p>
+
+    <div class="camgate-act">
+      <!-- THE START GESTURE. app.js attaches the listener; see contract 1. -->
+      <button id="start" class="btn btn-start" type="button">START CAMERA</button>
+      <code id="camreason" class="camgate-reason">camera_not_requested_yet</code>
+    </div>
   </section>
 
-  <div id="lockdetail" class="lockdetail">waiting for the mat</div>
+  <!-- ============================================ capability shell ======= -->
+  <div class="shell">
 
+    <div class="rail" role="radiogroup" aria-label="capability">
+      <label class="rail-item" for="tabsel-core">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-core" checked>
+        <span class="dot" id="dot-core" aria-hidden="true"></span>
+        <span class="rail-text"><b>CORE</b><i>billing</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-mudra">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-mudra">
+        <span class="dot" id="dot-mudra" aria-hidden="true"></span>
+        <span class="rail-text"><b>MUDRA</b><i>gesture</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-peel">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-peel">
+        <span class="dot" id="dot-peel" aria-hidden="true"></span>
+        <span class="rail-text"><b>PEEL</b><i>sticker</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-chilla">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-chilla">
+        <span class="dot" id="dot-chilla" aria-hidden="true"></span>
+        <span class="rail-text"><b>CHILLA</b><i>screen</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-saaf">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-saaf">
+        <span class="dot" id="dot-saaf" aria-hidden="true"></span>
+        <span class="rail-text"><b>SAAF</b><i>enrolment</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-ledger">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-ledger">
+        <span class="dot" id="dot-ledger" aria-hidden="true"></span>
+        <span class="rail-text"><b>LEDGER</b><i>audit</i></span>
+      </label>
+    </div>
+
+    <main class="stage">
+
+      <!-- -------------------------------------------------- CORE -------- -->
+      <section id="panel-core" class="panel" data-status="ABSTAIN" aria-label="CORE — billing">
+        <div class="panel-head">
+          <h2 class="panel-title">CORE<span class="panel-sub">the billing loop — the only thing here that touches money</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+
+        <div class="panel-body" id="body-core">
+          <!-- INVARIANT 4, made visible. Left: the raw feed, scrimmed outside
+               the mat quad the instant we lock. Right: the rectified crop,
+               which is the ONLY buffer that survives a frame grab and the only
+               thing that ever leaves this device. -->
+          <section class="split">
+            <figure class="pane">
+              <div class="pane-stack">
+                <canvas id="raw" width="1280" height="960"></canvas>
+                <div class="pane-shade"><b>no camera feed</b><span>press START CAMERA above</span></div>
+              </div>
+              <figcaption>
+                <b>raw feed</b> — masked outside the mat at frame grab.
+                Tap a glyph to revert that line.
+              </figcaption>
+            </figure>
+            <figure class="pane pane-rect">
+              <div class="pane-stack">
+                <canvas id="rect" width="840" height="1188" data-policy="nothing"></canvas>
+                <div class="pane-shade"><b>no crop retained</b><span>nothing has been grabbed</span></div>
+              </div>
+              <figcaption>
+                <b>rectified crop</b> — 840&times;1188, the only buffer that survives.
+              </figcaption>
+            </figure>
+          </section>
+
+          <div id="lockdetail" class="lockdetail">waiting for the mat</div>
+
+          <ol id="lines" class="lines"></ol>
+
+          <div class="abstain" id="abstain-core">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No mat lock, so no measurement is trustworthy and no line may be
+              billed. Placements arriving from the brain are refused, not queued
+              and not guessed. Put the marked mat in frame.</p>
+            <code class="abstain-why" id="why-core">mat_not_locked</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- MUDRA ------- -->
+      <section id="panel-mudra" class="panel" data-status="OFF" aria-label="MUDRA — gesture">
+        <div class="panel-head">
+          <h2 class="panel-title">MUDRA<span class="panel-sub">the hand read as an occluder — geometry only, no model</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-mudra">
+          <!-- FILL POINT: OccluderGesture(ref).update(rect) -> GestureState
+               NONE / OPEN / FIST / GOODS / AMBIGUOUS, with solidity, defects,
+               compactness and area_mm2. AMBIGUOUS is an answer; render it. -->
+          <div class="abstain" id="abstain-mudra">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No reference frame has been taken, so there is nothing for a hand
+              to differ from. MUDRA reads whatever occludes the mat and never
+              identifies a person; when the shape is not decidable it says
+              AMBIGUOUS rather than choosing. It reveals a target. It never
+              prices one.</p>
+            <code class="abstain-why" id="why-mudra">mudra_no_reference_frame</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- PEEL -------- -->
+      <section id="panel-peel" class="panel" data-status="OFF" aria-label="PEEL — sticker">
+        <div class="panel-head">
+          <h2 class="panel-title">PEEL<span class="panel-sub">tamper-evident sticker — warns, never authorises</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-peel">
+          <!-- FILL POINT: StickerRegistry(dir).compare(name, crop) ->
+               StickerVerdict(ignited_fraction, GENUINE|TAMPERED|UNREGISTERABLE,
+               ecc_ok, reason). UNREGISTERABLE is the honest third answer. -->
+          <div class="abstain" id="abstain-peel">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>Nothing has been enrolled, so there is no registered sticker to
+              compare a crop against. A GENUINE verdict is a statement about a
+              seal, not about a payment: PEEL can only ever raise a warning, and
+              a warning is not a refund.</p>
+            <code class="abstain-why" id="why-peel">peel_no_sticker_enrolled</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- CHILLA ------ -->
+      <section id="panel-chilla" class="panel" data-status="OFF" aria-label="CHILLA — screen">
+        <div class="panel-head">
+          <h2 class="panel-title">CHILLA<span class="panel-sub">the customer's screen, read as corroboration only</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-chilla">
+          <!-- FILL POINT: ScreenFinder.detect(rect) then
+               LedgerMatcher(mirror, window_s).match(amount_paise, ts) ->
+               MatchResult(MATCHED|NO_MATCH|AMBIGUOUS|AMBER_STALE, candidates).
+               MATCHED must never paint anything green. -->
+          <div class="abstain" id="abstain-chilla">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No screen has been found in the rectified crop, and no ledger
+              mirror is being watched. Even a MATCHED result here is
+              corroboration: a phone screen can be replayed, staged or faked,
+              so a match raises confidence and settles nothing. Only a
+              signature-verified webhook can settle a session.</p>
+            <code class="abstain-why" id="why-chilla">chilla_no_screen_found</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- SAAF -------- -->
+      <section id="panel-saaf" class="panel" data-status="OFF" aria-label="SAAF — enrolment">
+        <div class="panel-head">
+          <h2 class="panel-title">SAAF<span class="panel-sub">burst stacking for enrolment — picks frames, decides nothing</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-saaf">
+          <!-- FILL POINT: BurstStacker.stack(frames) -> StackResult(image,
+               used, rejected, sharpness_gain, warning). Show used AND
+               rejected; a stack that silently drops frames is a lie. -->
+          <div class="abstain" id="abstain-saaf">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No burst has been captured, so there is nothing to stack and no
+              sharpness gain to report. Every frame SAAF stacks is a rectified
+              mat crop — the mask is applied at frame grab, so an unmasked
+              frame cannot reach the stack even by accident.</p>
+            <code class="abstain-why" id="why-saaf">saaf_no_burst_captured</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- LEDGER ------ -->
+      <section id="panel-ledger" class="panel" data-status="OFF" aria-label="LEDGER — audit">
+        <div class="panel-head">
+          <h2 class="panel-title">LEDGER<span class="panel-sub">the audit chain — what happened, in order, hashed</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-ledger">
+          <!-- FILL POINT: BrainState.audit head hash, session state, exceptions
+               and the integer-paise basket lines. Every rupee figure rendered
+               here must carry class="num". -->
+          <div class="abstain" id="abstain-ledger">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No audit head has been received from the brain, so this page
+              cannot say what the session has recorded. It will not reconstruct
+              a chain from what it happens to have in memory; an audit you
+              invented locally is not an audit.</p>
+            <code class="abstain-why" id="why-ledger">ledger_no_audit_head</code>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- The money strip and the two decisions stay outside the tabs on purpose.
+       Whatever a shopkeeper is looking at, the total and the count of amber
+       lines excluded from it must be readable across the shop. -->
   <section class="totals">
     <div class="total-wrap">
       <div class="total-label">total</div>
-      <div id="total" class="total">&#8377;0.00</div>
+      <div id="total" class="total num">&#8377;0.00</div>
     </div>
     <div id="amber" class="amber-note" hidden></div>
   </section>
-
-  <ol id="lines" class="lines"></ol>
 
   <footer class="actions">
     <button id="ack" class="btn btn-ack" hidden>check the counter — acknowledge</button>

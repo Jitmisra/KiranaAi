@@ -531,9 +531,13 @@ export function assertRectifiedOnly(payload) {
       throw new Error(`invariant 4 violated: payload key '${k}' is not the rectified crop`);
     }
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'crop')
-      && payload.cropKind !== RETAIN_RECTIFIED) {
-    throw new Error("invariant 4 violated: crop present without cropKind == 'rectified_mat_crop'");
+  // Both the live canvas (`crop`) and its encoded wire form (`cropPng`) are
+  // pixels of the mat. Either one present without the rectified tag is a leak,
+  // so they are gated identically — encoding a buffer must not launder it.
+  for (const k of ['crop', 'cropPng']) {
+    if (Object.prototype.hasOwnProperty.call(payload, k) && payload.cropKind !== RETAIN_RECTIFIED) {
+      throw new Error(`invariant 4 violated: ${k} present without cropKind == '${RETAIN_RECTIFIED}'`);
+    }
   }
   return payload;
 }
@@ -576,6 +580,48 @@ export const Reason = Object.freeze({
   SETTLED: 'settled_green',
   DEGRADED: 'p95_over_threshold', PERF_RECOVERED: 'p95_recovered',
   DEGRADED_REQUIRES_TAP: 'degraded_auto_commit_disabled_tap_required',
+
+  // ---- camera. Invariant 7: a dead camera must NAME why it is dead. A black
+  // pane with no text is the failure this whole block exists to prevent.
+  CAMERA_IDLE: 'camera_not_started_tap_start',
+  CAMERA_STARTING: 'camera_starting',
+  CAMERA_LIVE: 'camera_live',
+  CAMERA_DENIED: 'camera_permission_denied_by_the_browser',
+  CAMERA_ABSENT: 'no_camera_device_found',
+  CAMERA_BUSY: 'camera_busy_another_app_holds_it',
+  CAMERA_INSECURE: 'insecure_context_camera_blocked_serve_over_https_or_localhost',
+  CAMERA_UNSUPPORTED: 'getusermedia_unsupported_in_this_browser',
+  CAMERA_OVERCONSTRAINED: 'camera_cannot_satisfy_requested_constraints',
+  CAMERA_ABORTED: 'camera_hardware_aborted_the_stream',
+  CAMERA_FAILED: 'camera_failed_for_an_unnamed_reason',
+  CAMERA_REAR: 'rear_camera_environment_facing',
+  CAMERA_FRONT: 'front_camera_user_facing_mat_will_not_lock',
+  CAMERA_FACING_UNKNOWN: 'camera_facing_unknown_browser_did_not_say',
+  CAMERA_STATE_UNKNOWN: 'camera_state_unrecognised_refusing_to_assume_it_is_live',
+
+  // ---- brain transport
+  WS_CONNECTING: 'brain_connecting',
+  WS_OPEN: 'brain_connected',
+  WS_RETRYING: 'brain_lost_retrying_with_backoff',
+  WS_OFFLINE: 'brain_offline_billing_continues_nothing_authorised',
+
+  // ---- panel router / panel API
+  PANEL_SHOWN: 'panel_shown',
+  PANEL_SAME: 'panel_already_shown',
+  PANEL_UNKNOWN: 'refused_unknown_panel_id',
+  PANEL_REGISTERED: 'panel_registered',
+  PANEL_REPLACED: 'panel_registration_replaced',
+  PANEL_BAD_HOOKS: 'refused_panel_hooks_are_not_functions',
+  PANEL_HOOK_THREW: 'panel_hook_threw_isolated_from_the_counter',
+  PANEL_NO_DATA: 'panel_has_no_reading_yet',
+  PANEL_NOT_WIRED: 'no_module_is_attached_to_this_capability_yet',
+  PANEL_ATTACH_FAILED: 'panel_module_failed_to_attach',
+  PANEL_BAD_STATUS: 'refused_panel_status_not_off_abstain_or_ok',
+  PANEL_NEVER_GREEN: 'refused_panel_may_not_declare_green',
+
+  // ---- the wire form of a rectified crop
+  WIRE_NO_ENCODER: 'rectified_crop_has_no_encoder_nothing_sent',
+  WIRE_ENCODE_FAILED: 'rectified_crop_did_not_encode_nothing_sent',
   MAT_NOT_LOCKED: 'refused_mat_not_locked',
   REFUSED_MAT_LOST: 'refused_mat_lost', REFUSED_BRAIN_LOST: 'refused_brain_lost',
   REFUSED_FROZEN_TOTAL: 'refused_total_frozen',
@@ -963,10 +1009,796 @@ export function p95(samples) {
 }
 
 // ===========================================================================
+// CAMERA — preflight, failure classification, and which lens we actually got.
+//
+// INVARIANT 7 at the hardware boundary. getUserMedia has five common ways to
+// fail and every one of them renders as the SAME black rectangle if you let it.
+// A black rectangle is a guess: it silently implies "still loading". These
+// functions turn each failure into a named, printable refusal, and they are
+// pure so the mapping is proven by test rather than by trying it on a phone.
+// ===========================================================================
+
+export const CameraState = Object.freeze({
+  IDLE: 'IDLE', STARTING: 'STARTING', LIVE: 'LIVE', FAILED: 'FAILED',
+});
+
+export const Facing = Object.freeze({ REAR: 'rear', FRONT: 'front', UNKNOWN: 'unknown' });
+
+/** DOMException.name -> named reason. Legacy Chrome/Firefox aliases included. */
+export const CAMERA_ERROR_REASONS = Object.freeze({
+  NotAllowedError: Reason.CAMERA_DENIED,
+  PermissionDeniedError: Reason.CAMERA_DENIED,
+  SecurityError: Reason.CAMERA_INSECURE,
+  NotFoundError: Reason.CAMERA_ABSENT,
+  DevicesNotFoundError: Reason.CAMERA_ABSENT,
+  NotReadableError: Reason.CAMERA_BUSY,
+  TrackStartError: Reason.CAMERA_BUSY,
+  SourceUnavailableError: Reason.CAMERA_BUSY,
+  OverconstrainedError: Reason.CAMERA_OVERCONSTRAINED,
+  ConstraintNotSatisfiedError: Reason.CAMERA_OVERCONSTRAINED,
+  AbortError: Reason.CAMERA_ABORTED,
+  TypeError: Reason.CAMERA_UNSUPPORTED,
+});
+
+/** The sentence a shopkeeper can act on, per reason. Never blank. */
+export const CAMERA_HELP = Object.freeze({
+  [Reason.CAMERA_DENIED]:
+    'The browser blocked the camera. Open the site settings for this page, set Camera to Allow, then tap START again.',
+  [Reason.CAMERA_ABSENT]:
+    'This device reports no camera at all. GAWAAH cannot see the mat; nothing will be counted.',
+  [Reason.CAMERA_BUSY]:
+    'Another app is holding the camera. Close the other camera app or video call, then tap START again.',
+  [Reason.CAMERA_INSECURE]:
+    'The page is not on a secure origin, so the browser will not hand over a camera. Serve it over https, or over localhost.',
+  [Reason.CAMERA_UNSUPPORTED]:
+    'This browser does not expose getUserMedia. Use a current Chrome, Safari or Firefox.',
+  [Reason.CAMERA_OVERCONSTRAINED]:
+    'No camera on this device matches what was asked for. Retrying with any camera.',
+  [Reason.CAMERA_ABORTED]:
+    'The camera hardware aborted the stream. Tap START again; if it repeats the camera is failing.',
+  [Reason.CAMERA_FAILED]:
+    'The camera failed and the browser did not say why. Tap START to try again.',
+  [Reason.CAMERA_IDLE]:
+    'The camera has not been started. Tap START — the browser only hands over a camera after a real tap.',
+});
+
+/**
+ * Refuse BEFORE calling getUserMedia when the environment cannot possibly
+ * satisfy it. Returns null when a call is worth making.
+ *
+ * `isSecureContext === false` is checked for the literal false: `undefined`
+ * means "this runtime does not tell us", which is not evidence of insecurity,
+ * so we let the real call adjudicate rather than inventing a refusal.
+ */
+export function cameraPreflight(env) {
+  const e = env || {};
+  if (e.isSecureContext === false) {
+    return { ok: false, reason: Reason.CAMERA_INSECURE, help: CAMERA_HELP[Reason.CAMERA_INSECURE] };
+  }
+  if (!e.hasMediaDevices || !e.hasGetUserMedia) {
+    return { ok: false, reason: Reason.CAMERA_UNSUPPORTED, help: CAMERA_HELP[Reason.CAMERA_UNSUPPORTED] };
+  }
+  return null;
+}
+
+/**
+ * Read the environment the shell is actually running in, without touching it.
+ * Split out from cameraPreflight so the policy is testable with no globals.
+ */
+export function cameraEnv(win, nav) {
+  const md = nav ? nav.mediaDevices : null;
+  return {
+    isSecureContext: win && 'isSecureContext' in win ? win.isSecureContext : undefined,
+    hasMediaDevices: !!md,
+    hasGetUserMedia: !!(md && typeof md.getUserMedia === 'function'),
+  };
+}
+
+/** Classify a getUserMedia rejection into a named, printable refusal. */
+export function classifyCameraError(err) {
+  const name = err && typeof err.name === 'string' ? err.name : '';
+  const detail = err && err.message ? String(err.message) : String(err);
+  const reason = CAMERA_ERROR_REASONS[name] || Reason.CAMERA_FAILED;
+  return { reason, name: name || 'UnnamedError', detail, help: CAMERA_HELP[reason] };
+}
+
+/**
+ * Only two failures are worth retrying with a weaker constraint: the device
+ * has no camera matching `facingMode: environment` (a laptop), or it refuses
+ * the exact constraint. A denial, a busy camera or an insecure origin will
+ * fail identically on the second try, so retrying them only wastes the
+ * shopkeeper's time and hides the real reason behind a spinner.
+ */
+export function shouldRetryCamera(reason) {
+  return reason === Reason.CAMERA_OVERCONSTRAINED || reason === Reason.CAMERA_ABSENT;
+}
+
+/**
+ * The constraint ladder. Rear camera first, because the mat is on the counter
+ * in front of the shopkeeper and behind the phone. Then any camera at all,
+ * because a front camera that says so is worth infinitely more than a black
+ * pane that does not.
+ */
+export function cameraFallbackPlan() {
+  const size = { width: { ideal: 1280 }, height: { ideal: 960 } };
+  return Object.freeze([
+    Object.freeze({ kind: 'rear-exact', constraints: { video: { facingMode: { exact: 'environment' }, ...size }, audio: false } }),
+    Object.freeze({ kind: 'rear-ideal', constraints: { video: { facingMode: { ideal: 'environment' }, ...size }, audio: false } }),
+    Object.freeze({ kind: 'any', constraints: { video: true, audio: false } }),
+  ]);
+}
+
+/**
+ * Which lens did we actually get, and what does that mean for the mat?
+ *
+ * On a laptop this resolves to FRONT, and the honest consequence is that the
+ * mat is behind the screen and will never lock. That is a correct outcome, not
+ * a bug, and the note says so in words rather than leaving NO LOCK looking
+ * broken. `settings.facingMode` is authoritative; the track label is a weak
+ * second opinion and is only consulted when the browser says nothing.
+ */
+export function describeCamera(settings, label) {
+  const s = settings || {};
+  const lbl = typeof label === 'string' ? label : '';
+  let facing = Facing.UNKNOWN, evidence = 'none';
+  if (s.facingMode === 'environment') { facing = Facing.REAR; evidence = 'facingMode'; }
+  else if (s.facingMode === 'user') { facing = Facing.FRONT; evidence = 'facingMode'; }
+  else if (/\b(back|rear|environment|world)\b/i.test(lbl)) { facing = Facing.REAR; evidence = 'label'; }
+  else if (/\b(front|face|user|facetime|selfie)\b/i.test(lbl)) { facing = Facing.FRONT; evidence = 'label'; }
+  const w = Number.isFinite(s.width) ? s.width : null;
+  const h = Number.isFinite(s.height) ? s.height : null;
+  const size = w && h ? `${w}x${h}` : 'size unknown';
+  if (facing === Facing.REAR) {
+    return {
+      facing, evidence, reason: Reason.CAMERA_REAR, width: w, height: h,
+      note: `rear camera (${size}) — point it at the mat`,
+      matLockExpected: true,
+    };
+  }
+  if (facing === Facing.FRONT) {
+    return {
+      facing, evidence, reason: Reason.CAMERA_FRONT, width: w, height: h,
+      note: `FRONT camera (${size}) — the mat is behind this screen, so it will NOT lock. `
+        + 'That is correct, not broken: use a phone with a rear camera to count.',
+      matLockExpected: false,
+    };
+  }
+  return {
+    facing, evidence, reason: Reason.CAMERA_FACING_UNKNOWN, width: w, height: h,
+    note: `camera in use (${size}) — the browser did not say which lens. `
+      + 'If the mat never locks, this is probably the front camera.',
+    matLockExpected: null,
+  };
+}
+
+// ===========================================================================
+// PANEL ROUTER. Six containers, one visible. Pure so the routing decision is a
+// tested function and not a pile of classList toggles.
+// ===========================================================================
+export const PANEL_IDS = Object.freeze(['core', 'mudra', 'peel', 'chilla', 'saaf', 'ledger']);
+export const DEFAULT_PANEL = 'core';
+
+/** DOM id of a panel container, e.g. 'mudra' -> 'panel-mudra'. */
+export function panelElementId(id) { return `panel-${id}`; }
+
+/** '#panel-mudra', '#mudra', 'mudra' -> 'mudra'. Anything else -> null. */
+export function panelIdFromHash(hash) {
+  if (typeof hash !== 'string') return null;
+  const raw = hash.replace(/^#/, '').replace(/^panel-/, '').trim().toLowerCase();
+  return PANEL_IDS.includes(raw) ? raw : null;
+}
+
+export function initialPanelState(current = DEFAULT_PANEL) {
+  const id = PANEL_IDS.includes(current) ? current : DEFAULT_PANEL;
+  return Object.freeze({
+    current: id, previous: null, reason: Reason.PANEL_SHOWN,
+    applied: true, visited: Object.freeze([id]),
+  });
+}
+
+/**
+ * THE ROUTER. Pure: (state, id) -> new state. Never throws, never mutates.
+ * An unknown id is an ABSTENTION — the previously shown panel stays shown and
+ * the refusal is named — because silently falling back to CORE would hide a
+ * typo in a panel agent's link forever.
+ */
+export function selectPanel(state, id) {
+  const st = state && typeof state === 'object' ? state : initialPanelState();
+  if (typeof id !== 'string' || !PANEL_IDS.includes(id)) {
+    return Object.freeze({ ...st, reason: `${Reason.PANEL_UNKNOWN}:${String(id)}`, applied: false });
+  }
+  if (id === st.current) {
+    return Object.freeze({ ...st, reason: Reason.PANEL_SAME, applied: false });
+  }
+  const visited = st.visited && Array.isArray(st.visited) ? st.visited : [];
+  return Object.freeze({
+    current: id,
+    previous: st.current,
+    reason: Reason.PANEL_SHOWN,
+    applied: true,
+    visited: Object.freeze([...new Set([...visited, id])]),
+  });
+}
+
+/** Visibility map the shell applies: {'panel-core': false, 'panel-mudra': true, ...}. */
+export function panelVisibility(panelState) {
+  const cur = panelState && panelState.current ? panelState.current : DEFAULT_PANEL;
+  return Object.freeze(Object.fromEntries(
+    PANEL_IDS.map((id) => [panelElementId(id), id !== cur])));   // value is `hidden`
+}
+
+/** The shell's CSS tab router is a radio group; this is its input id. */
+export function panelTabId(id) { return `tabsel-${id}`; }
+
+/** 'tabsel-mudra' -> 'mudra'. Anything that is not a known tab -> null. */
+export function panelIdFromTabId(tabId) {
+  if (typeof tabId !== 'string') return null;
+  const raw = tabId.replace(/^tabsel-/, '').trim().toLowerCase();
+  return PANEL_IDS.includes(raw) ? raw : null;
+}
+
+/**
+ * Which radio must be checked, given the router state.
+ *
+ * The shell shows panels with pure CSS — `.shell:has(#tabsel-X:checked)
+ * #panel-X { display: block }` — so a tab keeps working before this module
+ * loads and cannot be broken by a module that throws. The consequence is that
+ * the router MUST move the radio, not the panel: setting `hidden` on a
+ * `.panel` fights an author `display:block` rule and leaves the stage looking
+ * blank while the router privately believes it switched. This map is the one
+ * place that decision is made, so it can be tested without a DOM.
+ */
+export function panelTabSelection(panelState) {
+  const cur = panelState && panelState.current ? panelState.current : DEFAULT_PANEL;
+  return Object.freeze(Object.fromEntries(PANEL_IDS.map((id) => [panelTabId(id), id === cur])));
+}
+
+// ---------------------------------------------------------------------------
+// PANEL STATUS — the shell contract's third attribute, #panel-X[data-status].
+// OFF / ABSTAIN / OK, and deliberately NO GREEN: green belongs to a settled
+// session and comes only from a signature-verified webhook (invariant 2).
+// ---------------------------------------------------------------------------
+export const PanelStatus = Object.freeze({ OFF: 'OFF', ABSTAIN: 'ABSTAIN', OK: 'OK' });
+const PANEL_STATUSES = Object.freeze([PanelStatus.OFF, PanelStatus.ABSTAIN, PanelStatus.OK]);
+
+/**
+ * CORE's own status. CORE is the billing loop, so it "knows" exactly when it
+ * has a mat lock and not one moment earlier. Every other outcome is an
+ * ABSTENTION carrying the reason that actually caused it — a camera that was
+ * never started, a camera that refused and why, an absent OpenCV, or the
+ * lock's own refusal — rather than the markup's static `mat_not_locked`, which
+ * is a guess whenever the true cause is upstream of the mat.
+ *
+ * There is no input for which this returns OK without a lock. That is the
+ * whole point: OK on this panel means "billing is trustworthy right now".
+ */
+export function corePanelStatus(view) {
+  const v = view || {};
+  const cam = v.camera || {};
+  const lock = v.lock || {};
+  // Written as "OK requires LIVE", not "abstain on the three failures I can
+  // name". The second form falls THROUGH on any state it has not heard of —
+  // so a future CameraState, or a camera object that was never initialised,
+  // would be read as a working camera. Unknown is not evidence of working.
+  if (cam.state !== CameraState.LIVE) {
+    if (cam.state === CameraState.IDLE) return { status: PanelStatus.ABSTAIN, why: Reason.CAMERA_IDLE };
+    if (cam.state === CameraState.STARTING) return { status: PanelStatus.ABSTAIN, why: Reason.CAMERA_STARTING };
+    if (cam.state === CameraState.FAILED) {
+      return { status: PanelStatus.ABSTAIN, why: cam.reason || Reason.CAMERA_FAILED };
+    }
+    return { status: PanelStatus.ABSTAIN, why: `${Reason.CAMERA_STATE_UNKNOWN}:${String(cam.state)}` };
+  }
+  if (v.cvReason) return { status: PanelStatus.ABSTAIN, why: v.cvReason };
+  if (lock.locked !== true) {
+    return { status: PanelStatus.ABSTAIN, why: lock.reason || Reason.MAT_NOT_LOCKED };
+  }
+  return { status: PanelStatus.OK, why: null };
+}
+
+/**
+ * A capability panel's status, from two facts this file can actually check:
+ * whether a module registered for that id, and what that module last declared.
+ *
+ * Nothing attached          -> OFF, and `why` is null so the shell's own honest
+ *                              placeholder text is left alone rather than
+ *                              overwritten with a worse sentence.
+ * Attached, said nothing    -> ABSTAIN. A module that is running and has not
+ *                              spoken does not know; that is not OFF.
+ * Attached, declared        -> what it declared, provided the status is one of
+ *                              the three legal ones. A panel that tries to
+ *                              declare GREEN — or any invented status — is
+ *                              REFUSED down to ABSTAIN with a named reason,
+ *                              because no capability may ever paint green.
+ */
+export function panelStatusFor(id, registered, declared) {
+  if (!registered) return { status: PanelStatus.OFF, why: null };
+  const d = declared && typeof declared === 'object' ? declared : null;
+  if (!d || d.status === undefined || d.status === null) {
+    return { status: PanelStatus.ABSTAIN, why: Reason.PANEL_NO_DATA };
+  }
+  const s = String(d.status).toUpperCase();
+  if (s === 'GREEN' || s === 'PAID') {
+    return { status: PanelStatus.ABSTAIN, why: `${Reason.PANEL_NEVER_GREEN}:${id}` };
+  }
+  if (!PANEL_STATUSES.includes(s)) {
+    return { status: PanelStatus.ABSTAIN, why: `${Reason.PANEL_BAD_STATUS}:${String(d.status)}` };
+  }
+  if (s === PanelStatus.OK) {
+    return { status: PanelStatus.OK, why: typeof d.why === 'string' ? d.why : null };
+  }
+  const why = typeof d.why === 'string' && d.why !== '' ? d.why : Reason.PANEL_NO_DATA;
+  return { status: s, why };
+}
+
+/**
+ * The sentence printed into #camreason. Never blank, in any state — a camera
+ * gate with an empty reason line is the black rectangle all over again.
+ */
+export function cameraReasonLine(cam) {
+  const c = cam || {};
+  if (c.state === CameraState.LIVE) {
+    return `${Reason.CAMERA_LIVE}: ${c.note || c.reason || Reason.CAMERA_FACING_UNKNOWN}`;
+  }
+  if (c.state === CameraState.STARTING) return Reason.CAMERA_STARTING;
+  if (c.state === CameraState.IDLE) return `${Reason.CAMERA_IDLE} · ${CAMERA_HELP[Reason.CAMERA_IDLE]}`;
+  const reason = c.reason || Reason.CAMERA_FAILED;
+  const help = c.help || CAMERA_HELP[reason] || '';
+  return help ? `${reason} · ${help}` : reason;
+}
+
+/**
+ * The camera gate is one attribute on #camgate, per the shell contract in
+ * index.html: IDLE | REQUESTING | LIVE | DENIED | ABSENT | INSECURE | ERROR.
+ * Pure, so the mapping from our reason codes onto the shell's seven cases is a
+ * tested table and not a chain of ifs that drifts from the markup.
+ */
+export const CAMERA_GATE_CODES = Object.freeze({
+  [Reason.CAMERA_IDLE]: 'IDLE',
+  [Reason.CAMERA_STARTING]: 'REQUESTING',
+  [Reason.CAMERA_LIVE]: 'LIVE',
+  [Reason.CAMERA_REAR]: 'LIVE',
+  [Reason.CAMERA_FRONT]: 'LIVE',
+  [Reason.CAMERA_FACING_UNKNOWN]: 'LIVE',
+  [Reason.CAMERA_DENIED]: 'DENIED',
+  [Reason.CAMERA_ABSENT]: 'ABSENT',
+  [Reason.CAMERA_INSECURE]: 'INSECURE',
+  [Reason.CAMERA_BUSY]: 'ERROR',
+  [Reason.CAMERA_UNSUPPORTED]: 'ERROR',
+  [Reason.CAMERA_OVERCONSTRAINED]: 'ERROR',
+  [Reason.CAMERA_ABORTED]: 'ERROR',
+  [Reason.CAMERA_FAILED]: 'ERROR',
+});
+
+export function cameraGateCode(cam) {
+  const c = cam || {};
+  if (c.state === CameraState.LIVE) return 'LIVE';
+  if (c.state === CameraState.STARTING) return 'REQUESTING';
+  if (c.state === CameraState.IDLE) return 'IDLE';
+  // FAILED, and anything the table has not heard of, is ERROR rather than a
+  // guess — the precise cause is printed in #camreason beside it.
+  return CAMERA_GATE_CODES[c.reason] || 'ERROR';
+}
+
+// ===========================================================================
+// THE PANEL API — the contract other agents build against.
+// ===========================================================================
+/**
+ * registerPanel(id, { onState, onFrame }) -> { ok, reason, ... }
+ *
+ * WHY IT EXISTS: web/app.js is owned by one agent, and the MUDRA / PEEL /
+ * CHILLA / SAAF / LEDGER panels are owned by others. This is the seam. A panel
+ * module does:
+ *
+ *     import { registerPanel, RETAIN_RECTIFIED } from '../app.js';
+ *     registerPanel('mudra', {
+ *       onState(view) { ... },      // called on every counter state change
+ *       onFrame(frame) { ... },     // called once per rendered frame, LOCKED only
+ *     });
+ *
+ * or, from a plain script, `window.GAWAAH.registerPanel(...)` — the same
+ * function, exposed on the global for panels that are not ES modules.
+ *
+ * THE THIRD CALL — saying what you know:
+ *
+ *     import { setPanelStatus, PanelStatus } from '../app.js';
+ *     setPanelStatus('mudra', PanelStatus.OK, null);            // I have a reading
+ *     setPanelStatus('mudra', PanelStatus.ABSTAIN, 'mudra_ambiguous_shape');
+ *
+ * That one call paints all three places the shell contract names: the panel's
+ * status pill (#panel-mudra[data-status]), the rail dot, and the "I DO NOT
+ * KNOW" block (#abstain-mudra is hidden on OK, and #why-mudra carries the
+ * reason on ABSTAIN). A panel that never calls it stays ABSTAIN once it has
+ * registered, and OFF until then — both of which are true statements.
+ *
+ * Statuses are OFF, ABSTAIN and OK. There is no GREEN and a panel that tries
+ * to declare one is refused down to ABSTAIN with a named reason: green is a
+ * settled session, and only a signature-verified webhook produces one.
+ *
+ * CORE is not declarable. Its status is DERIVED from the mat lock, because
+ * nothing should be able to announce that the billing loop is trustworthy
+ * except the geometry that makes it trustworthy.
+ *
+ * `id` MUST be one of PANEL_IDS. An unknown id is refused with a named reason
+ * rather than silently accepted, so a typo surfaces at load instead of never.
+ * Re-registering the same id REPLACES the hooks and says so (hot reload).
+ * Both hooks are optional; anything present must be a function.
+ *
+ * onState(view) receives a frozen, read-only view:
+ *   { state, reason, lines, totalPaise, amberCount, matLocked, online,
+ *     lock, camera, conn, panel, visible }
+ * `visible` is true only for the panel currently routed to. `lines` and `lock`
+ * are copies: a panel cannot reach back and mutate the counter.
+ *
+ * onFrame(frame) receives ONLY the rectified mat crop — INVARIANT 4:
+ *   { cropKind: 'rectified_mat_crop', crop: <HTMLCanvasElement 840x1188>,
+ *     width: 840, height: 1188, ts, seq, lock }
+ * There is no path by which a panel is handed the raw camera frame. `crop` is
+ * the same 840x1188 canvas the split preview shows on the right; every payload
+ * is run through assertRectifiedOnly() before dispatch, so a future edit that
+ * tries to add `raw` throws instead of leaking. onFrame is NOT called when the
+ * mat is unlocked, because there is no crop to hand over.
+ *
+ * INVARIANT 2: a panel is an OBSERVER. There is no hook by which a panel can
+ * change money, commit a line, or set the chrome colour. MUDRA reveals a
+ * target, PEEL warns, CHILLA corroborates, SAAF selects frames — none of them
+ * decide, and none of them can turn the counter green.
+ *
+ * A hook that THROWS is caught, counted, and named on that panel's own status
+ * line. It never unwinds into the frame loop, because a broken panel must not
+ * be able to stop the counter from counting.
+ */
+export function makePanelRegistry() {
+  const entries = new Map();
+  const declared = new Map();
+  const faults = [];
+  let watcher = null;
+
+  function register(id, hooks) {
+    if (typeof id !== 'string' || !PANEL_IDS.includes(id)) {
+      return { ok: false, reason: `${Reason.PANEL_UNKNOWN}:${String(id)}` };
+    }
+    const h = hooks && typeof hooks === 'object' ? hooks : {};
+    for (const k of ['onState', 'onFrame']) {
+      if (h[k] !== undefined && h[k] !== null && typeof h[k] !== 'function') {
+        return { ok: false, reason: `${Reason.PANEL_BAD_HOOKS}:${id}.${k}` };
+      }
+    }
+    const replaced = entries.has(id);
+    entries.set(id, {
+      id,
+      onState: typeof h.onState === 'function' ? h.onState : null,
+      onFrame: typeof h.onFrame === 'function' ? h.onFrame : null,
+      stateCalls: 0, frameCalls: 0, errors: 0, lastError: null,
+    });
+    return { ok: true, id, replaced, reason: replaced ? Reason.PANEL_REPLACED : Reason.PANEL_REGISTERED };
+  }
+
+  function call(entry, hook, arg) {
+    const fn = entry[hook];
+    if (!fn) return;
+    try {
+      fn(arg);
+      if (hook === 'onState') entry.stateCalls++; else entry.frameCalls++;
+    } catch (e) {
+      entry.errors++;
+      entry.lastError = `${Reason.PANEL_HOOK_THREW}:${entry.id}.${hook}: ${(e && e.message) || e}`;
+      faults.push(entry.lastError);
+    }
+  }
+
+  /**
+   * A panel declaring its own status. This is how MUDRA/PEEL/CHILLA/SAAF/LEDGER
+   * paint their rail dot and their "I DO NOT KNOW" block without ever editing
+   * app.js. The declaration is ADJUDICATED by panelStatusFor(), not trusted: a
+   * panel cannot declare GREEN and cannot invent a fourth status.
+   */
+  function declare(id, status, why) {
+    if (typeof id !== 'string' || !PANEL_IDS.includes(id)) {
+      return { ok: false, reason: `${Reason.PANEL_UNKNOWN}:${String(id)}` };
+    }
+    if (id === DEFAULT_PANEL) {
+      // CORE's status is derived from the mat lock, not declared. Nothing may
+      // announce that the billing loop is fine; only a lock can show that.
+      return { ok: false, reason: `${Reason.PANEL_BAD_STATUS}:core_is_derived_from_the_lock` };
+    }
+    const verdict = panelStatusFor(id, true, { status, why });
+    declared.set(id, { status, why });
+    if (watcher) {
+      // A watcher that throws must not unwind into the declaring panel: a
+      // broken repaint is not a reason to break the module that spoke.
+      try { watcher(id, verdict); }
+      catch (e) { faults.push(`${Reason.PANEL_HOOK_THREW}:watch: ${(e && e.message) || e}`); }
+    }
+    return { ok: true, id, ...verdict };
+  }
+
+  return {
+    register,
+    declare,
+    /** The shell subscribes here to repaint a dot the moment a panel speaks. */
+    watch(fn) { watcher = typeof fn === 'function' ? fn : null; },
+    declaredFor(id) { return declared.get(id) ?? null; },
+    /** The adjudicated status of every panel, for the shell to apply. */
+    statuses() {
+      return Object.fromEntries(PANEL_IDS.filter((id) => id !== DEFAULT_PANEL)
+        .map((id) => [id, panelStatusFor(id, entries.has(id), declared.get(id))]));
+    },
+    unregister(id) { declared.delete(id); return entries.delete(id); },
+    has(id) { return entries.has(id); },
+    ids() { return [...entries.keys()]; },
+    get(id) { return entries.get(id) || null; },
+    faults,
+    /** Fan a read-only counter view out to every panel. Never throws. */
+    emitState(view) { for (const e of entries.values()) call(e, 'onState', view); return entries.size; },
+    /**
+     * Fan the RECTIFIED CROP out to every panel. Asserts invariant 4 on the way
+     * through — a payload that is not the rectified crop throws HERE, before any
+     * panel sees it, rather than being quietly forwarded.
+     */
+    emitFrame(frame) {
+      assertRectifiedFrame(frame);
+      for (const e of entries.values()) call(e, 'onFrame', frame);
+      return entries.size;
+    },
+  };
+}
+
+const PANEL_REGISTRY = makePanelRegistry();
+/** The public seam. See the comment block on makePanelRegistry above. */
+export function registerPanel(id, hooks) { return PANEL_REGISTRY.register(id, hooks); }
+/**
+ * The second half of the seam: a panel telling the shell what it currently
+ * knows. Paints #panel-X[data-status], the rail dot and #abstain-X / #why-X.
+ * Legal statuses are OFF, ABSTAIN and OK. GREEN is refused — see PanelStatus.
+ */
+export function setPanelStatus(id, status, why) { return PANEL_REGISTRY.declare(id, status, why); }
+/** Escape hatch for tests and for the shell; panels should use registerPanel. */
+export function panelRegistry() { return PANEL_REGISTRY; }
+
+/**
+ * THE LOAD-ORDER SEAM.
+ *
+ * A panel module cannot know whether it is evaluated before or after app.js —
+ * both are deferred ES modules and the shell decides the order. So each one
+ * publishes a descriptor `{ id, title, attach(register), attached }` onto
+ * `globalThis.GAWAAH_PANELS` and attaches itself only if it already found a
+ * `registerPanel`. Whoever arrives second is responsible for draining the
+ * queue; when app.js is second, this is that drain.
+ *
+ * `attached` is honoured, so a panel that already attached directly is not
+ * registered twice. A descriptor whose attach() THROWS is refused by name and
+ * the drain continues: one panel module that fails to construct must not stop
+ * the other four from attaching, and must not stop the counter from booting.
+ * Never throws.
+ */
+export function drainPanelQueue(queue, register) {
+  const out = { attached: [], skipped: [], refused: [] };
+  if (!Array.isArray(queue) || typeof register !== 'function') return out;
+  for (const d of queue) {
+    if (!d || typeof d !== 'object') {
+      out.refused.push({ id: null, message: `not_a_descriptor:${String(d)}` });
+      continue;
+    }
+    const id = typeof d.id === 'string' ? d.id : '(unnamed)';
+    if (d.attached === true) { out.skipped.push(id); continue; }
+    if (typeof d.attach !== 'function') {
+      out.refused.push({ id, message: 'descriptor_has_no_attach' });
+      continue;
+    }
+    try { d.attach(register); d.attached = true; out.attached.push(id); }
+    catch (e) { out.refused.push({ id, message: (e && e.message) ? e.message : String(e) }); }
+  }
+  return out;
+}
+
+/**
+ * INVARIANT 4, asserted in code rather than in prose. Everything that reaches a
+ * panel or the wire must be the rectified 840x1188 mat crop and must say so.
+ */
+export function assertRectifiedFrame(frame) {
+  if (frame === null || typeof frame !== 'object') {
+    throw new Error('invariant 4 violated: frame payload is not an object');
+  }
+  assertRectifiedOnly(frame);
+  if (frame.cropKind !== RETAIN_RECTIFIED) {
+    throw new Error(`invariant 4 violated: cropKind is '${String(frame.cropKind)}', not '${RETAIN_RECTIFIED}'`);
+  }
+  if (frame.width !== BUF_W || frame.height !== BUF_H) {
+    throw new Error(`invariant 4 violated: crop is ${frame.width}x${frame.height}, not ${BUF_W}x${BUF_H}`);
+  }
+  return frame;
+}
+
+/**
+ * Build the frame payload, or refuse. Abstains (send:false, named reason)
+ * whenever the mat is not locked, because with no lock there IS no rectified
+ * crop and the only honest thing to send is nothing.
+ */
+export function frameEgress(lock, crop, meta) {
+  const policy = frameGrabPolicy(lock);
+  if (policy.retain !== RETAIN_RECTIFIED) {
+    return { send: false, reason: policy.reason, payload: null };
+  }
+  const m = meta || {};
+  const payload = {
+    type: 'frame',
+    cropKind: RETAIN_RECTIFIED,
+    crop,
+    width: BUF_W,
+    height: BUF_H,
+    ts: m.ts ?? null,
+    seq: m.seq ?? null,
+    lock: { scaleErr: lock.scaleErr, perspIndex: lock.perspIndex, reprojRmsePx: lock.reprojRmsePx },
+  };
+  return { send: true, reason: policy.reason, payload: assertRectifiedFrame(payload) };
+}
+
+/**
+ * How often a frame may go to the brain. The frame loop runs at 30fps; the
+ * brain does not need 30 encoded crops a second and a phone cannot afford to
+ * make them. This is a policy, not a magic number in a closure.
+ */
+export const BRAIN_FRAME_EVERY_MS = 500;
+
+/**
+ * May a frame go over the wire right now?
+ *
+ * OFFLINE SENDS NOTHING. Not "queues the frame" — nothing. The outbox exists
+ * for billing events, which the brain must eventually see; a stale crop from
+ * forty seconds ago is worse than no crop, and filling a bounded queue with
+ * images would evict the events that actually matter. Billing continues
+ * locally either way, and either way nothing is authorised.
+ */
+export function shouldSendFrameToBrain(lastSentMs, nowMs, conn, everyMs = BRAIN_FRAME_EVERY_MS) {
+  if (!connIsUp(conn)) return false;
+  if (lastSentMs === null || lastSentMs === undefined) return true;
+  if (!Number.isFinite(nowMs)) return false;
+  return nowMs - lastSentMs >= everyMs;
+}
+
+/** The default encoder: the rectified canvas, and there is no other input. */
+function encodeRectified(canvas) {
+  return canvas && typeof canvas.toDataURL === 'function'
+    ? canvas.toDataURL('image/jpeg', 0.6) : null;
+}
+
+/**
+ * INVARIANT 4 ON THE WIRE. Turn a frameEgress payload into the JSON message the
+ * brain receives, and prove on the way that it is the rectified mat crop and
+ * nothing else.
+ *
+ * The encoded string is built from `payload.crop` — the 840x1188 rectified
+ * canvas — and from no other source. There is deliberately no parameter, no
+ * option and no branch by which the raw camera canvas or the <video> could be
+ * encoded instead: this function cannot reach them. assertRectifiedFrame runs
+ * on the way in and assertRectifiedOnly on the way out, so a future edit that
+ * adds a raw buffer throws here rather than shipping it.
+ *
+ * Refuses (send:false, named reason) rather than sending a placeholder when
+ * the crop cannot be encoded.
+ */
+export function frameWirePayload(payload, encode = encodeRectified) {
+  assertRectifiedFrame(payload);
+  if (typeof encode !== 'function') {
+    return { send: false, reason: Reason.WIRE_NO_ENCODER, msg: null };
+  }
+  let cropPng = null;
+  try { cropPng = encode(payload.crop); }
+  catch { return { send: false, reason: Reason.WIRE_ENCODE_FAILED, msg: null }; }
+  if (typeof cropPng !== 'string' || cropPng === '') {
+    return { send: false, reason: Reason.WIRE_ENCODE_FAILED, msg: null };
+  }
+  const msg = {
+    type: 'frame',
+    cropKind: RETAIN_RECTIFIED,
+    cropPng,
+    width: payload.width,
+    height: payload.height,
+    ts: payload.ts,
+    seq: payload.seq,
+    lock: payload.lock,
+  };
+  return { send: true, reason: RETAIN_RECTIFIED, msg: assertRectifiedOnly(msg) };
+}
+
+// ===========================================================================
+// BRAIN BRIDGE — connection state as a pure reducer.
+// CONNECTING -> OPEN, or CONNECTING -> RETRYING -> ... -> OFFLINE.
+// OFFLINE does not stop the retries; it is the moment we stop implying that
+// the brain is about to answer and start saying PENDING_OFFLINE out loud.
+// ===========================================================================
+export const Conn = Object.freeze({
+  CONNECTING: 'CONNECTING', OPEN: 'OPEN', RETRYING: 'RETRYING', OFFLINE: 'OFFLINE',
+});
+/** Retries before the banner stops saying "reconnecting" and says OFFLINE. */
+export const WS_OFFLINE_AFTER_ATTEMPTS = 3;
+
+export function initialConnState() {
+  return Object.freeze({
+    status: Conn.CONNECTING, attempt: 0, nextDelayMs: 0,
+    reason: Reason.WS_CONNECTING, applied: true, opens: 0, closes: 0,
+  });
+}
+
+/**
+ * Pure connection reducer. Actions:
+ *   {type:'CONNECT'}                  a socket is being opened
+ *   {type:'OPEN'}                     the socket opened
+ *   {type:'CLOSE', delayMs?, rnd?}    the socket closed; schedule a retry
+ *   {type:'NET_DOWN'}                 the OS says there is no network
+ *   {type:'NET_UP'}                   the OS says the network is back
+ */
+export function reduceConn(state, action) {
+  const st = state && typeof state === 'object' ? state : initialConnState();
+  const a = action && typeof action === 'object' ? action : { type: '' };
+  const F = (patch, reason, applied = true) => Object.freeze({ ...st, ...patch, reason, applied });
+  switch (a.type) {
+    case 'CONNECT':
+      return F({ status: Conn.CONNECTING, nextDelayMs: 0 }, Reason.WS_CONNECTING);
+    case 'OPEN':
+      return F({ status: Conn.OPEN, attempt: 0, nextDelayMs: 0, opens: st.opens + 1 }, Reason.WS_OPEN);
+    case 'CLOSE': {
+      const attempt = st.attempt + 1;
+      const delay = Number.isFinite(a.delayMs) ? a.delayMs : backoffMs(attempt - 1, a.rnd || Math.random);
+      const offline = attempt >= WS_OFFLINE_AFTER_ATTEMPTS;
+      return F(
+        { status: offline ? Conn.OFFLINE : Conn.RETRYING, attempt, nextDelayMs: delay, closes: st.closes + 1 },
+        offline ? Reason.WS_OFFLINE : Reason.WS_RETRYING,
+      );
+    }
+    case 'NET_DOWN':
+      return F({ status: Conn.OFFLINE, nextDelayMs: 0 }, Reason.WS_OFFLINE);
+    case 'NET_UP':
+      return st.status === Conn.OPEN
+        ? F({}, Reason.WS_OPEN, false)
+        : F({ status: Conn.CONNECTING, attempt: 0, nextDelayMs: 0 }, Reason.WS_CONNECTING);
+    default:
+      return F({}, `unknown_conn_action_${String(a.type)}`, false);
+  }
+}
+
+/** True only for OPEN. Everything else authorises nothing. */
+export function connIsUp(cs) { return !!cs && cs.status === Conn.OPEN; }
+
+/**
+ * The banner sentence. Every branch carries "AMBER PENDING" and "nothing
+ * authorised", because that is true in every branch: the brain is not what
+ * turns the counter green, so its absence can never be reported as an outage
+ * that merely delays a payment.
+ */
+export function bannerText(cs, queued = 0) {
+  const q = queued > 0 ? `${queued} queued, ` : '';
+  const status = cs && cs.status ? cs.status : Conn.OFFLINE;
+  switch (status) {
+    case Conn.CONNECTING:
+      return `AMBER PENDING — connecting to the brain, ${q}nothing authorised`;
+    case Conn.RETRYING:
+      return `AMBER PENDING — brain lost, retry ${cs.attempt} in ${cs.nextDelayMs}ms, ${q}nothing authorised`;
+    case Conn.OFFLINE:
+      return `AMBER PENDING — PENDING_OFFLINE after ${cs.attempt || 0} attempts, billing continues locally, ${q}nothing authorised`;
+    default:
+      return `AMBER PENDING — offline, ${q}nothing authorised`;
+  }
+}
+
+// ===========================================================================
 // Browser shell. Everything below touches the DOM and never runs under node.
 // ===========================================================================
 export const OPENCV_PATH = './vendor/opencv.js';
+export const WS_PORT = 8787;
 export const WS_URL = 'ws://localhost:8787';
+
+/**
+ * The brain address. The counter talks to exactly one origin: the machine that
+ * served this page, on the brain's port. Built from parts so that no other
+ * absolute address exists anywhere in this file — grep the source and the only
+ * literal URL you will find is WS_URL above.
+ */
+export function brainUrl(loc) {
+  const host = loc && typeof loc.hostname === 'string' && loc.hostname !== '' ? loc.hostname : 'localhost';
+  const scheme = loc && loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${scheme}//${host}:${WS_PORT}`;
+}
 
 /**
  * Load the vendored OpenCV. Never downloads: if ./vendor/opencv.js is missing,
@@ -998,23 +1830,46 @@ function boot() {
     total: $('total'), amber: $('amber'), lock: $('lock'), lockDetail: $('lockdetail'),
     lines: $('lines'), done: $('done'), ack: $('ack'), banner: $('banner'),
     reason: $('reason'), fps: $('fps'), cvstat: $('cvstat'),
+    // Added by the shell agent. Every one of these is OPTIONAL: this file must
+    // boot against an index.html that does not have them yet, so each use is
+    // guarded. A missing #start means "start the camera immediately", which is
+    // the pre-gesture behaviour and keeps the old shell working.
+    start: $('start'), camgate: $('camgate'), camreason: $('camreason'),
+    // #camstat and #conn are not in the current shell; the camera gate and the
+    // banner carry that text now. They stay wired, guarded, for a shell that
+    // offers them. There is no #panelnav: the rail IS the radio group.
+    camstat: $('camstat'), conn: $('conn'),
   };
+  // Set once OpenCV settles; feeds CORE's abstention reason so a panel that
+  // cannot lock because the geometry never loaded says THAT, not 'no markers'.
+  let cvReason = null;
 
   let st = initialState(`sess-${Date.now().toString(36)}`);
   let cv = null, detector = null, lock = { locked: false, reason: 'booting' };
   let outbox = [];
-  let ws = null, wsAttempt = 0, wsTimer = null;
-  let lastFrameMs = null, frameTimes = [], fpsWindow = [];
+  let ws = null, wsTimer = null;
+  let conn = initialConnState();
+  let panel = initialPanelState();
+  let camera = Object.freeze({
+    state: CameraState.IDLE, reason: Reason.CAMERA_IDLE,
+    help: CAMERA_HELP[Reason.CAMERA_IDLE], facing: Facing.UNKNOWN, note: '', kind: null,
+  });
+  let frameSeq = 0;
+  let lastFrameMs = null, lastBrainFrameMs = null, frameTimes = [], fpsWindow = [];
+  const registry = panelRegistry();
+  const panelAttachFaults = new Map();   // id -> why this capability never loaded
   const glyphs = [];   // {itemId, quad} in frame px, rebuilt every render
+
+  function setReason(text) { if (els.reason) els.reason.textContent = text; }
 
   // ---- state plumbing ----------------------------------------------------
   function dispatch(action) {
     const prev = st;
     st = reduce(st, action);
     if (st.lastApplied === false && prev.lastReason !== st.lastReason) {
-      els.reason.textContent = `refused: ${st.lastReason}`;
+      setReason(`refused: ${st.lastReason}`);
     } else if (st.lastApplied) {
-      els.reason.textContent = st.lastReason;
+      setReason(st.lastReason);
     }
     render();
   }
@@ -1023,6 +1878,9 @@ function boot() {
     const c = chromeFor(st.state);
     els.chrome.className = `chrome chrome-${c.colour}`;
     els.chrome.dataset.state = st.state;
+    els.chrome.dataset.conn = conn.status;
+    els.chrome.dataset.camera = camera.state;
+    els.chrome.dataset.panel = panel.current;
     els.total.textContent = formatRupees(totalPaise(st));
     const nAmber = amberLines(st).length;
     els.amber.textContent = nAmber === 0
@@ -1032,15 +1890,136 @@ function boot() {
     els.lock.className = lock.locked ? 'lock lock-on' : 'lock lock-off';
     els.lockDetail.textContent = lock.locked
       ? `scale ${(lock.scaleErr * 100).toFixed(2)}% · rmse ${lock.reprojRmsePx.toFixed(2)}px · ~${perspToDeg(lock.perspIndex).toFixed(1)}° tilt`
-      : lock.reason;
-    els.banner.hidden = st.online && st.state !== State.PENDING_OFFLINE;
-    els.banner.textContent = outbox.length
-      ? `AMBER PENDING — offline, ${outbox.length} queued, nothing authorised`
-      : 'AMBER PENDING — offline, nothing authorised';
+      : lockDetailWhenUnlocked();
+    els.banner.hidden = st.online && st.state !== State.PENDING_OFFLINE && connIsUp(conn);
+    els.banner.textContent = bannerText(conn, outbox.length);
     els.ack.hidden = st.state !== State.FROZEN_TOTAL;
     els.done.disabled = committedLines(st).length === 0
       || BASKET_CLOSED.includes(st.state) || FROZEN_STATES.includes(st.state);
+    if (els.conn) {
+      els.conn.textContent = connIsUp(conn)
+        ? 'brain connected'
+        : `brain ${conn.status} — ${conn.reason}`;
+      els.conn.className = `conn conn-${conn.status.toLowerCase()}`;
+      els.conn.dataset.status = conn.status;
+    }
+    if (els.camstat) {
+      els.camstat.textContent = camera.state === CameraState.LIVE
+        ? camera.note
+        : `${camera.state} — ${camera.reason}${camera.help ? ` · ${camera.help}` : ''}`;
+      els.camstat.className = `camstat camstat-${camera.state.toLowerCase()}`;
+      els.camstat.dataset.facing = camera.facing;
+      els.camstat.dataset.reason = camera.reason;
+    }
+    // THE CAMERA GATE. One attribute, per the shell contract in index.html:
+    // IDLE | REQUESTING | LIVE | DENIED | ABSENT | INSECURE | ERROR. The
+    // stylesheet turns that single attribute into the whole screen — which
+    // explanatory paragraph shows, whether the gate collapses, and whether the
+    // "no camera feed" shade still covers the two preview canvases. Forgetting
+    // to set it is exactly the black-pane failure invariant 7 forbids: the
+    // stream would be live underneath a shade that still said no feed.
+    if (els.camgate) {
+      els.camgate.dataset.cam = cameraGateCode(camera);
+      els.camgate.dataset.facing = camera.facing;
+    }
+    if (els.camreason) els.camreason.textContent = cameraReasonLine(camera);
+    // INVARIANT 4, stated from the first paint rather than inherited from the
+    // markup. Only the frame loop can retain a crop, and the frame loop only
+    // runs while the camera is LIVE — so with no live camera the honest value
+    // is `nothing`, and saying so here means the app asserts it even against a
+    // shell whose data-policy attribute is missing, stale or wrong.
+    if (camera.state !== CameraState.LIVE) els.rect.dataset.policy = RETAIN_NOTHING;
+    applyPanelStatuses();
     renderLines();
+    emitPanelState();
+  }
+
+  /**
+   * Paint #panel-X[data-status], the rail dot and the "I DO NOT KNOW" block for
+   * all six panels. CORE is derived from the lock; the other five report what
+   * their module declared, adjudicated by panelStatusFor.
+   *
+   * INVARIANT 7: #abstain-X is hidden ONLY on OK. Every other status leaves the
+   * abstention block on screen with a named reason in #why-X, so there is no
+   * state of this app in which a panel shows nothing and explains nothing.
+   */
+  /**
+   * A panel module that threw while attaching is OFF — it really is not
+   * running — but it is off for a REASON, and that reason belongs on its own
+   * status line where it persists. Writing it to the shared #reason field
+   * instead loses it to the next repaint, which is how a capability comes to
+   * be silently missing from a shipped counter.
+   */
+  function recordAttachFaults(drained) {
+    for (const f of drained.refused) {
+      if (f.id) panelAttachFaults.set(f.id, `${Reason.PANEL_ATTACH_FAILED}: ${f.message}`);
+    }
+    for (const id of drained.attached) panelAttachFaults.delete(id);
+  }
+
+  function applyPanelStatuses() {
+    const statuses = { [DEFAULT_PANEL]: corePanelStatus({ camera, lock, cvReason }), ...registry.statuses() };
+    for (const id of PANEL_IDS) {
+      const s = statuses[id];
+      if (!s) continue;
+      if (s.status === PanelStatus.OFF && panelAttachFaults.has(id)) s.why = panelAttachFaults.get(id);
+      const panelEl = document.getElementById(panelElementId(id));
+      if (panelEl) panelEl.dataset.status = s.status;
+      const whyEl = document.getElementById(`why-${id}`);
+      if (whyEl && s.why) whyEl.textContent = s.why;
+      const abstainEl = document.getElementById(`abstain-${id}`);
+      if (abstainEl) abstainEl.hidden = s.status === PanelStatus.OK;
+    }
+  }
+
+  /**
+   * NO LOCK is not self-explanatory, and on a laptop it is not even a fault.
+   * The detail line therefore always carries the CAUSE: no camera yet, the
+   * camera refused and why, or — the one that looks most like a bug and is not
+   * — the front camera is live and the mat is behind the screen.
+   */
+  function lockDetailWhenUnlocked() {
+    if (camera.state === CameraState.IDLE) {
+      return `camera not started — ${Reason.CAMERA_IDLE}`;
+    }
+    if (camera.state === CameraState.STARTING) return Reason.CAMERA_STARTING;
+    if (camera.state === CameraState.FAILED) {
+      return `no camera — ${camera.reason}${camera.help ? ` · ${camera.help}` : ''}`;
+    }
+    if (camera.matLockExpected === false) return `${lock.reason} — ${camera.note}`;
+    return lock.reason;
+  }
+
+  /**
+   * The read-only view handed to every registered panel. Copies, not the live
+   * arrays: a panel is an observer and must not be able to reach back into the
+   * counter (invariant 2).
+   */
+  function panelView() {
+    return Object.freeze({
+      state: st.state,
+      reason: st.lastReason,
+      lines: Object.freeze(st.lines.map((li) => Object.freeze({ ...li }))),
+      totalPaise: totalPaise(st),
+      amberCount: amberLines(st).length,
+      matLocked: lock.locked === true,
+      online: st.online,
+      sessionId: st.sessionId,
+      lock: Object.freeze({
+        locked: lock.locked === true, reason: lock.reason,
+        scaleErr: lock.scaleErr ?? null, perspIndex: lock.perspIndex ?? null,
+        reprojRmsePx: lock.reprojRmsePx ?? null,
+      }),
+      camera,
+      conn: Object.freeze({ ...conn }),
+      panel: Object.freeze({ ...panel }),
+      visible: panel.current,
+    });
+  }
+
+  function emitPanelState() {
+    try { registry.emitState(panelView()); }
+    catch (e) { setReason(`${Reason.PANEL_HOOK_THREW}: ${e.message}`); }
   }
 
   function renderLines() {
@@ -1065,17 +2044,111 @@ function boot() {
   }
 
   // ---- camera ------------------------------------------------------------
+  /**
+   * INVARIANT 7 at the camera. Every one of these failures used to render as
+   * the same black rectangle, and a black rectangle is a lie — it reads as
+   * "still loading" forever. Each branch now writes a NAMED reason to #reason,
+   * paints the reason ONTO the preview pane so there is no silent black pane,
+   * and leaves START tappable so the shopkeeper can retry after fixing it.
+   */
+  function setCamera(patch) {
+    camera = Object.freeze({ ...camera, ...patch });
+    if (els.start) {
+      const busy = camera.state === CameraState.STARTING;
+      els.start.disabled = busy;
+      els.start.hidden = camera.state === CameraState.LIVE;
+      if (camera.state === CameraState.FAILED) els.start.textContent = 'try the camera again';
+    }
+    render();
+  }
+
+  /** Paint a legible refusal onto the raw pane. Never leave it black and mute. */
+  function paintCameraNotice(title, body) {
+    if (!els.raw || typeof els.raw.getContext !== 'function') return;
+    const ctx = els.raw.getContext('2d');
+    const w = els.raw.width || 1280, h = els.raw.height || 960;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#12151c';
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e0a33c';
+    ctx.font = 'bold 44px system-ui, sans-serif';
+    ctx.fillText(title, w / 2, h / 2 - 40);
+    ctx.fillStyle = '#c8ccd6';
+    ctx.font = '26px system-ui, sans-serif';
+    // Hand-wrapped: measureText is not worth a reflow for a static notice.
+    const words = String(body || '').split(' ');
+    let line = '', y = h / 2 + 16;
+    for (const word of words) {
+      if (line.length + word.length > 46) { ctx.fillText(line, w / 2, y); y += 34; line = ''; }
+      line += (line ? ' ' : '') + word;
+    }
+    if (line) ctx.fillText(line, w / 2, y);
+    ctx.restore();
+  }
+
+  function cameraRefused(reason, help, detail) {
+    setCamera({ state: CameraState.FAILED, reason, help, facing: Facing.UNKNOWN, note: '' });
+    setReason(`camera refused: ${reason}${detail ? ` (${detail})` : ''}`);
+    paintCameraNotice('CAMERA UNAVAILABLE', `${reason} — ${help || ''}`);
+  }
+
+  /**
+   * Walk the constraint ladder: rear camera first, then any camera. A denial,
+   * a busy camera or an insecure origin STOPS the walk, because the second
+   * attempt would fail identically and only serve to hide the reason.
+   */
+  async function acquireStream() {
+    let last = null;
+    for (const step of cameraFallbackPlan()) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(step.constraints);
+        return { ok: true, stream, kind: step.kind };
+      } catch (e) {
+        last = classifyCameraError(e);
+        last.kind = step.kind;
+        if (!shouldRetryCamera(last.reason)) return { ok: false, ...last };
+      }
+    }
+    return { ok: false, ...(last || { reason: Reason.CAMERA_FAILED, help: CAMERA_HELP[Reason.CAMERA_FAILED], detail: '' }) };
+  }
+
+  let pumping = false;
   async function startCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } },
-      audio: false,
-    });
-    els.video.srcObject = stream;
-    await els.video.play();
-    const t = stream.getVideoTracks()[0].getSettings();
-    els.raw.width = t.width ?? 1280; els.raw.height = t.height ?? 960;
+    if (camera.state === CameraState.STARTING || camera.state === CameraState.LIVE) return camera;
+    setCamera({ state: CameraState.STARTING, reason: Reason.CAMERA_STARTING, help: '', note: '' });
+    setReason(Reason.CAMERA_STARTING);
+
+    const pre = cameraPreflight(cameraEnv(globalThis.window, globalThis.navigator));
+    if (pre) { cameraRefused(pre.reason, pre.help, ''); return camera; }
+
+    const got = await acquireStream();
+    if (!got.ok) { cameraRefused(got.reason, got.help, got.detail); return camera; }
+
+    els.video.srcObject = got.stream;
+    try { await els.video.play(); }
+    catch (e) {
+      // Autoplay refused even after a tap: name it rather than showing black.
+      cameraRefused(Reason.CAMERA_ABORTED, CAMERA_HELP[Reason.CAMERA_ABORTED], (e && e.message) || String(e));
+      return camera;
+    }
+
+    const track = got.stream.getVideoTracks()[0];
+    const settings = track && typeof track.getSettings === 'function' ? track.getSettings() : {};
+    const d = describeCamera(settings, track ? track.label : '');
+    els.raw.width = settings.width ?? 1280; els.raw.height = settings.height ?? 960;
     els.rect.width = BUF_W; els.rect.height = BUF_H;
-    pump();
+    setCamera({
+      state: CameraState.LIVE, reason: d.reason, help: '', facing: d.facing,
+      note: d.note, kind: got.kind, matLockExpected: d.matLockExpected,
+    });
+    // SAY WHICH LENS. On a laptop this is the front camera and the mat will
+    // never lock; that is a correct outcome and the note explains it in words
+    // instead of leaving NO LOCK looking like a bug.
+    setReason(`${Reason.CAMERA_LIVE}: ${d.note}`);
+    if (!pumping) { pumping = true; pump(); }
+    return camera;
   }
 
   function pump() {
@@ -1132,6 +2205,26 @@ function boot() {
     maskRawPreview(rawCtx, Hinv);
     rectify(lock.H);
     paintGlyphs(rawCtx, Hinv);
+
+    // INVARIANT 4 on the panel seam. Panels are handed the RECTIFIED CROP and
+    // nothing else — never els.raw, never the <video>. frameEgress builds the
+    // payload and assertRectifiedFrame throws if it is ever anything else.
+    const now = performance.now();
+    const eg = frameEgress(lock, els.rect, { ts: now, seq: ++frameSeq });
+    if (eg.send) {
+      try { registry.emitFrame(eg.payload); }
+      catch (e) { setReason(`${Reason.PANEL_HOOK_THREW}: ${e.message}`); }
+
+      // INVARIANT 4 ON THE WIRE. The brain gets the rectified crop and nothing
+      // else. `eg.payload.crop` is els.rect — the 840x1188 warp output — and
+      // frameWirePayload can encode nothing but that; els.raw and the <video>
+      // are not reachable from it. send() re-asserts on the way out.
+      if (shouldSendFrameToBrain(lastBrainFrameMs, now, conn)) {
+        const wire = frameWirePayload(eg.payload);
+        els.rect.dataset.wire = wire.reason;
+        if (wire.send) { send(wire.msg); lastBrainFrameMs = now; }
+      }
+    }
   }
 
   function maskRawPreview(ctx, Hinv) {
@@ -1224,14 +2317,35 @@ function boot() {
     render();
   }
 
+  /**
+   * The brain bridge. Connection state is the PURE reducer above, so the
+   * escalation CONNECTING -> RETRYING -> OFFLINE is a tested function and not
+   * an accident of setTimeout. Nothing here can authorise anything: a socket
+   * that opens does not turn the counter green, and a socket that dies does not
+   * stop it counting. Offline, the banner says PENDING_OFFLINE and billing
+   * continues locally against a queue that authorises nothing.
+   */
   function connect() {
-    ws = new WebSocket(WS_URL);
+    const url = brainUrl(globalThis.location || null);
+    conn = reduceConn(conn, { type: 'CONNECT' });
+    let sock;
+    try { sock = new WebSocket(url); }
+    catch (e) {
+      conn = reduceConn(conn, { type: 'CLOSE' });
+      setReason(`${conn.reason} (${(e && e.message) || e})`);
+      wsTimer = setTimeout(connect, conn.nextDelayMs);
+      render();
+      return;
+    }
+    ws = sock;
+    render();
     ws.onopen = () => {
-      wsAttempt = 0;
+      conn = reduceConn(conn, { type: 'OPEN' });
       dispatch({ type: 'BRAIN', up: true });
       if (!st.online) dispatch({ type: 'NETWORK', up: true });
       const drain = outbox; outbox = [];
       for (const m of drain) ws.send(JSON.stringify(m));
+      setReason(Reason.WS_OPEN);
       render();
     };
     ws.onmessage = (ev) => {
@@ -1240,13 +2354,112 @@ function boot() {
       onBrainMessage(m);
     };
     ws.onclose = () => {
+      conn = reduceConn(conn, { type: 'CLOSE' });
       dispatch({ type: 'BRAIN', up: false });
       dispatch({ type: 'NETWORK', up: false });
-      const wait = backoffMs(wsAttempt++);
-      els.reason.textContent = `brain lost — reconnecting in ${wait}ms`;
-      wsTimer = setTimeout(connect, wait);
+      setReason(conn.status === Conn.OFFLINE
+        ? `${Reason.WS_OFFLINE} — retrying in ${conn.nextDelayMs}ms`
+        : `${Reason.WS_RETRYING} — attempt ${conn.attempt} in ${conn.nextDelayMs}ms`);
+      wsTimer = setTimeout(connect, conn.nextDelayMs);
+      render();
     };
     ws.onerror = () => { try { ws.close(); } catch { /* onclose handles it */ } };
+  }
+
+  // ---- panel router ------------------------------------------------------
+  /**
+   * Six containers, one visible. Driven by whichever of the two the shell
+   * offers: a click on any [data-panel] control, or the location hash. Both
+   * funnel through the pure selectPanel() so there is exactly one decision.
+   */
+  function showPanel(id, source) {
+    const next = selectPanel(panel, id);
+    if (!next.applied) {
+      if (next.reason.startsWith(Reason.PANEL_UNKNOWN)) setReason(`refused: ${next.reason}`);
+      return next;
+    }
+    panel = next;
+    applyPanelVisibility();
+    setReason(`${Reason.PANEL_SHOWN}: ${panel.current}${source ? ` (${source})` : ''}`);
+    render();
+    return next;
+  }
+
+  /**
+   * WHO OWNS VISIBILITY. The shell shows a panel with pure CSS from a radio
+   * group — `.shell:has(#tabsel-X:checked) #panel-X { display: block }` — so
+   * the tabs work before this module loads and survive a module that throws.
+   *
+   * That means the router must move the RADIO. Setting `hidden` on a `.panel`
+   * instead loses twice: the author `display:block` rule outranks the UA's
+   * `[hidden] { display: none }` for the panel that IS selected, so hiding
+   * does nothing there, while every panel the shopkeeper switches to by tapping
+   * the rail gets hidden by a router that never noticed the radio moved. The
+   * result is a blank stage and a router privately certain it is showing CORE.
+   *
+   * When the shell has no radio group — an older index.html — fall back to the
+   * `hidden` map, which is what that shell understands.
+   */
+  function hasTabRadios() { return !!document.getElementById(panelTabId(DEFAULT_PANEL)); }
+
+  function applyPanelVisibility() {
+    if (hasTabRadios()) {
+      for (const [tabId, checked] of Object.entries(panelTabSelection(panel))) {
+        const t = document.getElementById(tabId);
+        if (t && t.checked !== checked) t.checked = checked;
+      }
+    } else {
+      for (const [elId, hidden] of Object.entries(panelVisibility(panel))) {
+        const el = document.getElementById(elId);
+        if (el) el.hidden = hidden;
+      }
+    }
+    for (const id of PANEL_IDS) {
+      const el = document.getElementById(panelElementId(id));
+      if (el) el.dataset.active = id === panel.current ? 'true' : 'false';
+    }
+  }
+
+  function wirePanelRouter() {
+    // Radio router: the shell's own tabs. A label tap checks the radio, CSS
+    // swaps the panel, and this listener tells the router what the DOM already
+    // did — so panel.current, #chrome[data-panel] and the `visible` flag every
+    // registered panel receives all stay true instead of drifting.
+    for (const id of PANEL_IDS) {
+      const t = document.getElementById(panelTabId(id));
+      if (t && typeof t.addEventListener === 'function') {
+        t.addEventListener('change', () => { if (t.checked) showPanel(id, 'rail'); });
+      }
+    }
+    // Click router: any control carrying data-panel="<id>", wherever the shell
+    // agent chose to put it. Delegated, so controls added later still work.
+    if (document.addEventListener) {
+      document.addEventListener('click', (ev) => {
+        const t = ev && ev.target;
+        const id = t && t.dataset && t.dataset.panel ? t.dataset.panel
+          : (t && t.closest ? (t.closest('[data-panel]') || {}).dataset?.panel : undefined);
+        if (id) showPanel(id, 'tap');
+      });
+    }
+    // Hash router: deep links like #panel-mudra survive a reload.
+    const loc = globalThis.location || null;
+    if (globalThis.window && window.addEventListener) {
+      window.addEventListener('hashchange', () => {
+        const id = panelIdFromHash((globalThis.location || {}).hash || '');
+        if (id) showPanel(id, 'hash');
+      });
+    }
+    // Adopt whatever the markup already has checked BEFORE applying our own
+    // idea of the selection, so a shell that ships with a different default
+    // tab is followed rather than silently overridden on load.
+    const checked = PANEL_IDS.find((id) => {
+      const t = document.getElementById(panelTabId(id));
+      return !!(t && t.checked === true);
+    });
+    if (checked && checked !== panel.current) panel = selectPanel(panel, checked);
+    const initial = panelIdFromHash((loc && loc.hash) || '');
+    if (initial) panel = selectPanel(panel, initial);
+    applyPanelVisibility();
   }
 
   function onBrainMessage(m) {
@@ -1267,27 +2480,90 @@ function boot() {
     }
   }
 
-  window.addEventListener('online', () => dispatch({ type: 'NETWORK', up: true }));
-  window.addEventListener('offline', () => dispatch({ type: 'NETWORK', up: false }));
+  window.addEventListener('online', () => {
+    conn = reduceConn(conn, { type: 'NET_UP' });
+    dispatch({ type: 'NETWORK', up: true });
+  });
+  window.addEventListener('offline', () => {
+    conn = reduceConn(conn, { type: 'NET_DOWN' });
+    dispatch({ type: 'NETWORK', up: false });
+  });
   window.addEventListener('beforeunload', () => { if (wsTimer) clearTimeout(wsTimer); });
+
+  // ---- the START gesture --------------------------------------------------
+  // Browsers only hand over a camera after a real user gesture, and a page that
+  // asks on load gets a permission prompt the shopkeeper has no context for.
+  // #start is that gesture. When the shell has no #start we start immediately,
+  // which is the older behaviour and keeps an un-updated index.html working.
+  if (els.start) {
+    els.start.addEventListener('click', () => {
+      startCamera().catch((e) => cameraRefused(
+        Reason.CAMERA_FAILED, CAMERA_HELP[Reason.CAMERA_FAILED], (e && e.message) || String(e)));
+    });
+  }
 
   // ---- start -------------------------------------------------------------
   (async () => {
+    wirePanelRouter();
+    // A panel declaring a new status repaints its dot immediately, rather than
+    // waiting for the next frame — a panel that has just abstained should say
+    // so now, not in 33ms.
+    registry.watch(() => { applyPanelStatuses(); });
+
+    // Attach the capability panels, whichever order they loaded in. Panels that
+    // evaluated FIRST are sitting in the queue and get drained now; panels that
+    // evaluate LATER find globalThis.registerPanel and attach themselves. The
+    // patched push() catches the remaining case — a module that neither probes
+    // the global nor loads before us — so no panel can silently fail to attach.
+    globalThis.registerPanel = registerPanel;
+    const queue = Array.isArray(globalThis.GAWAAH_PANELS) ? globalThis.GAWAAH_PANELS : [];
+    recordAttachFaults(drainPanelQueue(queue, registerPanel));
+    queue.push = (...ds) => {
+      const n = Array.prototype.push.apply(queue, ds);
+      recordAttachFaults(drainPanelQueue(ds, registerPanel));
+      applyPanelStatuses();
+      return n;
+    };
+    globalThis.GAWAAH_PANELS = queue;
+    if (els.start) {
+      // Not a black pane: say what is expected of the shopkeeper.
+      paintCameraNotice('TAP START', CAMERA_HELP[Reason.CAMERA_IDLE]);
+      setReason(Reason.CAMERA_IDLE);
+    }
     render();
     const r = await loadOpenCV();
     if (!r.ok) {
+      cvReason = r.reason;
       els.cvstat.textContent = `OpenCV absent (${r.reason}) — geometry unavailable, refusing to lock`;
       els.cvstat.className = 'cvstat cvstat-absent';
     } else {
+      cvReason = null;
       cv = r.cv;
       els.cvstat.textContent = 'OpenCV 4.11.0-release.1 (vendored)';
       els.cvstat.className = 'cvstat cvstat-ok';
       detector = makeDetector(cv);
     }
-    try { await startCamera(); }
-    catch (e) { els.reason.textContent = `camera refused: ${e.message}`; }
+    if (!els.start) {
+      try { await startCamera(); }
+      catch (e) {
+        cameraRefused(Reason.CAMERA_FAILED, CAMERA_HELP[Reason.CAMERA_FAILED], (e && e.message) || String(e));
+      }
+    }
     connect();
   })();
+
+  // The panel seam, also reachable from a non-module script. Same registry the
+  // exported registerPanel() writes to — see makePanelRegistry's comment block.
+  window.GAWAAH = Object.freeze({
+    registerPanel,
+    setPanelStatus,
+    PanelStatus,
+    showPanel: (id) => showPanel(id, 'api'),
+    panels: PANEL_IDS,
+    startCamera,
+    RETAIN_RECTIFIED,
+    version: 'gawaah-counter-1',
+  });
 
   function makeDetector(cvv) {
     const dict = cvv.getPredefinedDictionaryImpl

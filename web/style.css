@@ -1,12 +1,27 @@
-/* GAWAAH counter PWA. One stylesheet, no framework, no webfont, no image.
-   The counter chrome colour follows session state; the palette is the whole
-   point, so it lives at the top and nothing else hard-codes these values. */
+/* GAWAAH counter PWA. One stylesheet, no framework, no webfont, no image, no
+   external origin of any kind. The counter chrome colour follows session
+   state; the palette is the whole point, so it lives at the top and nothing
+   else hard-codes these values.
+
+   Two rules govern colour in this file and they are not negotiable:
+
+     AMBER IS THE LOUDEST THING ON SCREEN. The product's thesis is that it
+     says "I do not know" far more often than it says yes, so abstention gets
+     the hatching, the glow and the weight. A quiet amber would be a lie.
+
+     GREEN IS NOT AVAILABLE TO ANY PANEL. Green appears in exactly one place,
+     .chrome-green, which is reached only when a signature-verified webhook
+     settles the session. Capability status dots are grey / amber / white for
+     this reason: OK means "this module has an answer", never "you have been
+     paid". If you are adding a feature and reaching for --green, stop. */
 
 :root {
   --ink: #eef1f6;
   --ink-dim: #97a0b0;
+  --ink-faint: #6d7686;
   --bg: #0b0d11;
   --panel: #141821;
+  --panel-2: #1b202b;
   --line: #232a36;
 
   --grey: #6b7480;
@@ -17,8 +32,11 @@
   --red: #e2503f;
 
   --chrome: var(--grey);
+  --dot: var(--grey);
   --radius: 10px;
   --gap: 10px;
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -27,10 +45,13 @@ html, body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 15px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior: none;
 }
+
+/* Every rupee figure carries .num so digits keep their column as it changes. */
+.num, .total, .line-price { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 
 /* the camera source is never displayed */
 #cam { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: -9999px; }
@@ -51,9 +72,12 @@ html, body {
 .chrome-green  { --chrome: var(--green); }
 .chrome-red    { --chrome: var(--red); }
 
-/* PAID and RED HOLD are the two states that must be readable across a shop */
+/* AMBER, PAID and RED HOLD are the three states that must be readable across
+   a shop. Amber is given the same weight as the other two deliberately:
+   "nothing is authorised" is as important a fact as "paid". */
+.chrome-amber { border-top-width: 7px; box-shadow: inset 0 0 0 1px var(--amber), inset 0 130px 180px -110px color-mix(in srgb, var(--amber) 52%, transparent); }
 .chrome-green { box-shadow: inset 0 0 0 1px var(--green), inset 0 130px 180px -110px color-mix(in srgb, var(--green) 55%, transparent); }
-.chrome-red   { box-shadow: inset 0 0 0 2px var(--red),   inset 0 130px 180px -110px color-mix(in srgb, var(--red) 55%, transparent); }
+.chrome-red   { border-top-width: 7px; box-shadow: inset 0 0 0 2px var(--red), inset 0 130px 180px -110px color-mix(in srgb, var(--red) 55%, transparent); }
 
 /* ---------------------------------------------------- header ------------ */
 .bar { display: flex; align-items: center; gap: var(--gap); margin-bottom: 8px; }
@@ -62,7 +86,7 @@ html, body {
 
 .lock {
   margin-left: auto;
-  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 600 11px/1 var(--mono);
   letter-spacing: .1em;
   padding: 6px 9px;
   border-radius: 999px;
@@ -70,7 +94,7 @@ html, body {
 }
 .lock-on  { color: var(--green); }
 .lock-off { color: var(--grey); }
-.fps { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-dim); min-width: 8ch; text-align: right; }
+.fps { font: 11px/1 var(--mono); color: var(--ink-dim); min-width: 8ch; text-align: right; }
 
 .banner {
   background: color-mix(in srgb, var(--amber) 16%, var(--panel));
@@ -83,28 +107,258 @@ html, body {
   font-size: 13px;
 }
 
+/* =========================================================== camera gate ==
+   The first thing a cold visitor sees. It exists because a browser will not
+   hand a camera to a page that did not ask out loud: without a start gesture
+   the app sat in NO LOCK forever behind two silent black rectangles.
+   ONE attribute, #camgate[data-cam], drives this whole block. */
+
+.camgate {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  padding: 18px 16px;
+  margin-bottom: 12px;
+}
+.camgate-head { display: flex; align-items: center; gap: 12px; }
+.camgate-title { margin: 0; font-size: 20px; letter-spacing: .01em; font-weight: 700; }
+.camgate p { margin: 10px 0 0; color: var(--ink-dim); max-width: 72ch; font-size: 14px; }
+.camgate p b { color: var(--ink); }
+
+/* a lens, drawn in CSS because an icon font is an external origin */
+.camgate-eye {
+  width: 22px; height: 22px; flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--chrome-eye, var(--ink-dim));
+  box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 6px var(--chrome-eye, var(--ink-dim));
+}
+
+.camgate-act { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
+.camgate-reason { font: 11px/1.5 var(--mono); color: var(--ink-faint); word-break: break-word; }
+
+/* THE start control. Bright, solid, unmissable — and deliberately not green:
+   green in this app means a verified settlement, never "press me".
+   The selector is doubled up on purpose: .btn sets flex:1 further down this
+   file, and at equal specificity the later rule would stretch this button
+   across the whole gate. */
+.camgate-act .btn-start { flex: 0 0 auto; }
+.btn-start {
+  background: var(--white);
+  color: #0b0d11;
+  border: 1px solid var(--white);
+  font-size: 17px;
+  padding: 16px 26px;
+  letter-spacing: .12em;
+}
+.btn-start:hover { background: #ffffff; }
+.btn-start:active { transform: translateY(1px); }
+
+/* --- the six camera cases. Exactly one paragraph is ever visible. --- */
+.camcase { display: none; }
+#camgate[data-cam="REQUESTING"] .camcase[data-for="REQUESTING"],
+#camgate[data-cam="DENIED"]     .camcase[data-for="DENIED"],
+#camgate[data-cam="ABSENT"]     .camcase[data-for="ABSENT"],
+#camgate[data-cam="INSECURE"]   .camcase[data-for="INSECURE"],
+#camgate[data-cam="ERROR"]      .camcase[data-for="ERROR"] { display: block; }
+
+/* IDLE is also the fallback for a missing or unrecognised value, so the gate
+   can never render as an empty card with a button and no explanation. */
+#camgate:not([data-cam="REQUESTING"]):not([data-cam="LIVE"]):not([data-cam="DENIED"]):not([data-cam="ABSENT"]):not([data-cam="INSECURE"]):not([data-cam="ERROR"]) .camcase[data-for="IDLE"] { display: block; }
+
+/* a live camera needs no gate; the preview panes carry the truth from here */
+#camgate[data-cam="LIVE"] { display: none; }
+
+/* every failure is an abstention, so every failure is amber and loud */
+#camgate[data-cam="DENIED"], #camgate[data-cam="ABSENT"],
+#camgate[data-cam="INSECURE"], #camgate[data-cam="ERROR"] {
+  --chrome-eye: var(--amber);
+  border-color: var(--amber);
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--amber) 9%, transparent) 0 9px,
+      transparent 9px 18px),
+    var(--panel);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 40%, transparent);
+}
+#camgate[data-cam="DENIED"] .camgate-title,
+#camgate[data-cam="ABSENT"] .camgate-title,
+#camgate[data-cam="INSECURE"] .camgate-title,
+#camgate[data-cam="ERROR"] .camgate-title { color: var(--amber); }
+#camgate[data-cam="REQUESTING"] .camgate-eye { animation: breathe 1.4s ease-in-out infinite; }
+#camgate[data-cam="REQUESTING"] .btn-start { opacity: .55; }
+
+@keyframes breathe { 50% { opacity: .35; } }
+
+/* =============================================================== shell ====
+   Six capabilities, one visible at a time. Selection is a radio group and
+   plain CSS: it works before app.js parses and it cannot be broken by a
+   module that throws on load. */
+
+.shell { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: var(--gap); align-items: start; }
+
+/* min-width:0 is belt-and-braces, not a fix for a live bug: measured at a
+   500px viewport the page's scrollWidth already equals its clientWidth with
+   or without it, because the narrow rail sets overflow-x:auto and a grid
+   item's automatic minimum size only applies while overflow is visible.
+   It is kept so that removing that overflow declaration later cannot silently
+   let the six pills widen the column and push the page sideways. */
+.rail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rail-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.tabsel { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; pointer-events: none; }
+.rail-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.rail-text b { font-size: 13px; font-weight: 700; letter-spacing: .09em; }
+.rail-text i { font-style: normal; font-size: 10px; color: var(--ink-faint); letter-spacing: .04em; }
+
+.rail-item:has(.tabsel:checked) {
+  background: var(--panel-2);
+  border-color: color-mix(in srgb, var(--ink) 34%, var(--line));
+  box-shadow: inset 3px 0 0 var(--ink);
+}
+.rail-item:has(.tabsel:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* --- the status dot. Grey OFF, amber ABSTAIN, white OK. Never green. --- */
+.dot {
+  width: 10px; height: 10px; flex: none;
+  border-radius: 50%;
+  background: var(--dot);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot) 20%, transparent);
+}
+
+/* ONE attribute is the source of truth: #panel-X[data-status]. The rail dot
+   reads it from here, so a panel and its dot can never disagree. */
+.shell:has(#panel-core[data-status="ABSTAIN"])   #dot-core,
+.shell:has(#panel-mudra[data-status="ABSTAIN"])  #dot-mudra,
+.shell:has(#panel-peel[data-status="ABSTAIN"])   #dot-peel,
+.shell:has(#panel-chilla[data-status="ABSTAIN"]) #dot-chilla,
+.shell:has(#panel-saaf[data-status="ABSTAIN"])   #dot-saaf,
+.shell:has(#panel-ledger[data-status="ABSTAIN"]) #dot-ledger { --dot: var(--amber); }
+
+.shell:has(#panel-core[data-status="OK"])   #dot-core,
+.shell:has(#panel-mudra[data-status="OK"])  #dot-mudra,
+.shell:has(#panel-peel[data-status="OK"])   #dot-peel,
+.shell:has(#panel-chilla[data-status="OK"]) #dot-chilla,
+.shell:has(#panel-saaf[data-status="OK"])   #dot-saaf,
+.shell:has(#panel-ledger[data-status="OK"]) #dot-ledger { --dot: var(--white); }
+
+/* --- panels -------------------------------------------------------------- */
+.stage { min-width: 0; }
+.panel { display: none; min-width: 0; }
+.shell:has(#tabsel-core:checked)   #panel-core,
+.shell:has(#tabsel-mudra:checked)  #panel-mudra,
+.shell:has(#tabsel-peel:checked)   #panel-peel,
+.shell:has(#tabsel-chilla:checked) #panel-chilla,
+.shell:has(#tabsel-saaf:checked)   #panel-saaf,
+.shell:has(#tabsel-ledger:checked) #panel-ledger { display: block; }
+.panel[hidden] { display: none !important; }
+
+.panel-head { display: flex; align-items: flex-start; gap: var(--gap); margin-bottom: 10px; }
+.panel-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .12em; display: flex; flex-direction: column; gap: 3px; }
+.panel-sub { font-size: 12px; font-weight: 400; letter-spacing: .01em; color: var(--ink-dim); }
+
+/* the pill's text is generated from the same attribute as the dot */
+.panel-status {
+  margin-left: auto; flex: none;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .14em;
+  padding: 6px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--dot);
+  color: var(--dot);
+}
+.panel[data-status="OFF"]     .panel-status::after { content: "OFF"; }
+.panel[data-status="ABSTAIN"] .panel-status::after { content: "ABSTAIN"; }
+.panel[data-status="OK"]      .panel-status::after { content: "OK"; }
+.panel[data-status="ABSTAIN"] .panel-status { --dot: var(--amber); }
+.panel[data-status="OK"]      .panel-status { --dot: var(--white); }
+
+/* --- the abstention block, which every panel ships with -------------------
+   Same hatching as an amber line, because it is the same statement: this is
+   a thing the counter refused to guess. */
+.abstain {
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  color: var(--amber);
+  padding: 13px 14px;
+  margin-top: 12px;
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--amber) 13%, transparent) 0 7px,
+      transparent 7px 14px),
+    var(--panel);
+}
+.abstain-tag { font: 700 12px/1 var(--mono); letter-spacing: .2em; }
+.abstain p { margin: 9px 0 0; color: color-mix(in srgb, var(--amber) 55%, var(--ink)); font-size: 14px; max-width: 74ch; }
+.abstain-why {
+  display: inline-block; margin-top: 11px;
+  font: 11px/1.4 var(--mono);
+  color: var(--bg); background: var(--amber);
+  padding: 3px 7px; border-radius: 5px;
+}
+.abstain[hidden] { display: none; }
+
 /* ------------------------------------------- split preview -------------- */
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
 .pane { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.pane canvas { display: block; width: 100%; height: auto; background: #05070a; }
+/* Both panes are boxed to the SAME aspect. The raw feed is landscape (1280x960)
+   and the rectified crop is portrait (840x1188); left to themselves in a
+   1fr 1fr grid the crop renders about 1.9x taller than the feed, which pushes
+   the basket off screen and puts the two captions half a page apart.
+   object-fit letterboxes each buffer inside its box without distorting it —
+   a stretched preview of a metric crop would be a lie about the geometry. */
+.pane-stack { position: relative; aspect-ratio: 4 / 3; max-height: 46vh; }
+.pane canvas { display: block; width: 100%; height: 100%; object-fit: contain; background: #05070a; }
 .pane-rect { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
 .pane figcaption { font-size: 11px; color: var(--ink-dim); padding: 6px 8px; border-top: 1px solid var(--line); }
 .pane figcaption b { color: var(--ink); font-weight: 600; }
 /* the rectified pane says out loud what it is retaining */
 #rect[data-policy="nothing"] { opacity: .45; }
 
+/* A black rectangle must never stand there saying nothing. Until the gate
+   reports LIVE, both canvases are covered by a legend that names the reason
+   and points at the control that fixes it.
+
+   OPAQUE, not translucent, and that matters: app.js paints its own placeholder
+   text onto the raw canvas before the first frame, and a see-through shade
+   let the two legends overlap into something unreadable. Exactly one message
+   is visible at a time. This shade is only the safety net for the window
+   before a stream exists — the moment the gate reports LIVE it lifts and
+   whatever app.js draws on the canvas is what you see. */
+.pane-shade {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  text-align: center; padding: 10px;
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--amber) 8%, transparent) 0 8px,
+      transparent 8px 16px),
+    #05070a;
+  color: var(--amber);
+}
+.pane-shade b { font: 700 13px/1.2 var(--mono); letter-spacing: .1em; }
+.pane-shade span { font-size: 11px; color: color-mix(in srgb, var(--amber) 60%, var(--ink-dim)); }
+#camgate[data-cam="LIVE"] ~ .shell .pane-shade,
+#camgate[hidden] ~ .shell .pane-shade { display: none; }
+
 .lockdetail {
-  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 11px/1.5 var(--mono);
   color: var(--ink-dim);
   padding: 7px 2px 0;
 }
 
 /* ---------------------------------------------------- totals ------------ */
-.totals { display: flex; align-items: baseline; gap: var(--gap); margin: 12px 0 6px; flex-wrap: wrap; }
+.totals { display: flex; align-items: baseline; gap: var(--gap); margin: 14px 0 6px; flex-wrap: wrap; }
 .total-label { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-dim); }
 .total {
-  font: 700 44px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-variant-numeric: tabular-nums;
+  font: 700 44px/1 var(--mono);
   color: var(--chrome);
 }
 .chrome-grey .total, .chrome-white .total { color: var(--ink); }
@@ -119,7 +373,7 @@ html, body {
 }
 
 /* ---------------------------------------------------- lines ------------- */
-.lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lines { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .line {
   display: flex; align-items: center; gap: var(--gap);
   background: var(--panel);
@@ -131,7 +385,7 @@ html, body {
 }
 .line:active { transform: scale(.995); }
 .line-name { font-weight: 600; }
-.line-price { margin-left: auto; font: 600 15px/1 ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.line-price { margin-left: auto; font: 600 15px/1 var(--mono); }
 .line-committed { border-color: color-mix(in srgb, var(--green) 35%, var(--line)); }
 
 /* AMBER: hatched, and it says it is excluded. It never shows a price and it is
@@ -167,18 +421,42 @@ html, body {
 
 /* ---------------------------------------------------- footnotes --------- */
 .footnotes { display: flex; gap: var(--gap); margin-top: 12px; flex-wrap: wrap; }
-.reason, .cvstat { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-dim); }
+.reason, .cvstat { font: 11px/1.5 var(--mono); color: var(--ink-dim); }
 .cvstat { margin-left: auto; text-align: right; }
 .cvstat-ok { color: var(--green); }
 .cvstat-absent { color: var(--amber); }
 
 /* ---------------------------------------------------- narrow ------------ */
-@media (max-width: 560px) {
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .rail { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 4px; scrollbar-width: thin; }
+  .rail-item { flex: 0 0 auto; }
+  .rail-item:has(.tabsel:checked) { box-shadow: inset 0 -3px 0 var(--ink); }
+}
+@media (max-width: 620px) {
   .split { grid-template-columns: 1fr; }
   .total { font-size: 38px; }
   .amber-note { margin-left: 0; width: 100%; }
+  .rail-text i { display: none; }
+  .camgate-title { font-size: 18px; }
+  .btn-start { width: 100%; }
+  /* On a phone the six pills cannot fit one row, and a rail that scrolls
+     hides LEDGER behind a gesture nobody at a counter will discover. Wrap to
+     two rows instead: every capability stays on screen and reachable. */
+  .rail { flex-wrap: wrap; overflow-x: visible; }
+  .rail-item { flex: 1 0 auto; justify-content: center; padding: 9px 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chrome { transition: none; }
+  .camgate-eye { animation: none; }
+}
+
+/* A browser without :has() would show a rail that does nothing and a stage
+   that is blank. Blank is the one thing this app is not allowed to be, so it
+   degrades to every panel stacked and the rail hidden. */
+@supports not selector(:has(*)) {
+  .rail { display: none; }
+  .panel { display: block; margin-bottom: 18px; }
+  .panel[hidden] { display: none !important; }
 }
