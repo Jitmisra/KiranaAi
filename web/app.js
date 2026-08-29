@@ -2500,17 +2500,32 @@ function boot() {
   }
 
 
-  /** Route a capability message to whichever panel registered for it. */
+  /** The brain's own view of the session, for display beside ours. */
   let brainView = null;
 
+  /**
+   * Route a capability message to whichever panel registered for it.
+   *
+   * Goes through PANEL_REGISTRY.get(id) -- the registry registerPanel() writes
+   * to. The first version referenced a bare `registeredPanels` object that has
+   * never existed in this file, so EVERY brain message threw a ReferenceError
+   * inside ws.onmessage, several times a second, for as long as the socket was
+   * up. Nothing caught it: the throw was inside an event handler, so the UI
+   * carried on and only the console knew. Two lessons, both recorded rather
+   * than fixed silently -- never invent the name of a collaborator you have not
+   * read, and an unguarded throw in a socket handler is invisible from inside
+   * the app.
+   *
+   * A panel whose hook throws is named on screen rather than taking the socket
+   * handler down with it.
+   */
   function deliverToPanel(id, msg) {
-    const p = registeredPanels && registeredPanels[id];
-    if (p && typeof p.onState === 'function') {
-      try { p.onState(msg); }
-      catch (e) {
-        // A panel that throws must name itself rather than taking the app down.
-        els.reason.textContent = `panel ${id} failed: ${e && e.message}`;
-      }
+    const entry = PANEL_REGISTRY.get(id);
+    if (!entry || typeof entry.onState !== 'function') return;
+    try {
+      entry.onState(msg);
+    } catch (e) {
+      els.reason.textContent = `panel ${id} failed: ${(e && e.message) || e}`;
     }
   }
 
@@ -2530,10 +2545,15 @@ function boot() {
   function onBrainState(m) {
     brainView = m;
     deliverToPanel('ledger', { type: 'ledger', head: m.ledger_head, count: m.ledger_lines });
-    if (typeof m.total_paise === 'number' && typeof state.totalPaise === 'number'
-        && m.total_paise !== state.totalPaise) {
+    // Compare against OUR total, computed by the reducer from committed lines.
+    // `st` is the reducer state and totalPaise() derives the total from it --
+    // there is no `state.totalPaise` field, and referencing one is what threw
+    // ReferenceError here on the first attempt. Same class of mistake as
+    // `registeredPanels`: a name assumed rather than read.
+    const ours = totalPaise(st);
+    if (typeof m.total_paise === 'number' && m.total_paise !== ours) {
       els.reason.textContent =
-        `brain total ${m.total_paise}p disagrees with counter ${state.totalPaise}p`;
+        `brain total ${m.total_paise}p disagrees with counter ${ours}p`;
     }
   }
 

@@ -177,3 +177,34 @@ charge, under a failure I caused by accident.
   `GAWAAH_ALLOW_LIVE_KEYS=yes-i-mean-it`, so this build structurally cannot move
   real money. `reference_id` carries the kernel nonce, so Razorpay itself rejects a
   duplicate mint for one basket — exactly-once reaching the gateway.
+
+---
+
+## 2026-08-29 — Two bugs I wrote myself, both the same mistake
+
+While wiring the brain's panel messages into the client I referenced **two names
+that do not exist in the file**: `registeredPanels` (the registry is
+`PANEL_REGISTRY`, reached via `.get(id)`) and `state.totalPaise` (the reducer
+state is `st`, and the total is derived by `totalPaise(st)`).
+
+**Both threw inside `ws.onmessage`, several times a second, for as long as the
+socket was up — and the app carried on running.** An unguarded throw in an event
+handler does not stop the page; it only fills a console nobody was reading. The
+UI looked fine. The panels stayed empty. Nothing surfaced.
+
+Two lessons, recorded rather than quietly fixed:
+
+1. **Never invent the name of a collaborator you have not read.** Both errors
+   were me assuming an API shape instead of grepping for it. The registry took
+   90 seconds to find once I looked.
+2. **A throw inside a socket handler is invisible from inside the app.** The
+   fix is not only correct names but the try/catch now around every panel hook,
+   so a panel that throws is named on screen instead of vanishing into the
+   console.
+
+Neither was caught by 291 JS selftests, because the selftests exercise the pure
+reducer and the panel registry directly and never construct the browser shell's
+`onBrainMessage` closure. The gap is real and stated: **the socket handler has no
+test.** The honest reason it is still untested is that it needs a DOM and a live
+socket, and the shell was verified in a real browser instead — which is what
+found these.
