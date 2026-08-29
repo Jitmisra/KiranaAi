@@ -45,6 +45,13 @@ client -> server
     with a ``panel`` message and immediately REPLAYS that panel's last message,
     so a freshly-focused panel is never blank while it waits for a frame.
 
+``{"type": "sim", "action": "start|stop|pause|step|reset|status", "n": 1}``
+    Drive the ``--sim`` beat machine from the browser. Refused with
+    ``SIM_NOT_ENABLED`` on a server started without ``--sim``, which is the
+    honest answer: there is no synthetic source to run. ``step`` queues ``n``
+    frames and returns immediately; the frames themselves arrive as ordinary
+    ``state``/panel messages a moment later, each carrying ``simulated: true``.
+
 ``{"type": "refresh"}``
     Re-send the current ``state`` and ``ledger``.
 
@@ -67,7 +74,24 @@ server -> client
 ``{"type": "peel", "name", "ignited_fraction", "verdict", "ecc_ok", ...}``
 ``{"type": "chilla", "verdict", "amount_paise", "candidates", "reason"}``
 ``{"type": "saaf", "used", "rejected", "sharpness_gain", "warning"}``
-``{"type": "ledger", "head", "count"}``
+``{"type": "ledger", "head", "count", "verified", "verified_lines"}``
+``{"type": "sim", "mode", "beat", "index", "of", ...}``
+    The beat machine's status, on a ``--sim`` server only.
+
+    OPT-IN, and this is the one piece of the protocol that is negotiated. A
+    connection receives ``sim`` messages only AFTER it has sent one, and then
+    it receives them on every beat change and every mode change for as long as
+    it stays connected. A client that has never heard of the verb is never sent
+    one — ``web/app.js`` answers an unknown message type by printing "ignored
+    unknown brain message" on the shopkeeper's screen, and a bridge that makes
+    the shell shout at it several times a minute for a feature that client does
+    not use has broken it, whatever the docstring says.
+
+    Nothing is hidden by this. Every message already carries ``simulated`` and
+    the beat fields, so a passive client can render "what is happening and why"
+    without ever speaking the verb; ``GET /sim`` and ``GET /health`` answer the
+    full status to anyone who asks; and one ``{"type":"sim"}`` of any kind —
+    ``action: "status"`` is the polite one — turns the stream on.
 ``{"type": "refused", "reason", "detail", ...}``
     ``reason`` is one of ``REFUSAL_REASONS``, all upper case. A refusal is
     "your message was wrong"; it is never a verdict about the counter.
@@ -77,6 +101,18 @@ server -> client
 Every message also carries ``frame_index``, so a client can tell which frame a
 panel is talking about and never paint a MUDRA reading beside a basket from a
 different frame.
+
+SIMULATION IS LABELLED, ON EVERY MESSAGE
+========================================
+When a ``SimDriver`` is attached, EVERY outbound message — state, panels,
+ledger, refusals, replays — carries ``simulated: true`` plus the beat fields
+``beat``, ``beat_label``, ``beat_detail``, ``beat_index``, ``beat_of`` and
+``sim_frame``. The stamp is applied in ``_stamp()``, which runs on the way OUT
+and on the way INTO the replay cache, so a panel replayed by ``select_panel``
+ten minutes later is still labelled as the synthetic reading it was.
+
+There is no way to run the sim and not be told. That is deliberate: a demo that
+looks like a real counter and is not one is worse than no demo.
 
 EVERY panel message carries ``ok`` and ``reason``. ``ok: false`` is the panel's
 "I do not know", and ``reason`` names why (INVARIANT 7). A panel that has never
@@ -198,6 +234,11 @@ __all__ = [
     "BrainServer",
     "create_app",
     "SimScript",
+    "SimDriver",
+    "SIM_MODES",
+    "SIM_ACTIONS",
+    "SIM_BEATS",
+    "load_sim_source",
     "build_sim_server",
     "main",
 ]
@@ -220,6 +261,22 @@ MAX_FRAME_B64 = 8 * 1024 * 1024
 
 PANELS: tuple[str, ...] = ("basket", "mudra", "peel", "chilla", "saaf", "ledger")
 
+#: The client calls the billing panel "core"; this module has always called it
+#: "basket". Neither name is wrong, but a select_panel tap naming the other
+#: side's word was answered with a visible "brain refused: UNKNOWN_PANEL", so
+#: the two halves could not agree on which tab was open. Accept BOTH rather
+#: than renaming either: the client's PANEL_IDS is load-bearing for its CSS
+#: router and its selftests, and this file's "basket" is in its own tests.
+PANEL_ALIASES: dict[str, str] = {"core": "basket", "basket": "core"}
+
+
+def canonical_panel(name: str) -> str | None:
+    """Resolve a panel id from either vocabulary, or None if it is neither."""
+    if name in PANELS:
+        return name
+    alias = PANEL_ALIASES.get(name)
+    return alias if alias in PANELS else None
+
 #: Every message type a client may send. Published so a refusal can tell the
 #: client what it COULD have said, and so the tests can drive all of them.
 CLIENT_VERBS: tuple[str, ...] = (
@@ -230,6 +287,7 @@ CLIENT_VERBS: tuple[str, ...] = (
     "enrol_sticker",
     "select_panel",
     "refresh",
+    "sim",
 )
 
 #: Key names that must never appear anywhere in an outbound message. Checked by
@@ -271,6 +329,11 @@ R_UNKNOWN_ITEM = "UNKNOWN_ITEM"
 R_BAD_ARGUMENT = "BAD_ARGUMENT"
 R_BRAIN_REFUSED = "BRAIN_REFUSED"
 R_OUTBOUND_REDACTED = "OUTBOUND_REDACTED"
+R_SIM_NOT_ENABLED = "SIM_NOT_ENABLED"
+#: A simulated frame moved the session into PAID. This must be impossible —
+#: only ``Session.on_webhook`` opens that door — so if it ever fires the sim is
+#: STOPPED and the counter says so rather than showing a green nobody paid for.
+R_SIM_GREEN_REFUSED = "SIM_GREEN_REFUSED"
 
 REFUSAL_REASONS: tuple[str, ...] = (
     R_NOT_A_MESSAGE,
@@ -285,6 +348,8 @@ REFUSAL_REASONS: tuple[str, ...] = (
     R_BAD_ARGUMENT,
     R_BRAIN_REFUSED,
     R_OUTBOUND_REDACTED,
+    R_SIM_NOT_ENABLED,
+    R_SIM_GREEN_REFUSED,
 )
 
 #: Panel abstentions. Distinct from refusals: a refusal is "your message was
@@ -309,6 +374,73 @@ ABSTENTIONS: tuple[str, ...] = (
     A_ENROLMENT_REFUSED,
 )
 
+# -- the sim beat machine ----------------------------------------------------
+
+#: What the driver is doing. Published so a UI can render a transport bar
+#: without inventing state names.
+SIM_STOPPED = "STOPPED"   # attached, at frame 0, waiting for a client or a start
+SIM_RUNNING = "RUNNING"   # emitting a frame every period_s
+SIM_PAUSED = "PAUSED"     # holding; only `step` advances it
+SIM_HOLDING = "HOLDING"   # the script finished; the board is the final board
+SIM_FAULTED = "FAULTED"   # something the sim must never do, happened
+
+SIM_MODES: tuple[str, ...] = (
+    SIM_STOPPED, SIM_RUNNING, SIM_PAUSED, SIM_HOLDING, SIM_FAULTED,
+)
+
+#: Every verb accepted by ``POST /sim/<action>`` and by
+#: ``{"type": "sim", "action": ...}``. One list, two front doors.
+SIM_ACTIONS: tuple[str, ...] = ("start", "stop", "pause", "step", "reset", "status")
+
+#: What each beat of the script is FOR, in the operator's language. The label
+#: is the headline; the detail is why the numbers on screen look like that.
+#: Emitted on every message so a paused UI can explain the frame it is holding.
+SIM_BEATS: dict[str, tuple[str, str]] = {
+    "settle": (
+        "bare mat — taking the reference",
+        "frame 0 becomes the empty-mat reference for MUDRA, CHILLA and the "
+        "placement detector. Every panel abstains here, and those abstentions "
+        "are the honest answer, not a failure.",
+    ),
+    "goods": (
+        "a packet is placed, then crosses the sell line",
+        "the placement detector needs motionless frames before it calls a blob "
+        "stable; only a stable placement is identified and priced. Then it "
+        "walks past the exit line and the basket line commits, in integer paise.",
+    ),
+    "screen": (
+        "DONE, the link is paid, CHILLA corroborates",
+        "a signature-verified webhook from the gateway is what moved the "
+        "session — CHILLA finding the customer's screen and MATCHING it is "
+        "still AMBER, because corroboration is not settlement.",
+    ),
+    "hand": (
+        "a hand enters — MUDRA reads it as an occluder",
+        "no model and no skin detector: solidity, convexity defects and "
+        "compactness of an occluder over a known plane.",
+    ),
+    "tamper": (
+        "the sticker is substituted — PEEL lights up",
+        "part of the printed sticker is replaced with different modules. PEEL's "
+        "ignited fraction crosses its gate and the verdict turns TAMPERED.",
+    ),
+    "hold": (
+        "the script is finished — this is the final board",
+        "nothing further is being pushed. Reset the sim to play it again on a "
+        "fresh session, or point a camera at a printed mat for the real thing.",
+    ),
+}
+
+#: How many messages may queue for one slow browser before the pump stops
+#: producing. Backpressure, not a buffer: the original per-socket pump awaited
+#: each send and so could never run away, and losing that property to a fan-out
+#: queue would let a paused tab eat the process.
+SIM_QUEUE_HIGH = 240
+
+#: The absolute cap. Past this a subscriber is dropping messages and is TOLD
+#: so, via ``dropped`` in the sim status — a silently lossy demo is a lie.
+SIM_QUEUE_MAX = 4000
+
 #: The sticker ROI on the mat, (x_mm, y_mm, w_mm, h_mm). 70 mm square lands at
 #: 198 px on this buffer, comfortably over ident_sticker.MIN_CROP_PX (64) with
 #: room for the ECC border erosion. Placed top-left, clear of the exit line and
@@ -320,6 +452,12 @@ DEFAULT_STICKER_ROI_MM: tuple[float, float, float, float] = (30.0, 40.0, 70.0, 7
 #: deque is bounded so a server left running for an hour does not hold an hour
 #: of crops.
 BURST_LEN = 10
+
+#: Above this many ledger lines the per-frame chain verification is SKIPPED and
+#: reported as unknown. 20 000 lines re-hash in well under a frame period; an
+#: unbounded file would not, and a demo that stalls on its own audit trail is
+#: the wrong trade.
+LEDGER_VERIFY_MAX_LINES = 20000
 
 #: SAAF runs at scale=1 for enrolment, deliberately. StickerRegistry._compare
 #: resizes the FRESH crop to the reference's shape, so a 2x super-resolved
@@ -630,6 +768,13 @@ class BrainServer:
         self.web_dir = Path(web_dir) if web_dir is not None else None
         self.plane = plane
         self.sim = sim
+        #: Installed by ``create_app``/``build_sim_server`` when a script is
+        #: attached. None on a real-camera server, and every ``--sim``-only code
+        #: path below is guarded on that — the camera path is unchanged.
+        self.sim_driver: Optional["SimDriver"] = None
+        #: The beat stamp applied to EVERY outbound message while a sim is
+        #: attached. See "SIMULATION IS LABELLED" in the module docstring.
+        self._sim_tag: Optional[dict[str, Any]] = None
         self._lock = RLock()
 
         self._sticker_dir = Path(
@@ -662,6 +807,15 @@ class BrainServer:
         self.refusals: dict[str, int] = {r: 0 for r in REFUSAL_REASONS}
         self.leaks_blocked = 0
         self._last: dict[str, PanelMessage] = {}
+
+        # -- the LEDGER panel's verification cache. Keyed on (count, head) so a
+        # -- frame that appended nothing reuses the last answer and a frame that
+        # -- appended re-reads the file. Never a bare "we checked once".
+        self._verified: Optional[bool] = None
+        self._verified_lines = 0
+        self._verified_reason = ""
+        self._verified_count = -1
+        self._verified_head = ""
 
     # -- housekeeping ------------------------------------------------------
 
@@ -714,7 +868,28 @@ class BrainServer:
 
     def _stamp(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg.setdefault("frame_index", int(self.brain.frame_index))
+        tag = self._sim_tag
+        if tag is not None:
+            # setdefault, never overwrite: a message that already knows its own
+            # beat (a replay stored three beats ago) keeps the beat it was
+            # measured on. Relabelling it with "now" would attribute a MUDRA
+            # reading taken during `hand` to whatever is on screen at replay
+            # time — the same class of lie `frame_index` exists to prevent.
+            for k, v in tag.items():
+                msg.setdefault(k, v)
         return msg
+
+    def set_sim_tag(self, tag: Optional[Mapping[str, Any]]) -> None:
+        """Label everything that leaves from now on as simulated.
+
+        Called by ``SimDriver`` before it pushes a frame, and left in place
+        afterwards. It is NOT cleared between frames on purpose: while a sim is
+        attached the whole board is synthetic — a ``refresh``, a ``select_panel``
+        replay and a ``done`` typed by a curious operator are all reporting a
+        counter built out of synthetic pixels, and each of them must say so.
+        """
+        with self._lock:
+            self._sim_tag = None if tag is None else dict(tag)
 
     # -- the outbound filter ----------------------------------------------
 
@@ -784,6 +959,7 @@ class BrainServer:
             "enroll_sticker": self._on_enrol_sticker,  # the other spelling
             "select_panel": self._on_select_panel,
             "refresh": self._on_refresh,
+            "sim": self._on_sim,
         }.get(kind)
         if handler is None:
             return [
@@ -1075,11 +1251,76 @@ class BrainServer:
         }
 
     def _ledger_msg(self, state: BrainState) -> dict[str, Any]:
+        """The audit head, the line count, and whether the chain still verifies.
+
+        ``verified`` is the LEDGER panel's whole reason to exist and it is
+        recomputed by re-reading the file and re-hashing it, not remembered.
+        It is skipped (left ``None``, and ``verified_reason`` says why) once the
+        file is longer than ``LEDGER_VERIFY_MAX_LINES``, because re-hashing a
+        growing file on every frame would turn an audit trail into a stall. A
+        skipped verification is reported as unknown, never as ``true``.
+        """
+        # `head`/`count` stay the BRAIN's view of the chain as of the frame it
+        # just measured. `chain_*` is what a re-read of the file says right
+        # now. They can legitimately differ by a line or two — this server
+        # appends `reference_seeded` and `sticker_enrolled` lines of its own,
+        # AFTER the brain has snapshotted its state for the same frame — and
+        # reporting both is how a reader can see that rather than guess at it.
+        head = state.ledger_head
+        count = int(state.ledger_lines)
+        ledger = self.brain.ledger
+        live_head = str(getattr(ledger, "head", "") or "")
+        live_count = int(getattr(ledger, "count", count) or 0)
+        verified: Optional[bool] = None
+        verified_reason = ""
+        verified_lines = 0
+        if live_count > LEDGER_VERIFY_MAX_LINES:
+            verified_reason = (
+                f"{live_count} lines is over the {LEDGER_VERIFY_MAX_LINES}-line "
+                f"per-frame verification budget; verify it out of band with "
+                f"gawaah.ledger.verify"
+            )
+        elif live_count != self._verified_count or live_head != self._verified_head:
+            try:
+                from gawaah.ledger import verify as _verify
+
+                ok, lines, chain_head, err = _verify(ledger.path)
+                verified = bool(ok)
+                verified_lines = int(lines)
+                verified_reason = str(err or "")
+                if ok and live_head and chain_head != live_head:
+                    # The file hash-chains cleanly but does not end where the
+                    # writer thinks it wrote. Two writers on one file, or a
+                    # truncated read. Either way this is NOT a verified board
+                    # and must not claim to be one.
+                    verified = False
+                    verified_reason = (
+                        f"the chain verifies to {chain_head[:12]} but the "
+                        f"writer's head is {live_head[:12]}"
+                    )
+            except Exception as exc:  # a broken audit read must not kill a frame
+                verified = None
+                verified_reason = f"{type(exc).__name__}: {exc}"
+            self._verified = verified
+            self._verified_lines = verified_lines
+            self._verified_reason = verified_reason
+            self._verified_count = live_count
+            self._verified_head = live_head
+        else:
+            verified = self._verified
+            verified_lines = self._verified_lines
+            verified_reason = self._verified_reason
         return {
             "type": "ledger",
             "ok": True,
-            "head": state.ledger_head,
-            "count": int(state.ledger_lines),
+            "head": head,
+            "head_short": (head or "")[:12],
+            "count": count,
+            "chain_head": live_head,
+            "chain_lines": live_count,
+            "verified": verified,
+            "verified_lines": int(verified_lines),
+            "verified_reason": verified_reason,
             "reason": "chained",
         }
 
@@ -1270,16 +1511,81 @@ class BrainServer:
         )
         return out
 
-    def _on_select_panel(self, msg: Mapping[str, Any]) -> list[dict[str, Any]]:
-        pid = msg.get("id")
-        if not isinstance(pid, str) or pid not in PANELS:
+    # -- the sim transport --------------------------------------------------
+
+    def sim_status(self) -> dict[str, Any]:
+        """The beat machine's status as a wire message. Always answerable."""
+        d = self.sim_driver
+        if d is None:
+            return {
+                "type": "sim",
+                "ok": False,
+                "enabled": False,
+                "mode": None,
+                "reason": R_SIM_NOT_ENABLED,
+                "detail": (
+                    "this server was started without --sim, so there is no "
+                    "synthetic source to drive. Point a camera at a printed "
+                    "TAKHTI, or restart with --sim."
+                ),
+                "actions": list(SIM_ACTIONS),
+            }
+        return d.status_msg()
+
+    def _on_sim(self, msg: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """``{"type":"sim","action":...}``. Pause on a beat, step, read numbers.
+
+        Deliberately does NOT push frames itself. ``step`` queues work for the
+        one pump that owns the script, so a step typed in the browser and a
+        step curled at ``POST /sim/step`` take the identical path and cannot
+        interleave two frames into the same brain.
+        """
+        action = msg.get("action", "status")
+        if not isinstance(action, str) or action not in SIM_ACTIONS:
             return [
                 self._refuse(
-                    R_UNKNOWN_PANEL, f"no panel {pid!r}", known=list(PANELS)
+                    R_BAD_ARGUMENT,
+                    f"sim needs an `action` in {list(SIM_ACTIONS)}, got {action!r}",
+                    actions=list(SIM_ACTIONS),
                 )
             ]
+        driver = self.sim_driver
+        if driver is None:
+            return [
+                self._refuse(
+                    R_SIM_NOT_ENABLED,
+                    "no synthetic source is attached; start the server with --sim",
+                    actions=list(SIM_ACTIONS),
+                )
+            ]
+        n = msg.get("n", 1)
+        try:
+            count = max(1, min(1000, int(n)))
+        except (TypeError, ValueError):
+            return [self._refuse(R_BAD_ARGUMENT, f"sim `n` must be an integer, got {n!r}")]
+        return [driver.command(action, n=count)]
+
+    def _on_select_panel(self, msg: Mapping[str, Any]) -> list[dict[str, Any]]:
+        raw = msg.get("id")
+        # Accept the client's vocabulary as well as ours. The client names the
+        # billing panel "core" and this module names it "basket"; a tap on that
+        # tab used to come back as a visible "brain refused: UNKNOWN_PANEL".
+        pid = canonical_panel(raw) if isinstance(raw, str) else None
+        if pid is None:
+            return [
+                # `known` stays the CANONICAL set. Aliases are an input
+                # convenience, not part of the published vocabulary -- putting
+                # them here made the refusal message list 'basket' twice and
+                # broke test_an_unknown_panel_is_refused, which was right to
+                # object.
+                self._refuse(R_UNKNOWN_PANEL, f"no panel {raw!r}", known=list(PANELS))
+            ]
         self._selected = pid
-        out: list[dict[str, Any]] = [{"type": "panel", "id": pid, "known": list(PANELS)}]
+        # Echo back the id the CLIENT used, so its router matches on its own
+        # word; `known` carries both vocabularies so either side can check.
+        out: list[dict[str, Any]] = [
+            {"type": "panel", "id": raw, "canonical": pid, "known": list(PANELS)}
+        ]
         replay = self.last(pid)
         if replay is not None:
             out.append(replay)
@@ -1320,6 +1626,12 @@ class BrainServer:
                         "detail": "no frame has reached this panel yet",
                     }
                 )
+            # NO `sim` status here, deliberately. It is opt-in (see the module
+            # docstring): a client that has not asked for the transport is
+            # never sent one, because the shell answers an unknown type by
+            # printing an error at the shopkeeper. The six messages above
+            # already carry `simulated: true` and the beat, so a client that
+            # never speaks the verb still knows what it is looking at.
         return [self.safe(self._stamp(m)) for m in out]
 
     def health(self) -> dict[str, Any]:
@@ -1337,10 +1649,56 @@ class BrainServer:
                 "ledger_head": state.ledger_head,
                 "rect_shape": [RECT_SHAPE[0], RECT_SHAPE[1]],
                 "sim": self.sim is not None,
+                "sim_status": self.sim_status(),
+                "simulated": self._sim_tag is not None,
                 "panels": list(PANELS),
                 "selected_panel": self._selected,
                 "sticker_enrolled": self._peel_name,
             }
+
+    # -- sim reset support -------------------------------------------------
+
+    def rebind_brain(
+        self, brain: Brain, *, sticker_dir: Optional[Path] = None
+    ) -> None:
+        """Swap in a fresh ``Brain`` and forget everything measured against the
+        old one. ``--sim`` REPLAY ONLY; there is no camera path to this.
+
+        The point of a replay is a genuinely fresh session — new session id,
+        new ledger file, new sqlite kernel, an intent nobody has paid. Keeping
+        the old MUDRA reference or the old sticker enrolment across that would
+        show the second run measurements taken against the first run's pixels,
+        which is exactly the kind of quiet carry-over invariant 7 exists to
+        stop. So everything derived from frames is dropped, loudly:
+        ``_last`` is cleared, so a panel replay after a reset abstains with
+        ``never_run`` instead of replaying the previous run's verdict.
+        """
+        with self._lock:
+            old = self.brain
+            self.brain = brain
+            self.gesture = None
+            self.screens = _chilla.ScreenFinder()
+            self._burst = []
+            self._peel_name = None
+            self._last = {}
+            self.frames_accepted = 0
+            self._verified = None
+            self._verified_lines = 0
+            self._verified_reason = ""
+            self._verified_count = -1
+            self._verified_head = ""
+            if sticker_dir is not None:
+                self._sticker_dir = Path(sticker_dir)
+                self.registry = _peel.StickerRegistry(self._sticker_dir)
+            self.mirror = _chilla.Mirror()
+            self.matcher = _chilla.LedgerMatcher(
+                self.mirror, self.matcher.window_seconds,
+                stale_threshold_s=self.matcher.stale_threshold_s,
+            )
+        try:
+            old.close()
+        except Exception:  # pragma: no cover - closing a spent brain
+            log.exception("closing the previous brain failed")
 
     def close(self) -> None:
         self.brain.close()
@@ -1350,16 +1708,54 @@ class BrainServer:
 
 
 def create_app(server: BrainServer, *, keepalive_s: float = 25.0) -> Any:
-    """Mount ``server`` as one WebSocket, two GETs, and the static ``web/``.
+    """Mount ``server`` as one WebSocket, the sim transport, and static ``web/``.
 
     The WebSocket is registered at BOTH ``/ws`` and ``/`` — see the module
     docstring. The static mount goes on last: a Starlette ``WebSocketRoute``
     only matches scope type ``"websocket"``, so an HTTP GET for ``/`` still
     falls through to ``index.html`` while ``ws://host/`` still upgrades.
-    """
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-    app = FastAPI(title="GAWAAH bridge", version="1")
+    THE SIM PUMP LIVES ON THE APP, NOT ON THE SOCKET
+    ------------------------------------------------
+    It used to be started per-connection: ``asyncio.ensure_future(_sim_pump(
+    server, socket))`` inside the WebSocket handler. That is the bug this file
+    was opened to fix, and it had two halves.
+
+    First, N browsers meant N pumps sharing ONE script, each calling
+    ``next_frame()`` — so two tabs advanced the story at double speed and each
+    saw half the frames, interleaved into the same brain.
+
+    Second, and worse: the script advanced whether or not anybody was watching,
+    and never rewound. Opening the page, closing it, and opening it again left
+    the script forty beats past the sale. The observed symptom on a server that
+    had been up for a while was ``frames_accepted: 6953`` against a 72-frame
+    script — a browser connecting to it saw the final tamper frame repeated
+    forever and never the story. Every panel had run; none of them had anything
+    to say. That is what "the panels sit on an abstention forever" looked like
+    from this side.
+
+    Now there is ONE ``SimDriver`` for the process. It starts on app startup,
+    holds at frame 0 until the first client subscribes, fans the same messages
+    out to every subscriber, and STOPS at the end of the script instead of
+    grinding out the last frame for ever.
+    """
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi.responses import JSONResponse
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        driver = server.sim_driver
+        if driver is not None:
+            driver.attach_loop()
+        try:
+            yield
+        finally:
+            if driver is not None:
+                await driver.shutdown()
+
+    app = FastAPI(title="GAWAAH bridge", version="1", lifespan=lifespan)
     app.state.server = server
 
     @app.get("/health")
@@ -1370,13 +1766,60 @@ def create_app(server: BrainServer, *, keepalive_s: float = 25.0) -> Any:
     def state() -> dict[str, Any]:
         return server.safe(server.brain.state().to_dict())
 
+    # -- the sim transport. Absent-but-answering on a non-sim server: a 409
+    # -- that names SIM_NOT_ENABLED is a better answer than a 404 that leaves
+    # -- the operator wondering whether they typed the path wrong.
+    async def _sim_command(action: str, n: int, fresh: bool) -> Any:
+        driver = server.sim_driver
+        if driver is None:
+            return JSONResponse(server.safe(server.sim_status()), status_code=409)
+        if action == "step":
+            return server.safe(await driver.step_and_wait(n))
+        return server.safe(driver.command(action, n=n, fresh=fresh))
+
+    @app.get("/sim")
+    async def sim_status() -> Any:
+        return await _sim_command("status", 1, False)
+
+    @app.post("/sim/start")
+    async def sim_start() -> Any:
+        return await _sim_command("start", 1, False)
+
+    @app.post("/sim/stop")
+    async def sim_stop() -> Any:
+        return await _sim_command("stop", 1, False)
+
+    @app.post("/sim/pause")
+    async def sim_pause() -> Any:
+        return await _sim_command("pause", 1, False)
+
+    @app.post("/sim/step")
+    async def sim_step(n: int = 1) -> Any:
+        return await _sim_command("step", n, False)
+
+    @app.post("/sim/reset")
+    async def sim_reset(fresh: bool = True) -> Any:
+        return await _sim_command("reset", 1, fresh)
+
     async def ws(socket) -> None:
         await socket.accept()
+        send_lock = asyncio.Lock()
+
+        async def send(msg: dict[str, Any]) -> None:
+            # One lock, because the sim writer task and the request loop both
+            # send on this socket and interleaved frames are a corrupt stream.
+            async with send_lock:
+                await socket.send_json(msg)
+
         for msg in server.hello():
-            await socket.send_json(msg)
-        pump: Optional[asyncio.Task] = None
-        if server.sim is not None:
-            pump = asyncio.ensure_future(_sim_pump(server, socket))
+            await send(msg)
+
+        driver = server.sim_driver
+        sub: Optional[SimSubscriber] = None
+        writer: Optional[asyncio.Task] = None
+        if driver is not None:
+            sub = driver.subscribe()
+            writer = asyncio.ensure_future(_sim_writer(sub.queue, send))
         try:
             while True:
                 try:
@@ -1384,15 +1827,24 @@ def create_app(server: BrainServer, *, keepalive_s: float = 25.0) -> Any:
                         socket.receive_text(), timeout=keepalive_s
                     )
                 except (asyncio.TimeoutError, TimeoutError):
-                    await socket.send_json({"type": "keepalive"})
+                    await send({"type": "keepalive"})
                     continue
                 for msg in server.handle(raw):
-                    await socket.send_json(msg)
+                    await send(msg)
+                # This client just spoke the transport verb, so it can be sent
+                # transport messages from now on. Checked on the RAW text and
+                # not on the reply, because a refused sim message is still a
+                # client that knows what one is.
+                if driver is not None and sub is not None and not sub.wants_sim:
+                    if _is_sim_message(raw):
+                        driver.send_status_to(sub)
         except WebSocketDisconnect:
             pass
         finally:
-            if pump is not None:
-                pump.cancel()
+            if writer is not None:
+                writer.cancel()
+            if driver is not None and sub is not None:
+                driver.unsubscribe(sub)
 
     # PEP 563 turns inline annotations into strings that FastAPI resolves
     # against MODULE globals; `WebSocket` is imported inside this function, so
@@ -1412,25 +1864,628 @@ def create_app(server: BrainServer, *, keepalive_s: float = 25.0) -> Any:
     return app
 
 
-async def _sim_pump(server: BrainServer, socket: Any) -> None:
-    """Drive synthetic frames into a connected client. ``--sim`` only."""
-    sim = server.sim
-    assert sim is not None
+def _is_sim_message(raw: Any) -> bool:
+    """Did the client just speak the transport verb? Never raises."""
+    try:
+        if isinstance(raw, (str, bytes, bytearray)):
+            raw = json.loads(raw)
+        return isinstance(raw, Mapping) and raw.get("type") == "sim"
+    except Exception:
+        return False
+
+
+async def _sim_writer(queue: "asyncio.Queue", send: Callable[[dict], Any]) -> None:
+    """Drain one subscriber's queue onto one socket. ``--sim`` only."""
     try:
         while True:
-            frame = sim.next_frame()
-            for msg in server.handle(
-                {"type": "frame", "rect": encode_rect(frame), "ts": server.clock.now_iso()}
-            ):
-                await socket.send_json(msg)
-            for msg in sim.drain_commands():
-                for reply in server.handle(msg):
-                    await socket.send_json(reply)
-            await asyncio.sleep(sim.period_s)
+            msg = await queue.get()
+            await send(msg)
     except asyncio.CancelledError:  # pragma: no cover - shutdown path
         raise
-    except Exception:  # pragma: no cover - the sim must never kill the socket
-        log.exception("sim pump stopped")
+    except Exception:  # pragma: no cover - a dead socket must not kill the pump
+        log.debug("sim writer stopped", exc_info=True)
+
+
+# ============================================================ the beat machine
+
+
+class SimSubscriber:
+    """One connected client's outbound queue, plus what it has opted into.
+
+    ``wants_sim`` starts False and flips the first time that client sends a
+    ``{"type": "sim"}`` message. See the module docstring: the transport
+    stream is negotiated, because pushing an unknown message type at a shell
+    that reports unknown types on screen is a bug in this file, not in the
+    shell.
+    """
+
+    __slots__ = ("queue", "wants_sim")
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self.wants_sim = False
+
+
+class SimDriver:
+    """One pump, one script, one process. The thing ``--sim`` actually needs.
+
+    Owns the run state so that ``POST /sim/step``, ``{"type":"sim"}`` from the
+    browser and the periodic pump are three doors into ONE loop rather than
+    three writers racing the same brain.
+
+    WHAT IT GUARANTEES
+    ------------------
+    * Exactly one frame is ingested at a time, from one place.
+    * The script does not advance until somebody is watching, so the first
+      browser to connect sees beat 0 and not beat 40.
+    * Every message it produces is labelled ``simulated: true`` and carries the
+      beat it was measured on.
+    * A simulated FRAME can never move the session to PAID. If one ever does,
+      the driver FAULTS, stops, and says so on the wire — it does not carry on.
+    * When the script ends it HOLDS: no more frames, no growing ledger, and a
+      status message that says the board on screen is the final board.
+    """
+
+    def __init__(
+        self,
+        server: BrainServer,
+        source: Any,
+        *,
+        period_s: Optional[float] = None,
+        autostart: bool = True,
+        loop_script: bool = False,
+    ) -> None:
+        self.server = server
+        self.source = source
+        self.period_s = float(
+            period_s if period_s is not None else getattr(source, "period_s", 0.1) or 0.0
+        )
+        #: Start the story when the first client subscribes, rather than the
+        #: instant the process boots. This is the whole fix for "the demo was
+        #: already over by the time the browser loaded".
+        self.autostart = bool(autostart)
+        self.loop_script = bool(loop_script)
+
+        # STOPPED means "at beat 0, waiting for somebody to watch". PAUSED
+        # means "under manual control". A driver that will never auto-start has
+        # nothing to wait for, so it starts in the operator's hands.
+        self.mode = SIM_STOPPED if self.autostart else SIM_PAUSED
+        self.index = 0
+        self.frames_emitted = 0
+        self.runs = 1
+        self.pending_steps = 0
+        self.dropped = 0
+        self.fault: str = ""
+        self.beat: dict[str, Any] = self._beat_for(0)
+        #: Rebuilt rig factory, installed by ``build_sim_server``. Absent means
+        #: ``reset`` can only rewind the script, and says so.
+        self.rebuild: Optional[Callable[[], None]] = None
+
+        self._subs: set[asyncio.Queue] = set()
+        self._commands_fired: set[int] = set()
+        self._pump: Optional[asyncio.Task] = None
+        self._tick = 0
+
+        self.server.sim_driver = self
+        self.server.set_sim_tag(self._tag())
+
+    # -- the beat ----------------------------------------------------------
+
+    def _beat_for(self, i: int) -> dict[str, Any]:
+        total = int(getattr(self.source, "total_frames", 0) or 0)
+        label = detail = ""
+        if total and i >= total:
+            name, k, of = "hold", 0, 0
+        else:
+            beat = getattr(self.source, "beat_at", None)
+            got = beat(i) if callable(beat) else None
+            if isinstance(got, Mapping):
+                name = str(got.get("name", "?"))
+                k = int(got.get("index", 0))
+                of = int(got.get("of", 0))
+                label = str(got.get("label", "") or "")
+                detail = str(got.get("detail", "") or "")
+            elif got is not None:
+                # A ``(beat, index)`` pair. ``gawaah.sim_source`` returns its
+                # own ``SimBeat`` object here and defines ``__str__`` as the
+                # beat NAME precisely so this line reads correctly; its
+                # ``title``/``expects`` are the operator-facing copy and are
+                # preferred over this file's table when present, because the
+                # source knows what its own beat is for.
+                name, k = str(got[0]), int(got[1])
+                of = int(getattr(got[0], "frames", 0) or 0)
+                label = str(getattr(got[0], "title", "") or "")
+                detail = str(getattr(got[0], "expects", "") or "")
+            else:  # pragma: no cover - every source here has beat_at
+                name, k, of = "?", i, 0
+        fallback_label, fallback_detail = SIM_BEATS.get(name, (name, ""))
+        return {
+            "beat": name,
+            "beat_label": label or fallback_label,
+            "beat_detail": detail or fallback_detail,
+            "beat_index": k,
+            "beat_of": of,
+            "sim_frame": i,
+        }
+
+    def _tag(self) -> dict[str, Any]:
+        tag = {"simulated": True, "sim_run": self.runs}
+        tag.update(self.beat)
+        return tag
+
+    # -- status ------------------------------------------------------------
+
+    def status_msg(self) -> dict[str, Any]:
+        total = int(getattr(self.source, "total_frames", 0) or 0)
+        return {
+            "type": "sim",
+            "ok": self.mode != SIM_FAULTED,
+            "enabled": True,
+            "simulated": True,
+            "mode": self.mode,
+            "modes": list(SIM_MODES),
+            "actions": list(SIM_ACTIONS),
+            "source": type(self.source).__name__,
+            "index": int(self.index),
+            "of": total,
+            "run": int(self.runs),
+            "frames_emitted": int(self.frames_emitted),
+            "pending_steps": int(self.pending_steps),
+            "period_s": self.period_s,
+            "clients": len(self._subs),
+            "dropped": int(self.dropped),
+            "can_reset_fresh": self.rebuild is not None,
+            "fault": self.fault,
+            "reason": self.fault or self.mode,
+            "detail": self.beat.get("beat_detail", ""),
+            **self.beat,
+        }
+
+    # -- transport ---------------------------------------------------------
+
+    def command(self, action: str, *, n: int = 1, fresh: bool = True) -> dict[str, Any]:
+        """Apply one transport verb. Synchronous; never ingests a frame itself.
+
+        ``step`` QUEUES work rather than doing it, so that the pump remains the
+        only caller of ``emit_once`` and a step typed in the browser cannot
+        interleave a frame with the one the pump is already pushing.
+        """
+        if action == "status":
+            return self.status_msg()
+        if self.mode == SIM_FAULTED and action != "reset":
+            out = self.status_msg()
+            out["detail"] = (
+                f"the sim is faulted and will not run: {self.fault}. "
+                f"reset it to try again."
+            )
+            return out
+        if action == "start":
+            if self.mode == SIM_HOLDING:
+                out = self.status_msg()
+                out["detail"] = (
+                    "the script has finished; there is nothing left to start. "
+                    "reset to play it again."
+                )
+                return out
+            self.mode = SIM_RUNNING
+        elif action in ("stop", "pause"):
+            self.mode = SIM_PAUSED if self.mode != SIM_HOLDING else SIM_HOLDING
+            self.pending_steps = 0
+        elif action == "step":
+            if self.mode == SIM_HOLDING:
+                out = self.status_msg()
+                out["detail"] = "the script has finished; there is no next frame."
+                return out
+            self.mode = SIM_PAUSED
+            self.pending_steps += int(n)
+        elif action == "reset":
+            self._reset(fresh=fresh)
+        return self.status_msg()
+
+    def _reset(self, *, fresh: bool) -> None:
+        self.index = 0
+        self.pending_steps = 0
+        self.fault = ""
+        self._commands_fired.clear()
+        reset = getattr(self.source, "reset", None)
+        if callable(reset):
+            reset()
+        if fresh and self.rebuild is not None:
+            # A genuinely fresh counter: new session id, new ledger file, new
+            # kernel, an intent nobody has paid. Replaying a SETTLED sale onto
+            # the same brain would show a second customer paying with the first
+            # one's webhook, which is a fiction. Rebuilding is the honest replay.
+            self.runs += 1
+            self.rebuild()
+        self.beat = self._beat_for(0)
+        self.server.set_sim_tag(self._tag())
+        # Land in the state the operator asked for, not in whatever the last
+        # run happened to end in. Somebody is watching -> replay for them;
+        # nobody is watching but the sim autostarts -> wait for the first
+        # client so they get beat 0; started with --sim-paused -> stay paused,
+        # because an operator stepping frame by frame did not ask for a
+        # reset to take the controls away from them.
+        if self._subs:
+            self.mode = SIM_RUNNING
+        elif self.autostart:
+            self.mode = SIM_STOPPED
+        else:
+            self.mode = SIM_PAUSED
+
+    # -- subscribers -------------------------------------------------------
+
+    def subscribe(self) -> "SimSubscriber":
+        sub = SimSubscriber()
+        self._subs.add(sub)
+        if self.autostart and self.mode == SIM_STOPPED:
+            log.info("sim: first client attached — starting at beat 0")
+            self.mode = SIM_RUNNING
+        return sub
+
+    def unsubscribe(self, sub: "SimSubscriber") -> None:
+        self._subs.discard(sub)
+
+    def send_status_to(self, sub: "SimSubscriber") -> None:
+        """Turn the transport stream on for one connection and prime it."""
+        sub.wants_sim = True
+        sub.queue.put_nowait(self.server.safe(self.server._stamp(self.status_msg())))
+
+    def _publish(self, msgs: Sequence[dict[str, Any]]) -> None:
+        for sub in list(self._subs):
+            q = sub.queue
+            for m in msgs:
+                if m.get("type") == "sim" and not sub.wants_sim:
+                    continue  # this client never asked for the transport
+                if q.qsize() >= SIM_QUEUE_MAX:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:  # pragma: no cover - size checked
+                        pass
+                    self.dropped += 1
+                q.put_nowait(m)
+
+    def _backed_up(self) -> bool:
+        return any(s.queue.qsize() > SIM_QUEUE_HIGH for s in self._subs)
+
+    # -- the one place a synthetic frame enters the brain ------------------
+
+    def emit_once(self) -> list[dict[str, Any]]:
+        """Push exactly one scripted frame, and the taps that belong to it."""
+        i = self.index
+        total = int(getattr(self.source, "total_frames", 0) or 0)
+        if total and i >= total:
+            return self._hold()
+
+        was = self.beat.get("beat")
+        self.beat = self._beat_for(i)
+        self.server.set_sim_tag(self._tag())
+        # A transport bar that says RUNNING while the sim is paused, or names
+        # the beat before last, is a control surface lying about the thing it
+        # controls. One status message per beat CHANGE keeps it honest without
+        # sending 72 of them.
+        beat_changed = was != self.beat.get("beat")
+
+        before = self.server.brain.state()
+        try:
+            rect = self.source.frame(i)
+        except Exception as exc:
+            return self._fault(f"the sim source could not render frame {i}: {exc}")
+        try:
+            payload = encode_rect(rect)
+        except BridgeError as exc:
+            return self._fault(f"frame {i} is not a rectified buffer: {exc}")
+
+        msgs: list[dict[str, Any]] = []
+        if beat_changed:
+            msgs.append(self.server.safe(self.server._stamp(self.status_msg())))
+        msgs += self.server.handle(
+            {"type": "frame", "rect": payload, "ts": self.server.clock.now_iso()}
+        )
+
+        # ---- INVARIANT 2, enforced and not merely asserted in a docstring.
+        # A frame is pixels. Pixels do not settle money. The only door to PAID
+        # is Session.on_webhook and it is opened by a signature-verified
+        # delivery, which arrives out of band (see `on_pay` in
+        # build_sim_server) and never from here. If ingesting a synthetic frame
+        # ever moves the session into PAID or authorises money, that is a
+        # catastrophic regression somewhere downstream, and the correct
+        # response is to STOP THE SIM and say so — not to keep painting a green
+        # counter that nobody paid.
+        after = self.server.brain.state()
+        if after.money_authorised and not before.money_authorised:
+            return self._fault(
+                "a SIMULATED FRAME authorised money. Only a signature-verified "
+                "webhook may do that (invariant 2). The sim is stopped.",
+                reason=R_SIM_GREEN_REFUSED,
+            )
+
+        # Scripted taps: ENROL, DONE, and the customer's own payment. Fired at
+        # most once per index, so a step-then-run never pays the link twice.
+        if i not in self._commands_fired:
+            self._commands_fired.add(i)
+            commands = getattr(self.source, "commands_at", None)
+            if callable(commands):
+                try:
+                    taps = list(commands(i))
+                except Exception as exc:  # pragma: no cover - script is ours
+                    log.exception("sim taps failed at %d", i)
+                    taps = []
+                    msgs.append(
+                        self.server.safe(
+                            self.server._stamp(
+                                {
+                                    "type": "refused",
+                                    "reason": R_BRAIN_REFUSED,
+                                    "detail": f"sim tap at frame {i} failed: {exc}",
+                                }
+                            )
+                        )
+                    )
+                for cmd in taps:
+                    msgs += self.server.handle(cmd)
+
+        self.index = i + 1
+        self.frames_emitted += 1
+        if total and self.index >= total:
+            msgs += self._hold()
+        return msgs
+
+    def _hold(self) -> list[dict[str, Any]]:
+        if self.mode == SIM_HOLDING:
+            return []
+        if self.loop_script:
+            log.info("sim: script complete after %d frames — replaying fresh", self.index)
+            self._reset(fresh=True)
+            self.mode = SIM_RUNNING  # a loop that stopped itself is not a loop
+            return [self.server.safe(self.server._stamp(self.status_msg()))]
+        self.mode = SIM_HOLDING
+        self.beat = self._beat_for(int(getattr(self.source, "total_frames", 0) or 0))
+        self.server.set_sim_tag(self._tag())
+        log.info("sim: script complete; holding the final board")
+        out = self.status_msg()
+        out["detail"] = SIM_BEATS["hold"][1]
+        return [self.server.safe(self.server._stamp(out))]
+
+    def _fault(self, detail: str, *, reason: str = R_BRAIN_REFUSED) -> list[dict[str, Any]]:
+        self.mode = SIM_FAULTED
+        self.fault = detail
+        self.pending_steps = 0
+        log.error("sim FAULT: %s", detail)
+        return [
+            self.server.safe(
+                self.server._stamp(
+                    {"type": "refused", "reason": reason, "detail": detail}
+                )
+            ),
+            self.server.safe(self.server._stamp(self.status_msg())),
+        ]
+
+    # -- the pump ----------------------------------------------------------
+
+    def attach_loop(self) -> None:
+        """Start the single pump task. Called once, from the app's lifespan."""
+        if self._pump is None or self._pump.done():
+            self._pump = asyncio.ensure_future(self.run())
+
+    async def shutdown(self) -> None:
+        pump, self._pump = self._pump, None
+        if pump is not None:
+            pump.cancel()
+            try:
+                await pump
+            except (asyncio.CancelledError, Exception):  # pragma: no cover
+                pass
+
+    async def run(self) -> None:
+        idle = 0.02
+        seen_mode = self.mode
+        try:
+            while True:
+                # Broadcast a mode change whoever caused it — an HTTP curl, a
+                # second browser, or the driver faulting itself. Doing it here
+                # rather than inside `command()` means one code path, no
+                # duplicate status for the client that asked, and a transport
+                # bar in tab B that follows a pause typed in tab A.
+                if self.mode != seen_mode:
+                    seen_mode = self.mode
+                    self._publish([self.server.safe(self.server._stamp(self.status_msg()))])
+                did_work = False
+                if self.mode == SIM_RUNNING and not self._backed_up():
+                    self._publish(self.emit_once())
+                    did_work = True
+                elif self.pending_steps > 0 and self.mode in (SIM_PAUSED, SIM_STOPPED):
+                    self.pending_steps -= 1
+                    self._publish(self.emit_once())
+                    self._publish([self.server.safe(self.server._stamp(self.status_msg()))])
+                    did_work = True
+                await asyncio.sleep(self.period_s if did_work else idle)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            raise
+        except Exception as exc:  # pragma: no cover - the sim must not kill the app
+            log.exception("sim pump stopped")
+            self.mode = SIM_FAULTED
+            self.fault = f"{type(exc).__name__}: {exc}"
+
+    async def step_and_wait(self, n: int = 1, *, timeout_s: float = 10.0) -> dict[str, Any]:
+        """Queue ``n`` steps and wait for the pump to take them.
+
+        The HTTP caller wanted the NUMBERS, so it waits for the frame rather
+        than being told "queued" and having to poll. If the pump is not running
+        (no event loop yet, or a fault) this returns the status unchanged after
+        the timeout instead of hanging forever.
+        """
+        before = self.frames_emitted
+        status = self.command("step", n=n)
+        if self.mode in (SIM_HOLDING, SIM_FAULTED):
+            return status
+        deadline = max(0.05, timeout_s)
+        waited = 0.0
+        while self.frames_emitted < before + n and waited < deadline:
+            await asyncio.sleep(0.01)
+            waited += 0.01
+        out = self.status_msg()
+        if self.frames_emitted < before + n:
+            out["detail"] = (
+                f"only {self.frames_emitted - before} of {n} steps ran within "
+                f"{deadline:g}s; the pump may not be attached"
+            )
+        return out
+
+
+# ============================================ pulling frames from sim_source
+
+
+def load_sim_source(
+    *, roi_mm: tuple[float, float, float, float] = DEFAULT_STICKER_ROI_MM
+) -> tuple[Any, str]:
+    """Prefer ``gawaah.sim_source.SimSource``; fall back to ``SimScript``.
+
+    That module is written by somebody else and may not exist yet, may not
+    exist ever, and may not be finished when it does. So the import is lazy,
+    every plausible constructor signature is tried, and the object is PROVED to
+    produce a rectified 840x1188 buffer before it is trusted with the brain.
+    Anything else — ImportError, a constructor that raises, a frame of the
+    wrong shape — is logged by name and the built-in ``SimScript`` is used
+    instead, so this file's demo runs either way.
+
+    Returns ``(source, why)``, where ``why`` is the human sentence explaining
+    which one was chosen. It goes in the log and in the sim status.
+    """
+    import importlib
+
+    try:
+        mod = importlib.import_module("gawaah.sim_source")
+    except Exception as exc:
+        return SimScript(roi_mm=roi_mm), f"gawaah.sim_source not importable ({exc}); using SimScript"
+    cls = getattr(mod, "SimSource", None)
+    if cls is None:
+        return SimScript(roi_mm=roi_mm), "gawaah.sim_source has no SimSource; using SimScript"
+
+    # Our ROI first, so the crop this server takes and the sticker the source
+    # paints are the same 70 mm square. A source that refuses our ROI (it may
+    # be sitting on an ArUco marker in its layout) gets built with its own, and
+    # `build_sim_server` then adopts THAT roi for the crop — a server cropping
+    # one place while the sim paints another would compare a blank patch to a
+    # sticker and call it tampered, which is a lie with a plausible-looking
+    # number attached.
+    built = None
+    errors: list[str] = []
+    for kwargs in ({"sticker_roi_mm": roi_mm}, {"roi_mm": roi_mm}, {}):
+        try:
+            built = cls(**kwargs)
+            break
+        except Exception as exc:
+            errors.append(f"{list(kwargs) or 'no args'}: {exc}")
+    if built is None:
+        return (
+            SimScript(roi_mm=roi_mm),
+            f"SimSource would not construct ({'; '.join(errors)}); using SimScript",
+        )
+
+    adapter = SimSourceAdapter(built)
+    ok, why = adapter.prove()
+    if not ok:
+        return SimScript(roi_mm=roi_mm), f"SimSource rejected: {why}; using SimScript"
+    return adapter, f"using gawaah.sim_source.SimSource ({why})"
+
+
+class SimSourceAdapter:
+    """Give any reasonable frame source the shape ``SimDriver`` drives.
+
+    Duck-typed on purpose. The one thing that is NOT negotiable is the buffer:
+    ``prove()`` renders frame 0 and refuses the source outright unless it is
+    exactly the rectified crop, because a source that could hand the brain a
+    raw camera frame would walk straight through invariant 4's intent even
+    though ``decode_rect`` would still refuse it downstream.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.period_s = float(getattr(inner, "period_s", 0.1) or 0.0)
+        #: Where the source says it painted the sticker. `build_sim_server`
+        #: crops THERE rather than at its own default, so PEEL is always
+        #: comparing the thing the sim actually drew.
+        self.roi_mm = tuple(
+            float(v) for v in getattr(inner, "roi_mm", DEFAULT_STICKER_ROI_MM)
+        )
+        self._i = 0
+
+    def __getattr__(self, name: str) -> Any:
+        """See through to the wrapped source.
+
+        Without this, `build_sim_server`'s duck-typed probes for
+        `enrol_gallery` / `_paste_goods` hit the ADAPTER, miss the real
+        SimSource behind it, and ship an EMPTY gallery -- so every item lands
+        AMBER and the counter reads Rs.0.00 instead of the scripted total. The
+        abstention was correct; the reason for it was an integration bug.
+
+        Only called for attributes the adapter itself does not define, so it
+        cannot shadow `frames`, `prove` or `roi_mm`.
+        """
+        return getattr(self.__dict__["inner"], name)
+
+    # -- required surface --------------------------------------------------
+
+    @property
+    def total_frames(self) -> int:
+        for attr in ("total_frames", "n_frames", "frame_count", "__len__"):
+            v = getattr(self.inner, attr, None)
+            if v is None:
+                continue
+            try:
+                return int(v() if callable(v) else v)
+            except Exception:
+                continue
+        return 0
+
+    def frame(self, i: int) -> np.ndarray:
+        f = getattr(self.inner, "frame", None)
+        if callable(f):
+            return f(i)
+        nxt = getattr(self.inner, "next_frame", None)
+        if callable(nxt):  # sequential-only source: honour the requested index
+            while self._i <= i:
+                out = nxt()
+                self._i += 1
+            return out
+        raise BridgeError("sim source exposes neither frame(i) nor next_frame()")
+
+    def beat_at(self, i: int) -> dict[str, Any]:
+        for attr in ("beat_at", "phase_at"):
+            f = getattr(self.inner, attr, None)
+            if callable(f):
+                return f(i)
+        return {"name": "sim", "index": i, "of": self.total_frames}
+
+    def commands_at(self, i: int) -> list[dict[str, Any]]:
+        f = getattr(self.inner, "commands_at", None)
+        if callable(f):
+            return list(f(i))
+        return []
+
+    def reset(self) -> None:
+        self._i = 0
+        f = getattr(self.inner, "reset", None)
+        if callable(f):
+            f()
+
+    # -- the gate ----------------------------------------------------------
+
+    def prove(self) -> tuple[bool, str]:
+        if self.total_frames <= 0:
+            return False, "it reports no frames"
+        try:
+            f0 = self.frame(0)
+        except Exception as exc:
+            return False, f"frame(0) raised {type(exc).__name__}: {exc}"
+        if not isinstance(f0, np.ndarray):
+            return False, f"frame(0) returned {type(f0).__name__}, not an ndarray"
+        if tuple(f0.shape[:2]) != RECT_SHAPE:
+            return False, (
+                f"frame(0) is {f0.shape[:2]}, not the rectified {RECT_SHAPE}"
+            )
+        self.reset()
+        return True, f"{self.total_frames} frames of {BUF_W}x{BUF_H}"
 
 
 def encode_rect(rect: np.ndarray) -> str:
@@ -1750,6 +2805,24 @@ class SimScript:
 
     # -- the script --------------------------------------------------------
 
+    def beat_at(self, i: int) -> dict[str, Any]:
+        """What beat frame ``i`` is, in the shape ``SimDriver`` publishes.
+
+        The label and the "why" come from ``SIM_BEATS``, so the sentence on
+        screen beside a paused frame is the same sentence this file uses to
+        explain the phase to a reader.
+        """
+        name, k = self.phase_at(i)
+        of = dict(self.PHASES).get(name, 0)
+        label, detail = SIM_BEATS.get(name, (name, ""))
+        return {
+            "name": name,
+            "index": int(k),
+            "of": int(of),
+            "label": label,
+            "detail": detail,
+        }
+
     def phase_at(self, i: int) -> tuple[str, int]:
         """(phase name, index within the phase) for absolute frame ``i``."""
         n = 0
@@ -1832,6 +2905,10 @@ def build_sim_server(
     web_dir: Optional[Path] = None,
     sim: Optional[SimScript] = None,
     with_sim: bool = True,
+    period_s: Optional[float] = None,
+    autostart: bool = True,
+    loop_script: bool = False,
+    prefer_sim_source: bool = False,
 ) -> BrainServer:
     """One fully wired counter with no camera and no network.
 
@@ -1860,15 +2937,18 @@ def build_sim_server(
     )
     work.mkdir(parents=True, exist_ok=True)
     clock = clock or VirtualClock("2026-08-29T09:00:00.000+00:00", step_ms=100)
-    script = sim if sim is not None else (SimScript() if with_sim else None)
+    source_why = ""
+    if sim is not None:
+        script: Any = sim
+    elif not with_sim:
+        script = None
+    elif prefer_sim_source:
+        script, source_why = load_sim_source()
+        log.info("sim source: %s", source_why)
+    else:
+        script = SimScript()
 
-    ledger = Ledger(work / "kaala_dabba.jsonl")
-    kern = _kernel.Kernel(str(work / "kernel.db"), clock, ledger)
     secret = "whsec_gawaah_sim_bridge_0000"
-    gateway = RazorpaySim(secret, clock, seed=0, ledger=ledger)
-    settlement = LocalSettlement(kern, gateway, clock, ledger, secret)
-
-    reference = (script or SimScript()).frame(0)
     plane = ClientRectifiedPlane()
 
     def embed(crop: np.ndarray) -> np.ndarray:
@@ -1881,38 +2961,80 @@ def build_sim_server(
         n = float(np.linalg.norm(v))
         return np.ones(64, np.float64) / 8.0 if n == 0.0 else v / n
 
+    reference = (script or SimScript()).frame(0)
+
     gallery = Gallery()
     prices: dict[str, int] = {}
     if script is not None:
         # Enrol the sim's packet from a frame it is NOT sold in, so no later
-        # identification is a self-match.
-        enrol_buf = script.frame(0).copy()
-        script._paste_goods(enrol_buf, 150.0)
-        det = PlacementDetector(reference)
-        found = ()
-        for _ in range(6):
-            found = det.update(enrol_buf)
-        stable = [p for p in found if p.measurable and p.long_edge_mm]
-        if stable:
-            p = stable[0]
-            gallery.enroll("PACKET", [embed(Brain._crop(enrol_buf, p))],
-                           float(p.long_edge_mm))
-            prices["PACKET"] = int(_paise(2850))
+        # identification is a self-match. Only a source that can PAINT one has
+        # a packet to enrol; a foreign SimSource that cannot simply ships an
+        # empty gallery and the goods land as AMBER — an honest "I do not know
+        # what this is" rather than a price this file made up.
+        # PREFERRED DOOR: a source that knows its own SKUs enrols all of them
+        # with their own prices. SimSource provides this; the _paste_goods probe
+        # below only ever enrolled ONE packet at a made-up price.
+        enrol_all = getattr(script, "enrol_gallery", None)
+        if callable(enrol_all):
+            try:
+                got = enrol_all(gallery, embed, Brain._crop)
+                if isinstance(got, dict) and got:
+                    prices.update({k: int(_paise(v)) for k, v in got.items()})
+            except Exception:  # noqa: BLE001 - a source that cannot enrol is amber, not fatal
+                prices.clear()
 
-    brain = Brain(
-        BrainConfig(
-            clock=clock,
-            ledger=ledger,
-            settlement=settlement,
-            plane=plane,
-            tracker=CentroidTracker(max_dist_mm=25.0, max_missing_frames=3),
-            line=LineZone.mat_exit_line(80.0, min_crossing_frames=3),
-            identifier=Identifier(gallery, embed),
-            prices=prices,
-            detector=PlacementDetector(reference, clock=clock),
-            reference=reference,
+        paste = getattr(script, "_paste_goods", None)
+        if not prices and callable(paste):
+            enrol_buf = script.frame(0).copy()
+            paste(enrol_buf, 150.0)
+            det = PlacementDetector(reference)
+            found = ()
+            for _ in range(6):
+                found = det.update(enrol_buf)
+            stable = [p for p in found if p.measurable and p.long_edge_mm]
+            if stable:
+                p = stable[0]
+                gallery.enroll("PACKET", [embed(Brain._crop(enrol_buf, p))],
+                               float(p.long_edge_mm))
+                prices["PACKET"] = int(_paise(2850))
+
+    #: The whole rig behind the frame, built fresh each time. ``run`` numbers
+    #: the ledger/kernel directory so a REPLAY writes its own audit trail
+    #: instead of appending a second sale to the first one's chain.
+    rig: dict[str, Any] = {}
+
+    def make_rig(run: int) -> Brain:
+        rundir = work if run == 0 else (work / f"run-{run}")
+        rundir.mkdir(parents=True, exist_ok=True)
+        ledger = Ledger(rundir / "kaala_dabba.jsonl")
+        kern = _kernel.Kernel(str(rundir / "kernel.db"), clock, ledger)
+        gateway = RazorpaySim(secret, clock, seed=0, ledger=ledger)
+        settlement = LocalSettlement(kern, gateway, clock, ledger, secret)
+        rig.update(
+            {
+                "run": run,
+                "dir": rundir,
+                "ledger": ledger,
+                "gateway": gateway,
+                "settlement": settlement,
+            }
         )
-    )
+        return Brain(
+            BrainConfig(
+                clock=clock,
+                ledger=ledger,
+                settlement=settlement,
+                plane=plane,
+                tracker=CentroidTracker(max_dist_mm=25.0, max_missing_frames=3),
+                line=LineZone.mat_exit_line(80.0, min_crossing_frames=3),
+                identifier=Identifier(gallery, embed),
+                prices=prices,
+                detector=PlacementDetector(reference, clock=clock),
+                reference=reference,
+            )
+        )
+
+    brain = make_rig(0)
     server = BrainServer(
         brain,
         web_dir=web_dir,
@@ -1920,6 +3042,14 @@ def build_sim_server(
         clock=clock,
         plane=plane,
         sim=script,
+        # Crop where the SOURCE painted, not where this file would have. See
+        # SimSourceAdapter.roi_mm; a foreign source may lay its sticker out
+        # somewhere else entirely and PEEL must follow it there.
+        sticker_roi_mm=tuple(
+            float(v) for v in getattr(script, "roi_mm", DEFAULT_STICKER_ROI_MM)
+        )
+        if script is not None
+        else DEFAULT_STICKER_ROI_MM,
         forbidden_strings=(secret,),
     )
 
@@ -1940,7 +3070,14 @@ def build_sim_server(
                  CHILLA now has something to corroborate with, and its answer
                  is still AMBER.
             """
-            state = brain.state()
+            # Read the CURRENT rig, not the one captured when this closure was
+            # made: a `/sim/reset` builds a new gateway and a new brain, and
+            # paying the old gateway's link would settle a session that no
+            # longer exists.
+            live = server.brain
+            settlement = rig["settlement"]
+            gateway = rig["gateway"]
+            state = live.state()
             if state.nonce is None:
                 log.info("sim: nothing minted, nothing to pay")
                 return
@@ -1955,7 +3092,7 @@ def build_sim_server(
             # panel looking like a fault, so the sim does not stage it.
             result = gateway.pay_link(link["id"], emit_captured=False)
             for delivery in result.deliveries:
-                brain.on_webhook(
+                live.on_webhook(
                     delivery.body,
                     delivery.signature,
                     header_event_id=delivery.headers.get("X-Razorpay-Event-Id"),
@@ -1971,6 +3108,33 @@ def build_sim_server(
             )
 
         script.on_pay = pay_and_refresh
+
+        driver = SimDriver(
+            server,
+            script,
+            period_s=period_s,
+            autostart=autostart,
+            loop_script=loop_script,
+        )
+        if source_why:
+            log.info("sim: %s", source_why)
+
+        def rebuild() -> None:
+            """A REPLAY on a genuinely new counter.
+
+            Not a rewind. The previous run ended with a settled sale whose
+            webhook has already been consumed, and re-running the script over
+            that brain would show a second customer paying with the first one's
+            payment. So the ledger, the sqlite kernel, the gateway and the
+            session are all rebuilt, the sticker enrolment is dropped, and the
+            new run writes its own hash chain in its own directory.
+            """
+            run = int(rig.get("run", 0)) + 1
+            fresh_brain = make_rig(run)
+            server.rebind_brain(fresh_brain, sticker_dir=work / f"stickers-{run}")
+            log.info("sim: rebuilt the rig for run %d in %s", run, rig["dir"])
+
+        driver.rebuild = rebuild
 
     return server
 
@@ -1993,10 +3157,17 @@ def _dry_run(server: BrainServer, *, frames: int, verbose: bool) -> int:
         print("--dry-run needs --sim", file=sys.stderr)
         return 2
     # Drive the frames explicitly rather than letting the async pump race the
-    # client; the pump and this loop call the SAME `server.handle`.
+    # client; the driver and this loop call the SAME `server.handle` and the
+    # SAME `_sim_tag`, so what prints here is byte-for-byte what the socket
+    # sends. Detaching the driver is what stops the pump from also running.
+    driver = server.sim_driver
     server.sim = None
+    server.sim_driver = None
     app = create_app(server)
     counts: dict[str, int] = {}
+    labelled = 0
+    pushed = 0
+    beats: list[str] = []
     try:
         with TestClient(app) as client:
             with client.websocket_connect("/ws") as ws:
@@ -2004,7 +3175,22 @@ def _dry_run(server: BrainServer, *, frames: int, verbose: bool) -> int:
                     m = ws.receive_json()
                     counts[m["type"]] = counts.get(m["type"], 0) + 1
                 for i in range(frames):
-                    phase, _k = sim.phase_at(i)
+                    beat = sim.beat_at(i)
+                    phase = str(beat["name"])
+                    if not beats or beats[-1] != phase:
+                        beats.append(phase)
+                        print(f"--- beat {phase}: {beat['label']}")
+                    server.set_sim_tag(
+                        {
+                            "simulated": True,
+                            "beat": phase,
+                            "beat_label": beat["label"],
+                            "beat_detail": beat["detail"],
+                            "beat_index": beat["index"],
+                            "beat_of": beat["of"],
+                            "sim_frame": i,
+                        }
+                    )
                     msgs = server.handle(
                         {
                             "type": "frame",
@@ -2016,13 +3202,18 @@ def _dry_run(server: BrainServer, *, frames: int, verbose: bool) -> int:
                         msgs += server.handle(cmd)
                     for m in msgs:
                         counts[m["type"]] = counts.get(m["type"], 0) + 1
+                        pushed += 1
+                        labelled += 1 if m.get("simulated") is True else 0
                         if verbose:
                             print(f"[{i:3d} {phase:7s}] {json.dumps(m)[:220]}")
                     if not verbose:
                         print(_one_line(i, phase, msgs))
     finally:
         server.sim = sim
+        server.sim_driver = driver
     print("\nmessage counts:", json.dumps(counts, sort_keys=True))
+    print("beats seen:", " -> ".join(beats))
+    print(f"labelled simulated: {labelled} of {pushed} messages pushed by the sim")
     print("health:", json.dumps(server.health(), sort_keys=True))
     return 0
 
@@ -2065,6 +3256,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "message instead of opening a socket",
     )
     parser.add_argument("--frames", type=int, default=0, help="--dry-run frame count")
+    parser.add_argument(
+        "--sim-period",
+        type=float,
+        default=0.12,
+        help="seconds between simulated frames (default 0.12)",
+    )
+    parser.add_argument(
+        "--sim-paused",
+        action="store_true",
+        help="attach the sim but hold at beat 0; drive it with POST /sim/step",
+    )
+    parser.add_argument(
+        "--sim-loop",
+        action="store_true",
+        help="when the script ends, rebuild a FRESH counter and play it again. "
+        "Off by default: replaying a settled sale onto the same brain would "
+        "show a second customer paying with the first one's webhook, so a loop "
+        "has to be a new session or it is a lie.",
+    )
+    parser.add_argument(
+        "--sim-source",
+        action="store_true",
+        help="prefer gawaah.sim_source.SimSource for frames if it is importable "
+        "and produces the rectified 840x1188 buffer; otherwise use the built-in "
+        "script and say so in the log",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--web",
@@ -2084,7 +3301,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     server = build_sim_server(
-        Path(args.work) if args.work else None, web_dir=web, with_sim=args.sim
+        Path(args.work) if args.work else None,
+        web_dir=web,
+        with_sim=args.sim,
+        period_s=args.sim_period,
+        autostart=not args.sim_paused,
+        loop_script=args.sim_loop,
+        prefer_sim_source=args.sim_source,
     )
     if args.dry_run:
         n = args.frames or (server.sim.total_frames if server.sim else 0)

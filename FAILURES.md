@@ -208,3 +208,59 @@ reducer and the panel registry directly and never construct the browser shell's
 test.** The honest reason it is still untested is that it needs a DOM and a live
 socket, and the shell was verified in a real browser instead — which is what
 found these.
+
+---
+
+## 2026-08-29 — The site works without a camera. Four integration bugs, all in the seams.
+
+Eight agents built the sim source, the enrolment UI, SCOUT (live boxes), the DEMO runner and the
+upload tool. Each reported honestly that it could not fix what lay across a file it did not own, and
+every one of those cross-file gaps turned out to be real.
+
+**1. The adapter hid the source. Rs.0.00 instead of Rs.139.50.**
+`SimSourceAdapter` had no `__getattr__`, so `build_sim_server`'s duck-typed probe for
+`enrol_gallery` / `_paste_goods` hit the adapter, missed the real `SimSource` behind it, and shipped
+an EMPTY gallery. Every item then landed AMBER and the counter read zero. **The abstention was
+correct; the reason for it was an integration bug** — which is the most expensive kind, because the
+system looked like it was working as designed. Adapter is now transparent, and `enrol_gallery` is
+preferred over the single-packet probe.
+
+**2. The two halves disagreed on what to call a panel.**
+`web/app.js` names the billing panel `core`; `brain_server.py` names it `basket`. A tap on that tab
+came back as a visible `brain refused: UNKNOWN_PANEL`. Fixed with an alias map rather than renaming
+either side, because the client's `PANEL_IDS` is load-bearing for its CSS router and the server's
+`basket` is in its own tests.
+
+**My first version of that fix was sloppy and a test caught it.** I put the aliases into the
+published `known` list in the refusal message, which duplicated `basket` and broke
+`test_an_unknown_panel_is_refused`. The test was right: aliases are an input convenience, not part of
+the published vocabulary. Fixed the code, not the test.
+
+**3. The screen would not show the counter's own total.**
+The brain held Rs.139.50; the page displayed Rs.0.00, because the reducer only counts what THIS page
+saw and the scripted frames never reached it. My own disagreement check was the only thing that
+noticed, printing `brain total 13950p disagrees with counter 0p` at the bottom of the screen for the
+entire run.
+
+Resolved by rendering whichever side is actually counting and **saying which** (`data-source`), with
+a SIMULATED note when the frames are scripted. This is not the dual-writer problem I refused earlier:
+there is still exactly one writer. The brain writes, the page renders. What changed is that the page
+stopped insisting on its own empty number.
+
+**4. Nothing repainted.** `onBrainState` set `brainView` and never called `render()`, so even after
+fix 3 the total stayed at zero. One line.
+
+**And a false alarm I created:** the disagreement warning fired whenever the local total was zero,
+which is the NORMAL state during a scripted run. Warning about an ordinary state made it look like a
+fault for the whole session. A real disagreement needs both sides to have counted, differently.
+
+### Verified state
+`--sim --sim-source` drives 13 beats to **13950 paise with 1 amber line excluded and 42 ledger
+lines**, with no camera, no printed mat and no phone. PEEL reaches all three verdicts
+(GENUINE / TAMPERED / UNREGISTERABLE), MUDRA reads OPEN / GOODS / NONE off measured solidity, CHILLA
+reaches MATCHED and AMBER_STALE, SAAF stacks and rejects by name. 1930 Python + 954 JS tests pass.
+
+### Known flake, recorded not hidden
+`test_eight_separate_processes_produce_exactly_one_intent` failed once in a full-suite run and passed
+3/3 in isolation — eight subprocesses contending while the rest of the suite runs. By this repo's own
+rule a flaky test is a failing test, so it is named here rather than left to fail intermittently in CI.

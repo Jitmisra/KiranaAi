@@ -91,12 +91,28 @@
      While the gate is not LIVE, both preview canvases carry a visible
      "no feed" shade, so the app can never again show black and say nothing.
 
-  2. CAPABILITY PANELS   #panel-core #panel-mudra #panel-peel #panel-chilla
-                         #panel-saaf #panel-ledger
-     Six containers, one visible at a time, CORE by default. Tab selection is
-     pure CSS (a radio group, #tabsel-*), so it works before any module loads
-     and cannot break when one throws. To switch tabs from code:
+  2. CAPABILITY PANELS   #panel-demo #panel-scout #panel-core #panel-enrol
+                         #panel-mudra #panel-peel #panel-chilla #panel-saaf
+                         #panel-ledger
+     Nine containers, one visible at a time. Tab selection is pure CSS (a radio
+     group, #tabsel-*), so it works before any module loads and cannot break
+     when one throws. To switch tabs from code:
          document.getElementById('tabsel-peel').checked = true;
+
+     THE RAIL IS ORDERED BY WHAT IT COSTS YOU TO USE IT, cheapest first:
+         DEMO   nothing at all          SCOUT  a camera
+         CORE   a camera and a mat      ENROL  a camera, a mat and goods
+         MUDRA PEEL CHILLA SAAF         each needs something ENROL or CORE made
+         LEDGER after anything happened
+     DEMO leads and ships `checked`, because the previous default was CORE and
+     a visitor with no camera and no printed mat landed on the one panel that
+     can do nothing for them and watched it do nothing.
+
+     app.js adopts whatever the markup has checked before applying its own
+     default — but only for ids listed in its PANEL_IDS. Until 'demo' is in
+     that list, app.js will move the selection back to CORE on load. That is
+     why CORE's own orientation block names DEMO first: whichever panel a cold
+     visitor lands on, the route to a working screen is one tap away.
 
      Each panel carries #panel-X[data-status] with exactly one of:
          OFF       nothing is wired to this capability yet
@@ -116,6 +132,29 @@
      code. Fill #body-X with real content and hide #abstain-X only when the
      capability actually has an answer; update #why-X whenever it does not.
      A panel that shows nothing is a bug.
+
+  3b. ORIENTATION BLOCKS  .orient inside every #body-X
+     A hatched refusal standing alone reads as BROKEN, not as honest. So every
+     panel also ships, ABOVE its abstention, with two sentences that never
+     change and never depend on a socket:
+         .orient-is    what this capability IS, in plain words
+         .orient-need  WHAT WOULD MAKE THIS WORK — the concrete missing input,
+                       with a <label class="golink" for="tabsel-X"> to the
+                       panel that provides it where one does
+     This is orientation ADDED AROUND the refusal, never a softening of it.
+     The abstention block is untouched: same hatching, same weight, same code.
+     The golinks are labels, not anchors, on purpose — a label drives the same
+     radio the rail does, so a cross-panel link keeps working with JS disabled
+     and app.js's change listener still hears about it.
+
+     #body-X is a flex column. .orient is order -2 and .abstain is order 10, so
+     a panel module that appends its render (they all do) lands BETWEEN them
+     without having to know anything about either.
+
+  3c. SIMULATION   .simbadge / .simstrip
+     INVARIANT 7. Anything manufactured on this machine says so on screen. The
+     badge is yellow, never green and never amber: it is not a refusal and it
+     is certainly not a settlement.
 
   4. RUPEES  every figure that is money carries class="num" for tabular
      numerals, so digits do not dance as the total changes.
@@ -173,6 +212,11 @@
     <div class="camgate-act">
       <!-- THE START GESTURE. app.js attaches the listener; see contract 1. -->
       <button id="start" class="btn btn-start" type="button">START CAMERA</button>
+      <!-- THE OTHER ROUTE. Half the people who open this page have no camera
+           attached, no mat printed and no phone to hand. Before this link they
+           had nowhere to go. It is a <label>, so it selects the DEMO tab with
+           the same radio the rail uses and works with JS disabled. -->
+      <label class="golink golink-lg" for="tabsel-demo">no camera? watch a scripted run</label>
       <code id="camreason" class="camgate-reason">camera_not_requested_yet</code>
     </div>
   </section>
@@ -180,11 +224,27 @@
   <!-- ============================================ capability shell ======= -->
   <div class="shell">
 
+    <!-- Ordered by barrier to entry, cheapest first. See contract 2. -->
     <div class="rail" role="radiogroup" aria-label="capability">
+      <label class="rail-item" for="tabsel-demo">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-demo" checked>
+        <span class="dot" id="dot-demo" aria-hidden="true"></span>
+        <span class="rail-text"><b>DEMO</b><i>scripted run</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-scout">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-scout">
+        <span class="dot" id="dot-scout" aria-hidden="true"></span>
+        <span class="rail-text"><b>SCOUT</b><i>raw feed</i></span>
+      </label>
       <label class="rail-item" for="tabsel-core">
-        <input class="tabsel" type="radio" name="tab" id="tabsel-core" checked>
+        <input class="tabsel" type="radio" name="tab" id="tabsel-core">
         <span class="dot" id="dot-core" aria-hidden="true"></span>
         <span class="rail-text"><b>CORE</b><i>billing</i></span>
+      </label>
+      <label class="rail-item" for="tabsel-enrol">
+        <input class="tabsel" type="radio" name="tab" id="tabsel-enrol">
+        <span class="dot" id="dot-enrol" aria-hidden="true"></span>
+        <span class="rail-text"><b>ENROL</b><i>teach it</i></span>
       </label>
       <label class="rail-item" for="tabsel-mudra">
         <input class="tabsel" type="radio" name="tab" id="tabsel-mudra">
@@ -204,7 +264,7 @@
       <label class="rail-item" for="tabsel-saaf">
         <input class="tabsel" type="radio" name="tab" id="tabsel-saaf">
         <span class="dot" id="dot-saaf" aria-hidden="true"></span>
-        <span class="rail-text"><b>SAAF</b><i>enrolment</i></span>
+        <span class="rail-text"><b>SAAF</b><i>stacking</i></span>
       </label>
       <label class="rail-item" for="tabsel-ledger">
         <input class="tabsel" type="radio" name="tab" id="tabsel-ledger">
@@ -215,6 +275,89 @@
 
     <main class="stage">
 
+      <!-- -------------------------------------------------- DEMO -------- -->
+      <!-- FIRST in the rail and `checked` in the markup. Everything this panel
+           will ever show is manufactured on this machine, so it carries a
+           permanent SIMULATED strip (invariant 7) and it is stated out loud
+           that a simulated run cannot reach green.
+           FILL POINT: panels/demo.js mounts its run control and transcript
+           into #body-demo. Unlike the other modules it REPLACES this body
+           rather than appending to it — verified in a live DOM dump — so
+           everything below is the fallback a visitor sees when that module is
+           absent or has not evaluated yet, and when JS is off entirely. Keep
+           it correct on its own terms; do not delete it as dead markup. -->
+      <section id="panel-demo" class="panel" data-status="OFF" aria-label="DEMO — scripted run">
+        <div class="panel-head">
+          <h2 class="panel-title">DEMO<span class="panel-sub">a scripted run on synthetic frames — no camera, no mat, no phone</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-demo">
+
+          <div class="simstrip">
+            <p><span class="simbadge">SIMULATED</span> Every frame, placement and verdict this
+              panel produces is manufactured on this machine and is labelled as such wherever it
+              appears. A scripted run can fill the panels and it can turn the counter amber. It
+              can <b>never</b> turn it green — green comes only from a signature-verified
+              webhook, and no synthetic byte is allowed near that path.</p>
+          </div>
+
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> One click plays a shop scene through the
+              real pipeline: synthetic frames in, a mat lock, placements, a gesture, a sticker
+              comparison, a stacked burst and ledger entries out. The same code that runs on a
+              camera runs here — only the frames are invented.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              Nothing at all. This is the one capability on the page that needs no camera, no
+              printed mat and no phone; it is here so that the other eight can be watched working
+              before you own any of that. The run control appears in this panel as soon as the
+              demo module loads.</p>
+          </div>
+
+          <div class="abstain" id="abstain-demo">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No scripted run has been started, so there is nothing to report. This panel will
+              not describe a run it did not perform. When it does run, every result it produces
+              stays marked SIMULATED for as long as it is on screen.</p>
+            <code class="abstain-why" id="why-demo">demo_not_run_yet</code>
+          </div>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------- SCOUT ------- -->
+      <!-- The cheapest real capability: a camera and nothing else. It exists
+           because "no mat printed yet" should not mean "no camera evidence at
+           all". SCOUT measures in PIXELS and must never quote a millimetre or
+           a price — without a mat there is no scale, and a number with no
+           scale is a guess.
+           FILL POINT: the scout agent mounts its overlay into #body-scout. -->
+      <section id="panel-scout" class="panel" data-status="OFF" aria-label="SCOUT — raw feed">
+        <div class="panel-head">
+          <h2 class="panel-title">SCOUT<span class="panel-sub">live boxes on the raw feed — a camera is the only thing it needs</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-scout">
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> Boxes drawn live on what the lens actually
+              sees, before any mat is involved. It is the honest answer to "is the camera pointed
+              at anything?" — and it stops there. SCOUT reports pixels; it never quotes
+              millimetres and it never quotes a price, because without a mat there is no scale
+              and a measurement with no scale is a guess.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A running camera. Press <b>START CAMERA</b> at the top of this page — no printed
+              mat, no markers and no enrolment are needed for this one. No camera on this
+              machine? <label class="golink" for="tabsel-demo">watch DEMO instead</label></p>
+          </div>
+
+          <div class="abstain" id="abstain-scout">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>No camera feed has arrived, so there is nothing to draw a box around. SCOUT will
+              not show a frozen last frame or an illustration of what it might have seen; an
+              empty feed is an empty feed.</p>
+            <code class="abstain-why" id="why-scout">scout_no_camera_feed</code>
+          </div>
+        </div>
+      </section>
+
       <!-- -------------------------------------------------- CORE -------- -->
       <section id="panel-core" class="panel" data-status="ABSTAIN" aria-label="CORE — billing">
         <div class="panel-head">
@@ -223,6 +366,19 @@
         </div>
 
         <div class="panel-body" id="body-core">
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> The billing loop, and the only thing on
+              this page that touches money: measure what is on the mat, match it to an enrolled
+              SKU, price it in whole paise, and settle only when a signature-verified webhook
+              says the money moved.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A mat lock — the printed TAKHTI mat in frame with all four corner markers visible,
+              and a camera running. Nothing has been printed and nothing is pointed at it? Start
+              at <label class="golink" for="tabsel-demo">DEMO</label>, which runs this exact loop
+              on synthetic frames. Have a camera but no mat?
+              <label class="golink" for="tabsel-scout">SCOUT</label> shows you the raw feed.</p>
+          </div>
+
           <!-- INVARIANT 4, made visible. Left: the raw feed, scrimmed outside
                the mat quad the instant we lock. Right: the rectified crop,
                which is the ONLY buffer that survives a frame grab and the only
@@ -263,6 +419,42 @@
         </div>
       </section>
 
+      <!-- -------------------------------------------------- ENROL ------- -->
+      <!-- The supply side of the whole page: PEEL cannot compare a sticker
+           nobody registered and SAAF cannot stack a burst nobody captured, so
+           both of their abstentions point here.
+           FILL POINT: the enrol agent mounts SKU / sticker / burst capture
+           into #body-enrol. The client->brain message already exists:
+           {"type":"enrol_sticker", name}. -->
+      <section id="panel-enrol" class="panel" data-status="OFF" aria-label="ENROL — teach the counter">
+        <div class="panel-head">
+          <h2 class="panel-title">ENROL<span class="panel-sub">teach the counter a thing — an SKU, a sticker, a burst</span></h2>
+          <span class="panel-status" aria-hidden="true"></span>
+        </div>
+        <div class="panel-body" id="body-enrol">
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> Where the counter is taught. Three kinds of
+              thing go in: an SKU's footprint in millimetres and its price in whole paise, a
+              tamper sticker registered under a name for PEEL to compare against later, and a
+              burst of frames for SAAF to stack into one sharp reference image.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A mat lock, so that what you teach it is measured in millimetres and not in pixels
+              — put the printed mat in frame and start the camera, which
+              <label class="golink" for="tabsel-core">CORE</label> reports on. No mat and no
+              camera? <label class="golink" for="tabsel-demo">DEMO</label> enrols from synthetic
+              frames, and everything enrolled that way stays labelled SIMULATED.</p>
+          </div>
+
+          <div class="abstain" id="abstain-enrol">
+            <div class="abstain-tag">I DO NOT KNOW</div>
+            <p>Nothing has been enrolled and nothing is being enrolled right now. An enrolment
+              taken without a mat lock would record pixels dressed up as millimetres, so it is
+              refused rather than saved and corrected later. What is not taught is not guessed.</p>
+            <code class="abstain-why" id="why-enrol">enrol_nothing_enrolled</code>
+          </div>
+        </div>
+      </section>
+
       <!-- -------------------------------------------------- MUDRA ------- -->
       <section id="panel-mudra" class="panel" data-status="OFF" aria-label="MUDRA — gesture">
         <div class="panel-head">
@@ -273,6 +465,19 @@
           <!-- FILL POINT: OccluderGesture(ref).update(rect) -> GestureState
                NONE / OPEN / FIST / GOODS / AMBIGUOUS, with solidity, defects,
                compactness and area_mm2. AMBIGUOUS is an answer; render it. -->
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> The hand read as a shape and nothing more.
+              MUDRA compares the mat against a reference photograph of the same mat empty, and
+              calls whatever is blocking it OPEN, FIST, GOODS or AMBIGUOUS from geometry alone —
+              solidity, convexity defects, compactness, area. It never identifies a person and
+              there is no model anywhere in this browser.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A reference frame of the empty mat, which needs a mat lock first — see
+              <label class="golink" for="tabsel-core">CORE</label>. Then put a hand over the mat.
+              Nothing to point a camera at? <label class="golink" for="tabsel-demo">DEMO</label>
+              plays a scripted hand across a synthetic mat.</p>
+          </div>
+
           <div class="abstain" id="abstain-mudra">
             <div class="abstain-tag">I DO NOT KNOW</div>
             <p>No reference frame has been taken, so there is nothing for a hand
@@ -295,6 +500,17 @@
           <!-- FILL POINT: StickerRegistry(dir).compare(name, crop) ->
                StickerVerdict(ignited_fraction, GENUINE|TAMPERED|UNREGISTERABLE,
                ecc_ok, reason). UNREGISTERABLE is the honest third answer. -->
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> A seal check. PEEL holds a crop of a tamper
+              sticker against the one registered under that name and reports how much of it has
+              changed: GENUINE, TAMPERED, or UNREGISTERABLE when the crop is too poor to judge.
+              It raises a warning to a human. It authorises nothing and it refunds nothing.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A sticker enrolled under a name — go to
+              <label class="golink" for="tabsel-enrol">ENROL</label> and register one. After that,
+              a crop of that same sticker on the mat is enough to get a verdict.</p>
+          </div>
+
           <div class="abstain" id="abstain-peel">
             <div class="abstain-tag">I DO NOT KNOW</div>
             <p>Nothing has been enrolled, so there is no registered sticker to
@@ -317,6 +533,20 @@
                LedgerMatcher(mirror, window_s).match(amount_paise, ts) ->
                MatchResult(MATCHED|NO_MATCH|AMBIGUOUS|AMBER_STALE, candidates).
                MATCHED must never paint anything green. -->
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> A second opinion, not a verdict. CHILLA
+              finds the customer's phone screen inside the rectified mat crop and checks the
+              amount showing on it against the ledger mirror within a time window. A match
+              raises confidence that the right person paid the right amount. A screen can be
+              replayed, staged or photographed, so a match settles nothing.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A phone screen lying inside the mat crop, which needs a mat lock first — see
+              <label class="golink" for="tabsel-core">CORE</label> — and a ledger mirror to
+              compare it against. No second phone to hand?
+              <label class="golink" for="tabsel-demo">DEMO</label> plays a scripted screen over a
+              synthetic mat.</p>
+          </div>
+
           <div class="abstain" id="abstain-chilla">
             <div class="abstain-tag">I DO NOT KNOW</div>
             <p>No screen has been found in the rectified crop, and no ledger
@@ -339,6 +569,18 @@
           <!-- FILL POINT: BurstStacker.stack(frames) -> StackResult(image,
                used, rejected, sharpness_gain, warning). Show used AND
                rejected; a stack that silently drops frames is a lie. -->
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> Frame selection for enrolment. SAAF takes a
+              burst of rectified mat crops and stacks them into one sharper image, then reports
+              exactly how many frames it used, how many it threw away and what sharpness it
+              actually gained. It picks frames. It decides nothing and it prices nothing.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              A burst captured from a locked mat — go to
+              <label class="golink" for="tabsel-enrol">ENROL</label>, which is where bursts are
+              taken. No camera and no mat? <label class="golink" for="tabsel-demo">DEMO</label>
+              captures a synthetic burst and stacks that instead.</p>
+          </div>
+
           <div class="abstain" id="abstain-saaf">
             <div class="abstain-tag">I DO NOT KNOW</div>
             <p>No burst has been captured, so there is nothing to stack and no
@@ -360,6 +602,18 @@
           <!-- FILL POINT: BrainState.audit head hash, session state, exceptions
                and the integer-paise basket lines. Every rupee figure rendered
                here must carry class="num". -->
+          <div class="orient">
+            <p class="orient-is"><b>What this is.</b> The audit. Every entry the brain recorded
+              this session, in order, each one hashed onto the one before it, so a line cannot be
+              edited out afterwards without the head hash disagreeing. This panel reports the
+              chain; it does not keep one.</p>
+            <p class="orient-need"><span class="orient-key">what would make this work</span>
+              An audit head from the brain: the socket connected, and at least one thing having
+              actually happened. Nothing has happened yet — make something happen with
+              <label class="golink" for="tabsel-demo">DEMO</label>, or bill a real line in
+              <label class="golink" for="tabsel-core">CORE</label>.</p>
+          </div>
+
           <div class="abstain" id="abstain-ledger">
             <div class="abstain-tag">I DO NOT KNOW</div>
             <p>No audit head has been received from the brain, so this page
@@ -402,5 +656,38 @@
 <video id="cam" playsinline muted autoplay></video>
 
 <script type="module" src="./app.js"></script>
+
+<!-- ===========================================================================
+     THE CAPABILITY MODULES. Every one of these existed on disk, fully tested,
+     and NOT ONE of them was loaded by anything: app.js imports none of them and
+     index.html linked none of them, so #body-mudra and its siblings were empty
+     containers wrapped around an abstention. Verified before the fix by dumping
+     the live DOM — zero occurrences of data-panel-mounted or *-render. This tag
+     block is the whole missing wiring; there is no other place a script may be
+     declared, because the shell carries no inline script (see contract).
+
+     ORDER MATTERS AND IS ALREADY SAFE. app.js is first, and it publishes
+     globalThis.registerPanel during its own evaluation, before it awaits
+     OpenCV — so every module below finds a registry. app.js also drains
+     globalThis.GAWAAH_PANELS and patches its push(), so a module that arrives
+     the other way round still attaches. Both directions are handled; this order
+     is simply the cheap one.
+
+     A MODULE THAT 404s COSTS NOTHING. The browser logs one failed fetch and
+     moves on: module scripts do not block each other and do not block app.js.
+     So a tag may be declared for a panel whose file has not landed yet, and it
+     starts working the moment that file appears — no edit here required.
+
+     Each module mounts itself into the #body-X named by contract 2 and leaves
+     the shell's .orient and .abstain blocks alone; the flex order in the
+     stylesheet drops its render between the two. -->
+<script type="module" src="./panels/demo.js"></script>
+<script type="module" src="./panels/scout.js"></script>
+<script type="module" src="./panels/enrol.js"></script>
+<script type="module" src="./panels/mudra.js"></script>
+<script type="module" src="./panels/peel.js"></script>
+<script type="module" src="./panels/chilla.js"></script>
+<script type="module" src="./panels/saaf.js"></script>
+<script type="module" src="./panels/ledger.js"></script>
 </body>
 </html>

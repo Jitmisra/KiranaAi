@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SCOUT harness — real OpenCV, real DOM, synthetic scene</title>
+<!--
+  A BROWSER HARNESS FOR web/panels/scout.js. Not part of the shipped app.
+
+  index.html does not load scout.js yet (the shell agent owns that file), so
+  this page reproduces the exact fragment of the shell SCOUT mounts into — the
+  #body-core panel body and the .pane-stack wrapping canvas#raw — loads the
+  same vendored OpenCV 4.11.0 the app loads, and drives the panel with a
+  SYNTHETIC scene so the run is deterministic in headless Chrome.
+
+  Everything on this page is drawn, not filmed, so the panel is told
+  setSimulated(true) and the SIMULATED FEED banner is expected in the output.
+-->
+<link rel="stylesheet" href="../style.css">
+<style>
+  body { padding: 12px 16px 40px; }
+  h1 { font: 600 15px/1.3 var(--mono); color: var(--amber); letter-spacing: .08em; margin: 0 0 10px; }
+  .split { max-width: 1300px; }
+  #evidence {
+    white-space: pre-wrap; font: 12px/1.5 var(--mono); color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px; margin-top: 14px; max-width: 1300px;
+  }
+  #evidence b { color: var(--amber); }
+  .scout { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+  .scout-banner {
+    font: 600 12px/1.4 var(--mono); color: var(--amber); letter-spacing: .04em;
+    background: color-mix(in srgb, var(--amber) 14%, transparent);
+    border-left: 3px solid var(--amber); padding: 6px 8px; margin: 0 0 8px;
+  }
+  .scout-sub, .scout-meta { font: 11px/1.5 var(--mono); color: var(--ink-dim); margin: 6px 0; }
+  .scout-list { list-style: none; margin: 6px 0; padding: 0; }
+  .scout-item { font: 12px/1.6 var(--mono); color: var(--ink); }
+  .scout-empty { font: 12px var(--mono); color: var(--ink-faint); }
+  .panel-h3 { font: 600 12px var(--mono); letter-spacing: .1em; color: var(--ink-dim); margin: 0 0 6px; }
+</style>
+</head>
+<body>
+
+<h1>SCOUT HARNESS — synthetic scene, real OpenCV, real DOM</h1>
+
+<div id="body-core">
+  <section class="split">
+    <figure class="pane">
+      <div class="pane-stack">
+        <canvas id="raw" width="1280" height="960"></canvas>
+      </div>
+      <figcaption><b>raw feed</b> — synthetic. SCOUT stacks its overlay here.</figcaption>
+    </figure>
+    <figure class="pane pane-rect">
+      <div class="pane-stack">
+        <canvas id="rect" width="840" height="1188"></canvas>
+      </div>
+      <figcaption><b>rectified crop</b> — 840&times;1188, the locked path.</figcaption>
+    </figure>
+  </section>
+</div>
+
+<pre id="evidence">booting…</pre>
+
+<script>
+// ---------------------------------------------------------------- the scene
+// Three product-shaped blocks and a scatter of specks. The specks exist to be
+// REJECTED: if any of them turns into a box, the area floor is not working.
+const RAW = document.getElementById('raw');
+const RCTX = RAW.getContext('2d', { willReadFrequently: true });
+
+/**
+ * `stroke` defaults on for the raw scene, where only the box matters. It is
+ * turned OFF for the rectified pane: a 6px stroke straddles the fill edge, so
+ * the visible outer edge would be the fill PLUS the stroke and the "ground
+ * truth" would silently be the wrong number. The first run of this harness
+ * failed by exactly that 2.1 mm, which is the whole reason it is spelled out.
+ */
+function block(ctx, cx, cy, w, h, deg, fill, stroke = true) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(deg * Math.PI / 180);
+  ctx.fillStyle = fill;
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  if (stroke) {
+    ctx.strokeStyle = '#1b1b1b';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(-w / 2, -h / 2, w, h);
+  }
+  ctx.restore();
+}
+
+/** Scene at frame `f`: the first block slides right so the tracker is exercised. */
+function drawScene(f) {
+  const g = RCTX.createLinearGradient(0, 0, 0, 960);
+  g.addColorStop(0, '#cfd3d8');
+  g.addColorStop(1, '#a9aeb5');
+  RCTX.fillStyle = g;
+  RCTX.fillRect(0, 0, 1280, 960);
+  block(RCTX, 300 + f * 22, 300, 300, 180, 0, '#e8e2d2');
+  block(RCTX, 880, 340, 230, 230, 22, '#d7c9b0');
+  block(RCTX, 560, 720, 380, 150, -34, '#c8d3d9');
+  RCTX.fillStyle = '#33383d';
+  for (let i = 0; i < 70; i++) {
+    const x = (i * 137 + f * 7) % 1240 + 20, y = (i * 271) % 920 + 20;
+    RCTX.fillRect(x, y, 3, 3);
+  }
+}
+
+/** The rectified pane: ONE block of a size we know in millimetres. */
+const PX_PER_MM_X = 840 / 297, PX_PER_MM_Y = 1188 / 420;
+const TRUE_LONG_MM = 60.0, TRUE_SHORT_MM = 32.0;
+function drawRectPane() {
+  const c = document.getElementById('rect');
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.fillStyle = '#e9ecef'; x.fillRect(0, 0, 840, 1188);
+  // no stroke: the fill edge IS the ground truth, with nothing straddling it
+  block(x, 420, 600, TRUE_LONG_MM * PX_PER_MM_X, TRUE_SHORT_MM * PX_PER_MM_Y, 0, '#39434e', false);
+  return c;
+}
+
+// ------------------------------------------------------------ opencv loader
+// The same shape as app.js's loadOpenCV: @techstark/opencv-js@4.11 resolves as
+// a PROMISE, not a ready module.
+function loadOpenCV(path) {
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = path; s.async = true;
+    s.onerror = () => resolve({ ok: false, reason: 'opencv_absent' });
+    s.onload = () => {
+      const loaded = globalThis.cv;
+      if (!loaded) return resolve({ ok: false, reason: 'opencv_absent' });
+      const ready = (cv) => resolve({ ok: true, cv });
+      if (typeof loaded.then === 'function') {
+        loaded.then((mod) => { globalThis.cv = mod; ready(mod); },
+                    () => resolve({ ok: false, reason: 'opencv_absent' }));
+        return;
+      }
+      if (loaded.getBuildInformation) return ready(loaded);
+      loaded.onRuntimeInitialized = () => ready(globalThis.cv);
+    };
+    document.head.appendChild(s);
+  });
+}
+window.__loadOpenCV = loadOpenCV;
+drawScene(0);
+</script>
+
+<script type="module">
+import * as SCOUT from './scout.js';
+
+const out = [];
+const say = (s) => out.push(s);
+const dump = () => { document.getElementById('evidence').textContent = out.join('\n'); };
+let failures = 0;
+function check(cond, msg) {
+  say(`  ${cond ? 'PASS' : 'FAIL'}  ${msg}`);
+  if (!cond) failures++;
+}
+
+const panel = globalThis.GAWAAH_SCOUT ? globalThis.GAWAAH_SCOUT.panel : null;
+
+say('SCOUT BROWSER HARNESS');
+say(`  user agent      ${navigator.userAgent.split(') ').pop()}`);
+say(`  scout module    ${typeof SCOUT.boxesFromContours === 'function' ? 'loaded' : 'MISSING'}`);
+say(`  self-booted     ${panel ? 'yes, via globalThis.GAWAAH_SCOUT' : 'NO'}`);
+say('');
+
+// ---- 1. before OpenCV: the honest abstention -------------------------------
+say('1. BEFORE OPENCV LOADS');
+panel.stop();
+panel.setSimulated(true);
+panel.tick(1000);
+let block = document.getElementById('scout-render');
+say(`  block mounted   ${block ? 'yes, into #' + block.parentNode.id : 'NO'}`);
+say(`  data-status     ${block.dataset.status}`);
+say(`  data-why        ${block.dataset.why}`);
+check(block.dataset.why === 'scout_no_opencv', 'abstains scout_no_opencv with no cv');
+check(document.querySelector('#scout-overlay') === null, 'no overlay painted with no cv');
+say('');
+
+// ---- 2. load the real vendored OpenCV -------------------------------------
+const r = await window.__loadOpenCV('../vendor/opencv.js');
+say('2. OPENCV');
+say(`  load            ${r.ok ? 'ok' : 'FAILED: ' + r.reason}`);
+say(`  build           ${r.ok && globalThis.cv.getBuildInformation
+  ? (globalThis.cv.getBuildInformation().match(/General configuration for OpenCV ([\d.]+)/) || [, '?'])[1]
+  : '?'}`);
+say(`  Canny           ${typeof globalThis.cv?.Canny}`);
+say(`  findContours    ${typeof globalThis.cv?.findContours}`);
+say(`  minAreaRect     (scout uses its own rotating calipers, not cv's)`);
+check(r.ok, 'vendored OpenCV loaded');
+say('');
+
+// ---- 3. the unlocked preview: boxes on the raw feed ------------------------
+say('3. UNLOCKED PREVIEW — the whole point: boxes with no mat');
+let lastTick = null;
+const idsPerFrame = [];
+for (let f = 0; f < 12; f++) {
+  drawScene(f);
+  lastTick = panel.tick(2000 + f * 200);
+  idsPerFrame.push(panel.rawTracks.filter((t) => !t.missing).map((t) => t.id).join('+'));
+}
+say(`  detect size     ${panel.model.detectW}x${panel.model.detectH} (from 1280x960)`);
+say(`  edge mode       ${panel.model.mode}`);
+say(`  ms per scan     ${panel.model.msPerScan.toFixed(2)}`);
+say(`  boxes drawn     ${lastTick.drawn}`);
+say(`  ids per frame   ${idsPerFrame.join(' | ')}`);
+say('  labels:');
+for (const l of lastTick.labels) say(`      ${JSON.stringify(l)}`);
+say(`  banner:         ${JSON.stringify(lastTick.banner)}`);
+check(lastTick.drawn === 3, `exactly the three blocks were boxed (got ${lastTick.drawn})`);
+check(lastTick.labels.every((l) => SCOUT.LABEL_UNLOCKED_RE.test(l)),
+  'every unlocked label is "id:N  object  (size unknown)"');
+check(!lastTick.labels.some((l) => l.includes('mm')), 'no millimetres claimed without a mat');
+check(new Set(idsPerFrame).size === 1, `ids were STABLE across 12 frames (${new Set(idsPerFrame).size} distinct sets)`);
+check(lastTick.banner.includes('nothing billable'), 'the banner says nothing is billable');
+check(lastTick.banner.includes('SIMULATED FEED'), 'the synthetic feed is labelled SIMULATED');
+
+const ov = document.getElementById('scout-overlay');
+say(`  overlay canvas  #${ov.id} ${ov.width}x${ov.height}, position ${getComputedStyle(ov).position}`);
+check(ov !== null && ov.width === 1280 && ov.height === 960, 'the overlay matches the raw canvas exactly');
+check(ov.previousSibling === document.getElementById('raw'), 'the overlay is stacked directly over #raw');
+// and it really has ink on it
+const px = ov.getContext('2d').getImageData(0, 0, ov.width, ov.height).data;
+let lit = 0;
+for (let i = 3; i < px.length; i += 4) if (px[i] > 8) lit++;
+say(`  overlay pixels  ${lit} of ${ov.width * ov.height} non-transparent`);
+check(lit > 4000, 'the overlay is actually painted, not merely present');
+say(`  block status    ${document.getElementById('scout-render').dataset.status}`
+  + ` / ${document.getElementById('scout-render').dataset.why}`);
+check(document.getElementById('scout-render').dataset.why === 'scout_seen_but_unmeasurable_no_mat_lock',
+  'boxes without a mat abstain: seen but unmeasurable');
+say('');
+
+// ---- 4. the locked path: real millimetres from the rectified crop ----------
+say('4. LOCKED — the rectified crop, where millimetres are real');
+const crop = drawRectPane();
+const accepted = panel.onFrame({
+  cropKind: 'rectified_mat_crop', crop, width: 840, height: 1188, ts: 1, seq: 1,
+});
+say(`  onFrame         ${accepted}`);
+say(`  labels:`);
+for (const l of panel.model.labels) say(`      ${JSON.stringify(l)}`);
+const m = /(\d+\.\d) x (\d+\.\d) mm/.exec(panel.model.labels[0] || '');
+// An edge cannot be placed better than one detection pixel, and a side has two
+// edges. That, and not a round number, is the tolerance this check may claim.
+const quant = panel.model.quantMm;
+const tol = 2 * quant;
+say(`  detect size     ${panel.model.detectW}x${panel.model.detectH} (from 840x1188)`);
+say(`  quantisation    ${quant.toFixed(3)} mm per detection pixel`);
+say(`  tolerance       ${tol.toFixed(3)} mm (two edges, one detection pixel each)`);
+say(`  ground truth    ${TRUE_LONG_MM.toFixed(1)} x ${TRUE_SHORT_MM.toFixed(1)} mm`);
+say(`  measured        ${m ? m[1] + ' x ' + m[2] + ' mm' : 'NONE'}`);
+if (m) say(`  error           ${(Math.abs(+m[1] - TRUE_LONG_MM)).toFixed(2)} mm long,`
+  + ` ${(Math.abs(+m[2] - TRUE_SHORT_MM)).toFixed(2)} mm short`);
+check(accepted === true, 'the rectified crop was accepted');
+check(panel.model.labels.length === 1 && SCOUT.LABEL_LOCKED_RE.test(panel.model.labels[0]),
+  'the locked label is a measurement');
+check(!!m && Math.abs(+m[1] - TRUE_LONG_MM) <= tol && Math.abs(+m[2] - TRUE_SHORT_MM) <= tol,
+  `the measurement is within ${tol.toFixed(2)} mm of ground truth`);
+check(panel.model.labels[0].includes('mm')
+  && document.getElementById('scout-render').textContent.includes('not as accuracy'),
+  'the panel states the precision the number actually has');
+const rawOv = document.getElementById('scout-overlay').getContext('2d')
+  .getImageData(0, 0, 1280, 960).data;
+let litAfterLock = 0;
+for (let i = 3; i < rawOv.length; i += 4) if (rawOv[i] > 8) litAfterLock++;
+say(`  raw overlay     ${litAfterLock} lit pixels after the lock (was ${lit})`);
+check(litAfterLock === 0, 'SCOUT cleared the raw pane once app.js owned it');
+say('');
+
+// ---- 5. invariant 4: a raw payload is refused ------------------------------
+say('5. INVARIANTS');
+check(panel.onFrame({ cropKind: 'raw_frame', crop: document.getElementById('raw') }) === false,
+  'a raw-frame payload is REFUSED by onFrame');
+check(SCOUT.bannerFor({ locked: true, simulated: false }) === null
+  && SCOUT.bannerFor({ locked: false }) !== null,
+  'the banner is present whenever a claim needs qualifying');
+check(!Object.values(SCOUT.COLOURS).some((c) => String(c).includes('3ddc84')),
+  'the settled green is never used');
+say('');
+
+// ---- 6. losing the mat -----------------------------------------------------
+say('6. THE MAT GOES AWAY');
+panel.onState({ matLocked: false });
+say(`  labels          ${JSON.stringify(panel.model.labels)}`);
+say(`  status          ${document.getElementById('scout-render').dataset.status}`
+  + ` / ${document.getElementById('scout-render').dataset.why}`);
+check(panel.model.labels.length === 0, 'stale millimetres were retired with the mat');
+say('');
+
+// leave a live preview on screen for the screenshot
+drawScene(6);
+panel.tick(99999);
+panel.start();
+
+say(`RESULT: ${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
+document.title = failures === 0 ? 'SCOUT HARNESS OK' : `SCOUT HARNESS ${failures} FAILED`;
+dump();
+</script>
+</body>
+</html>

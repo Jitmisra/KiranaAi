@@ -1918,11 +1918,41 @@ function boot() {
     els.chrome.dataset.conn = conn.status;
     els.chrome.dataset.camera = camera.state;
     els.chrome.dataset.panel = panel.current;
-    els.total.textContent = formatRupees(totalPaise(st));
-    const nAmber = amberLines(st).length;
-    els.amber.textContent = nAmber === 0
-      ? '' : `${nAmber} amber — excluded from the total`;
-    els.amber.hidden = nAmber === 0;
+    // WHOSE TOTAL IS ON SCREEN.
+    //
+    // The reducer owns the total when THIS page is doing the counting -- a
+    // camera is running and placements are arriving locally. When the BRAIN is
+    // driving instead (the scripted run, where the frames are synthetic and
+    // this page never saw them), the reducer has nothing to count and would
+    // show Rs.0.00 while the counter genuinely holds Rs.139.50. That is not an
+    // honest blank: it is the screen failing to show the counter's own truth,
+    // and the disagreement line at the bottom was reporting exactly that.
+    //
+    // So: render whichever side is actually counting, and SAY WHICH. This is
+    // not the dual-writer problem -- there is still exactly one writer. The
+    // brain writes, the page renders. What changed is that the page stopped
+    // insisting on its own empty number.
+    const localPaise = totalPaise(st);
+    const brainPaise = brainView && typeof brainView.total_paise === 'number'
+      ? brainView.total_paise : null;
+    const brainDriving = brainPaise !== null && localPaise === 0 && brainPaise > 0;
+
+    els.total.textContent = formatRupees(brainDriving ? brainPaise : localPaise);
+    els.total.dataset.source = brainDriving ? 'brain' : 'counter';
+    els.total.dataset.simulated = brainDriving && brainView.simulated === true
+      ? 'yes' : 'no';
+
+    const nAmber = brainDriving && typeof brainView.amber_count === 'number'
+      ? brainView.amber_count : amberLines(st).length;
+    const bits = [];
+    if (nAmber) bits.push(`${nAmber} amber — excluded from the total`);
+    if (brainDriving) {
+      bits.push(brainView.simulated === true
+        ? 'SIMULATED — scripted frames, not a camera. Nothing here is settled money.'
+        : 'counted by the brain');
+    }
+    els.amber.textContent = bits.join(' · ');
+    els.amber.hidden = bits.length === 0;
     els.lock.textContent = lock.locked ? 'MAT LOCK' : 'NO LOCK';
     els.lock.className = lock.locked ? 'lock lock-on' : 'lock lock-off';
     els.lockDetail.textContent = lock.locked
@@ -2545,15 +2575,24 @@ function boot() {
   function onBrainState(m) {
     brainView = m;
     deliverToPanel('ledger', { type: 'ledger', head: m.ledger_head, count: m.ledger_lines });
+    // Re-render: brainView feeds the total, and nothing else was going to
+    // trigger a paint. Without this the page held its own empty Rs.0.00 while
+    // the brain was reporting a real basket, and only the disagreement line at
+    // the bottom of the screen knew.
+    render();
     // Compare against OUR total, computed by the reducer from committed lines.
     // `st` is the reducer state and totalPaise() derives the total from it --
     // there is no `state.totalPaise` field, and referencing one is what threw
     // ReferenceError here on the first attempt. Same class of mistake as
     // `registeredPanels`: a name assumed rather than read.
+    // A real DISAGREEMENT is both sides having counted, differently. A local
+    // total of zero while the brain drives a scripted run is not a conflict --
+    // it is simply this page not being the one doing the counting, and warning
+    // about it made an ordinary state look like a fault for the whole run.
     const ours = totalPaise(st);
-    if (typeof m.total_paise === 'number' && m.total_paise !== ours) {
+    if (typeof m.total_paise === 'number' && ours > 0 && m.total_paise !== ours) {
       els.reason.textContent =
-        `brain total ${m.total_paise}p disagrees with counter ${ours}p`;
+        `DISAGREEMENT: brain says ${m.total_paise}p, this counter says ${ours}p`;
     }
   }
 

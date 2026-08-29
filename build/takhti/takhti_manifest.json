@@ -1,0 +1,193 @@
+{
+  "artefact": "GAWAAH TAKHTI",
+  "deterministic": true,
+  "expected": {
+    "A3": {
+      "diag_tl_br_mm": 439.32334333609,
+      "exit_line_from_top_mm": 402.0,
+      "left_edge_to_marker_mm": 12.0,
+      "marker_centres_mm": [
+        [
+          27.0,
+          27.0
+        ],
+        [
+          270.0,
+          27.0
+        ],
+        [
+          270.0,
+          393.0
+        ],
+        [
+          27.0,
+          393.0
+        ]
+      ],
+      "marker_side_mm": 30.0,
+      "placement_zone_mm": [
+        48.0,
+        114.1,
+        201.0,
+        250.9
+      ],
+      "px_h": 4961,
+      "px_w": 3508,
+      "ruler_strip_mm": 200.0,
+      "scale_patch_mm": 20.0,
+      "sheet_h_mm": 420.0,
+      "sheet_w_mm": 297.0,
+      "span_tl_bl_mm": 366.0,
+      "span_tl_tr_mm": 243.0,
+      "top_edge_to_marker_mm": 12.0,
+      "vruler_strip_mm": 70.0
+    },
+    "A4": {
+      "diag_tl_br_mm": 292.88222889072665,
+      "exit_line_from_top_mm": 276.5,
+      "left_edge_to_marker_mm": 14.0,
+      "marker_centres_mm": [
+        [
+          24.0,
+          26.5
+        ],
+        [
+          186.0,
+          26.5
+        ],
+        [
+          186.0,
+          270.5
+        ],
+        [
+          24.0,
+          270.5
+        ]
+      ],
+      "marker_side_mm": 20.0,
+      "placement_zone_mm": [
+        38.0,
+        106.6,
+        134.0,
+        142.9
+      ],
+      "px_h": 3508,
+      "px_w": 2480,
+      "ruler_strip_mm": 130.0,
+      "scale_patch_mm": 20.0,
+      "sheet_h_mm": 297.0,
+      "sheet_w_mm": 210.0,
+      "span_tl_bl_mm": 244.0,
+      "span_tl_tr_mm": 162.0,
+      "top_edge_to_marker_mm": 16.5,
+      "vruler_strip_mm": 60.0
+    },
+    "a4_scale": 0.6666666666666666,
+    "a4_scale_exact": "2/3",
+    "dpi": 300,
+    "tolerance_mm": 0.5,
+    "tolerance_pct_of_long_span": 0.1366120218579235
+  },
+  "files": {
+    "takhti_a3.pdf": {
+      "bytes": 11823,
+      "sha256": "84105f62c67db00e68e3af3148130e216ab3ea9f465ae39ac3c787727244147c"
+    },
+    "takhti_a3.png": {
+      "bytes": 93328,
+      "sha256": "cbc4233fc3a5bed3f6814463938b0fde5ea2e185d803a5bb03b63c1e28ee51f8"
+    },
+    "takhti_a4.pdf": {
+      "bytes": 10089,
+      "sha256": "44fa89d3c498bea1dd627ecda557da1c6d169e0ae77b64b79c26efa4dcf83357"
+    },
+    "takhti_a4.png": {
+      "bytes": 85748,
+      "sha256": "5cff6fe0c8cbaff993b176d362f44dd6e9ca7ad5fe49343592712b2a042f81aa"
+    },
+    "takhti_pack.pdf": {
+      "bytes": 29269,
+      "sha256": "f5185fce4a8e3ae83dccaf26b727e055ce0c0be45935df9865d614b1636352a8"
+    },
+    "takhti_verify.pdf": {
+      "bytes": 8309,
+      "sha256": "b9fb0ea7968564f17b0e73171bccea4b80381cc2295cbade82ec4b65b4f7b3f6"
+    },
+    "takhti_verify.png": {
+      "bytes": 160449,
+      "sha256": "6b06190b86692d68a9855ba6dd6a951de5d01c8de17a0b73d208adfb4491a7d9"
+    }
+  },
+  "png_px": {
+    "a3": [
+      3508,
+      4961
+    ],
+    "a4": [
+      2480,
+      3508
+    ],
+    "verify": [
+      2480,
+      3508
+    ]
+  },
+  "self_check": {
+    "a3": {
+      "error_mm": {
+        "diag_tl_br_mm": 0.00797990609748922,
+        "span_tl_bl_mm": 0.014000000000010004,
+        "span_tl_tr_mm": -0.006666666666660603
+      },
+      "expected_mm": {
+        "diag_tl_br_mm": 439.32334333609,
+        "span_tl_bl_mm": 366.0,
+        "span_tl_tr_mm": 243.0
+      },
+      "ids_found": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "locked": true,
+      "measured_mm": {
+        "diag_tl_br_mm": 439.33132324218747,
+        "span_tl_bl_mm": 366.014,
+        "span_tl_tr_mm": 242.99333333333334
+      },
+      "reason": "locked",
+      "reproj_rmse_px": 2.367739424935908e-05,
+      "scale_err": 0.0012835034472948573,
+      "worst_abs_error_mm": 0.014000000000010004
+    },
+    "a4": {
+      "error_mm": {
+        "diag_tl_br_mm": 0.036532502502495845,
+        "span_tl_bl_mm": 0.009333333333330529,
+        "span_tl_tr_mm": 0.0519999999999925
+      },
+      "expected_mm": {
+        "diag_tl_br_mm": 292.88222889072665,
+        "span_tl_bl_mm": 244.0,
+        "span_tl_tr_mm": 162.0
+      },
+      "ids_found": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "locked": true,
+      "measured_mm": {
+        "diag_tl_br_mm": 292.91876139322915,
+        "span_tl_bl_mm": 244.00933333333333,
+        "span_tl_tr_mm": 162.052
+      },
+      "reason": "locked",
+      "reproj_rmse_px": 2.367739412294728e-05,
+      "scale_err": 0.0017934415896602236,
+      "worst_abs_error_mm": 0.0519999999999925
+    }
+  }
+}

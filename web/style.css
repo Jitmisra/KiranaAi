@@ -190,20 +190,37 @@ html, body {
 @keyframes breathe { 50% { opacity: .35; } }
 
 /* =============================================================== shell ====
-   Six capabilities, one visible at a time. Selection is a radio group and
+   Nine capabilities, one visible at a time. Selection is a radio group and
    plain CSS: it works before app.js parses and it cannot be broken by a
-   module that throws on load. */
+   module that throws on load.
+
+   The rail is ordered by what a capability COSTS to use, cheapest first —
+   DEMO needs nothing, SCOUT needs a camera, CORE needs a camera and a mat,
+   ENROL needs all that plus goods — because the previous order led with CORE
+   and a visitor with neither camera nor printed mat landed on the one panel
+   that could do nothing for them. */
 
 .shell { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: var(--gap); align-items: start; }
 
 /* min-width:0 is belt-and-braces, not a fix for a live bug: measured at a
    500px viewport the page's scrollWidth already equals its clientWidth with
-   or without it, because the narrow rail sets overflow-x:auto and a grid
-   item's automatic minimum size only applies while overflow is visible.
-   It is kept so that removing that overflow declaration later cannot silently
-   let the six pills widen the column and push the page sideways. */
+   or without it. It is kept so that a later change to how the narrow rail
+   handles its own overflow cannot silently let the pills widen the column and
+   push the page sideways. */
 .rail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+/* position:relative is LOAD-BEARING and cost a real horizontal scrollbar to
+   find. .tabsel below is position:absolute with no offsets, so it renders at
+   its static position but its CONTAINING BLOCK is the nearest positioned
+   ancestor. With none, that is the initial containing block — the viewport —
+   which means the hidden radio is not clipped by any scroller and its static
+   position is free to sit outside the page. At six rail items every static
+   position still landed on screen; at nine, #tabsel-ledger's landed at
+   x=814 in a 780px viewport and dragged documentElement.scrollWidth out with
+   it, measured in headless Chrome. Making the label a containing block puts
+   the radio back inside the rail where it belongs. */
 .rail-item {
+  position: relative;
   display: flex; align-items: center; gap: 9px;
   padding: 10px 11px;
   border: 1px solid var(--line);
@@ -235,14 +252,20 @@ html, body {
 
 /* ONE attribute is the source of truth: #panel-X[data-status]. The rail dot
    reads it from here, so a panel and its dot can never disagree. */
+.shell:has(#panel-demo[data-status="ABSTAIN"])   #dot-demo,
+.shell:has(#panel-scout[data-status="ABSTAIN"])  #dot-scout,
 .shell:has(#panel-core[data-status="ABSTAIN"])   #dot-core,
+.shell:has(#panel-enrol[data-status="ABSTAIN"])  #dot-enrol,
 .shell:has(#panel-mudra[data-status="ABSTAIN"])  #dot-mudra,
 .shell:has(#panel-peel[data-status="ABSTAIN"])   #dot-peel,
 .shell:has(#panel-chilla[data-status="ABSTAIN"]) #dot-chilla,
 .shell:has(#panel-saaf[data-status="ABSTAIN"])   #dot-saaf,
 .shell:has(#panel-ledger[data-status="ABSTAIN"]) #dot-ledger { --dot: var(--amber); }
 
+.shell:has(#panel-demo[data-status="OK"])   #dot-demo,
+.shell:has(#panel-scout[data-status="OK"])  #dot-scout,
 .shell:has(#panel-core[data-status="OK"])   #dot-core,
+.shell:has(#panel-enrol[data-status="OK"])  #dot-enrol,
 .shell:has(#panel-mudra[data-status="OK"])  #dot-mudra,
 .shell:has(#panel-peel[data-status="OK"])   #dot-peel,
 .shell:has(#panel-chilla[data-status="OK"]) #dot-chilla,
@@ -252,13 +275,28 @@ html, body {
 /* --- panels -------------------------------------------------------------- */
 .stage { min-width: 0; }
 .panel { display: none; min-width: 0; }
+.shell:has(#tabsel-demo:checked)   #panel-demo,
+.shell:has(#tabsel-scout:checked)  #panel-scout,
 .shell:has(#tabsel-core:checked)   #panel-core,
+.shell:has(#tabsel-enrol:checked)  #panel-enrol,
 .shell:has(#tabsel-mudra:checked)  #panel-mudra,
 .shell:has(#tabsel-peel:checked)   #panel-peel,
 .shell:has(#tabsel-chilla:checked) #panel-chilla,
 .shell:has(#tabsel-saaf:checked)   #panel-saaf,
 .shell:has(#tabsel-ledger:checked) #panel-ledger { display: block; }
 .panel[hidden] { display: none !important; }
+
+/* #body-X is a column, and the two fixed blocks are pinned to its ends:
+   .orient first, .abstain last. Every panel module appends its render to
+   #body-X (they all do, none of them clear it), so a module lands BETWEEN
+   the orientation and the refusal without knowing either exists.
+   flex:none because a stacked preview or a tall transcript must not be
+   squashed by a sibling. */
+.panel-body { display: flex; flex-direction: column; align-items: stretch; }
+.panel-body > * { flex: none; }
+.panel-body > .simstrip { order: -3; }
+.panel-body > .orient   { order: -2; }
+.panel-body > .abstain  { order: 10; }
 
 .panel-head { display: flex; align-items: flex-start; gap: var(--gap); margin-bottom: 10px; }
 .panel-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .12em; display: flex; flex-direction: column; gap: 3px; }
@@ -279,6 +317,98 @@ html, body {
 .panel[data-status="OK"]      .panel-status::after { content: "OK"; }
 .panel[data-status="ABSTAIN"] .panel-status { --dot: var(--amber); }
 .panel[data-status="OK"]      .panel-status { --dot: var(--white); }
+
+/* --- the orientation block -----------------------------------------------
+   WHY THIS EXISTS. Every panel shipped with a large hatched I DO NOT KNOW and
+   literally nothing else. That is honest and it is also unreadable: a screen
+   whose entire content is a refusal looks BROKEN, and a user who cannot tell
+   "refusing because it does not know" from "crashed" has been told nothing.
+
+   So each panel now carries two sentences above the refusal — what the
+   capability IS, and what concrete input would make it work — and they are
+   deliberately QUIET: bordered in --line, set in the dim ink, no hatching, no
+   glow. Amber keeps its monopoly. Nothing here is allowed to compete with the
+   abstention for attention, because the abstention is still the answer; this
+   is only the label on the door. */
+.orient {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.orient p { margin: 0; max-width: 82ch; }
+.orient-is { font-size: 14px; color: var(--ink-dim); }
+.orient-is b { color: var(--ink); font-weight: 700; }
+/* doubled selector, not !important: `.orient p { margin: 0 }` above outranks a
+   bare `.orient-need` and would silently collapse the gap between the two
+   sentences into nothing. */
+.orient .orient-need { margin-top: 11px; font-size: 13px; color: var(--ink-dim); }
+.orient-need b { color: var(--ink); font-weight: 600; }
+
+/* the key is a block, not an inline pill: "WHAT WOULD MAKE THIS WORK" is a
+   heading for the sentence under it, and inline it wrapped into the prose */
+.orient-key {
+  display: block;
+  margin-bottom: 5px;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Cross-panel links are <label for="tabsel-X">, not <a href>. A label drives
+   the same radio the rail does, so the link keeps working with JS disabled,
+   cannot fight app.js's router, and cannot leave a stale #hash pinning the
+   stage to one panel. Keyboard users reach the same panels through the rail's
+   radio group, which is focusable and arrow-navigable. */
+.golink {
+  display: inline;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 1px dashed color-mix(in srgb, var(--ink) 45%, transparent);
+  -webkit-tap-highlight-color: transparent;
+}
+.golink::after { content: " \2192"; opacity: .55; }
+.golink:hover { color: #fff; border-bottom-color: var(--ink); }
+.golink:active { opacity: .7; }
+
+/* the gate's own escape hatch, for the visitor with no camera at all */
+.golink-lg { font-size: 14px; color: var(--ink-dim); border-bottom-color: var(--ink-faint); }
+.golink-lg:hover { color: var(--ink); }
+
+/* --- simulation, invariant 7 ---------------------------------------------
+   Anything manufactured on this machine says so, on screen, for as long as it
+   is on screen. YELLOW: not amber, because this is not a refusal, and not
+   green, because green is a settled session and a synthetic byte may never
+   come near it. */
+.simbadge {
+  display: inline-block;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .18em;
+  color: #0b0d11;
+  background: var(--yellow);
+  padding: 4px 7px;
+  border-radius: 5px;
+  margin-right: 8px;
+  vertical-align: 1px;
+}
+/* full-bleed box, measured text inside it — same shape as .abstain, so the
+   three blocks in a panel line up on the right edge instead of stair-stepping */
+.simstrip {
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 55%, var(--line));
+  border-radius: var(--radius);
+  background:
+    repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--yellow) 7%, transparent) 0 7px,
+      transparent 7px 14px),
+    var(--panel);
+}
+.simstrip p { margin: 0; max-width: 82ch; font-size: 13px; color: color-mix(in srgb, var(--yellow) 45%, var(--ink)); }
+.simstrip b { color: var(--yellow); }
 
 /* --- the abstention block, which every panel ships with -------------------
    Same hatching as an amber line, because it is the same statement: this is
@@ -429,7 +559,12 @@ html, body {
 /* ---------------------------------------------------- narrow ------------ */
 @media (max-width: 860px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
-  .rail { flex-direction: row; overflow-x: auto; gap: 6px; padding-bottom: 4px; scrollbar-width: thin; }
+  /* WRAP, never scroll. This used to be overflow-x:auto, which was fine for
+     six pills and is not fine for nine: at nine the row is wider than any
+     phone and LEDGER sits behind a sideways swipe nobody standing at a
+     counter will discover. Wrapping keeps every capability on screen, which
+     is the same argument the 620px block below already made. */
+  .rail { flex-direction: row; flex-wrap: wrap; gap: 6px; padding-bottom: 4px; }
   .rail-item { flex: 0 0 auto; }
   .rail-item:has(.tabsel:checked) { box-shadow: inset 0 -3px 0 var(--ink); }
 }
@@ -440,11 +575,11 @@ html, body {
   .rail-text i { display: none; }
   .camgate-title { font-size: 18px; }
   .btn-start { width: 100%; }
-  /* On a phone the six pills cannot fit one row, and a rail that scrolls
-     hides LEDGER behind a gesture nobody at a counter will discover. Wrap to
-     two rows instead: every capability stays on screen and reachable. */
-  .rail { flex-wrap: wrap; overflow-x: visible; }
+  /* the pills already wrap from 860px down; here they also stretch to fill
+     their row, so nine of them read as a keypad rather than a ragged list */
   .rail-item { flex: 1 0 auto; justify-content: center; padding: 9px 10px; }
+  .orient { padding: 11px 12px; }
+  .golink-lg { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
