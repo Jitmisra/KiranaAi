@@ -98,3 +98,27 @@ The rescue spec lists three build traps. I ran all three against the actual inst
 Exactly inverted. A module that registers frames with AKAZE works in the browser and **crashes on the brain**; one that uses SIFT does the reverse.
 
 **Design consequence: ORB is the only descriptor present in both, so ORB is mandatory for any registration code that must run on both sides.** This also corrects the earlier record — I previously noted "AKAZE present, prior research was right", which was true *for the JS 4.11.0 wasm only*. It is false for the Python build we actually run the brain on. Both facts are needed; neither alone is safe to design from.
+
+---
+
+## 2026-08-29 — G0/G1/G2 PASS · the money path is real, not simulated
+
+Run: `./.venv/bin/python tools/rzp_setup.py` against live Razorpay **test mode**.
+
+| Gate | Result |
+|---|---|
+| G0 authenticate | HTTP 200 |
+| **G1 mint a UPI Payment Link in test mode** | **HTTP 200**, `plink_TVSsfYMLbBsxi5`, `https://rzp.io/rzp/CxbtXQE` |
+| G1 amount round-trip | **21437 paise asked, 21437 returned** |
+| **G1 `notes.session_id` survives** | **YES** |
+| G2 HMAC over raw bytes | round-trips; a single flipped byte changes the signature |
+
+**Why G1 was the project's biggest risk.** One research pass asserted that Payment Links are capped at 30 per business in test mode and that UPI Payment Links are unsupported there — while the entire money path assumes they work. Rather than resolve a documentation conflict with more reading, this was settled against the live API. **Payment Links mint fine in test mode.** No fallback to `qr_codes`, no activation request.
+
+**The finding that actually mattered: `notes.session_id` propagates.** Razorpay's docs never state that Payment Link `notes` reach the payment entity — they point at `reference_id` for reconciliation instead. Condition 3 of our four-part green predicate is *"`notes.session_id` names an OPEN intent"*. Had it not survived, the green rule was broken and we would have had to re-bind to `reference_id` **on day 0 rather than discovering it on day 6**. It survived, verified end to end.
+
+**Odd paise round-trip exactly**, which validates the CHILLAR design: a per-session nonce in the last two paise makes the amount an exact primary key against the mirror, deleting the RRN/UTR join problem instead of solving it.
+
+**`upi_link: False`** — expected. That flag is Live-Mode and Android only; nothing depends on it, and a standard link returns the same `short_url`.
+
+**Two failures on the way in, both recorded because they cost real minutes.** The first secret paste never reached `.env` (file mtime unchanged — it went into the chat window instead). The second landed at **11 characters against an expected 24** — truncated by hand-selection or shell quoting. Both were caught by printing *character counts only*, never values. The setup tool masks key ids, reports secrets as `present, N chars`, and **refuses to run against any key id not starting `rzp_test_`**, so it structurally cannot touch a live key.
