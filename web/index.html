@@ -7,8 +7,54 @@
 <meta name="referrer" content="no-referrer">
 <!-- The phone talks to one origin: the brain on the LAN. No cloud, no CDN, no
      model weights. Everything this page loads is served from beside it. -->
+<!-- CSP notes, both learned the hard way from a real browser console:
+
+     'unsafe-eval' is REQUIRED, and this is a deliberate, measured concession.
+
+     Plain `script-src 'self'` blocks WebAssembly.instantiate outright, so
+     opencv.js calls abort(), geometry never becomes available, and the mat can
+     never lock no matter what the camera sees.
+
+     'wasm-unsafe-eval' alone is NOT enough, which we established in a browser
+     rather than by reading the spec (web/cvprobe3.js, external script so it
+     runs under this very policy). The module promise rejects with:
+       EvalError: Evaluating a string as JavaScript violates the following
+       Content Security Policy directive ... script-src 'self' 'wasm-unsafe-eval'
+     Emscripten does not only compile wasm; it also evaluates a JS string for
+     dynamic function generation. 'wasm-unsafe-eval' permits the first and not
+     the second.
+
+     WHAT MAKES THIS ACCEPTABLE HERE, and it is not general absolution:
+       - default-src is 'none' and every other directive is 'self'. There is NO
+         external origin this page may contact, so there is no attacker-supplied
+         string for eval to reach in the first place.
+       - the only script that evals is a vendored, byte-pinned artefact
+         (11,386,540 bytes, @techstark/opencv-js@4.11.0-release.1) served from
+         beside this file, never a CDN.
+       - the page takes no user-authored text into any code path.
+     The residual risk is that a compromise of the vendored file becomes code
+     execution. That is already true of any script tag; 'unsafe-eval' does not
+     widen it. It would be wrong to claim this costs nothing, so: it costs the
+     eval defence-in-depth layer, and we accept that to keep geometry on-device.
+
+     The alternative -- moving rectification to the brain -- would send UNMASKED
+     frames off the phone and break INVARIANT 4, which is a far worse trade.
+
+     connect-src stays at 'self' and the SOCKET moved instead. It used to name
+     one literal host, so opening the page on the loopback IP rather than the
+     name localhost -- a different origin to the browser -- had its WebSocket
+     blocked, which is why the banner sat on "AMBER PENDING - connecting to the
+     brain". Widening this directive with a wildcard host fixes that and is
+     WRONG: selftest 13 rejects it, because a wildcard would let this page reach
+     any host at all. WS_URL now derives from location.host instead, so
+     same-origin covers every case: the name, the loopback IP, and a phone on
+     the LAN.
+
+     Everything else stays at 'none'/'self': no CDN can be reached, so
+     INVARIANT 3 (zero model weights in the browser) is enforced by the browser
+     itself and not merely by our good intentions. -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' ws://localhost:8787; base-uri 'none'; form-action 'none'">
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <title>GAWAAH — counter</title>
 <link rel="stylesheet" href="./style.css">
 </head>

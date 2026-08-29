@@ -1786,7 +1786,25 @@ export function bannerText(cs, queued = 0) {
 // ===========================================================================
 export const OPENCV_PATH = './vendor/opencv.js';
 export const WS_PORT = 8787;
-export const WS_URL = 'ws://localhost:8787';
+/**
+ * The brain socket, derived from the page's OWN origin.
+ *
+ * This was hardcoded to ws://localhost:8787, which broke two real cases and
+ * tempted a bad fix. Opening the page on the loopback IP rather than the name
+ * localhost is a DIFFERENT origin to the browser, so the socket was blocked by
+ * connect-src; and a phone reaching the brain over the LAN by IP never says
+ * localhost at all.
+ *
+ * The tempting fix was a wildcard host in connect-src. Selftest 13 rejected
+ * that, correctly: a wildcard would let the client reach ANY host, which
+ * is precisely the guarantee that keeps a model weight off this page
+ * (INVARIANT 3). Deriving from location.host keeps CSP at 'self' and makes the
+ * socket work on localhost, on 127.0.0.1 and on a phone over the LAN, with no
+ * external origin permitted anywhere.
+ */
+export const WS_URL = (typeof location !== 'undefined' && location.host)
+  ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
+  : 'ws://localhost:8787';
 
 /**
  * The brain address. The counter talks to exactly one origin: the machine that
@@ -1812,12 +1830,31 @@ function loadOpenCV(path = OPENCV_PATH) {
     s.async = true;
     s.onerror = () => resolve({ ok: false, reason: Reason.OPENCV_ABSENT });
     s.onload = () => {
-      const cv = globalThis.cv;
-      if (!cv) return resolve({ ok: false, reason: Reason.OPENCV_ABSENT });
-      const ready = () => (cv.aruco_ArucoDetector || cv.ArucoDetector
+      const loaded = globalThis.cv;
+      if (!loaded) return resolve({ ok: false, reason: Reason.OPENCV_ABSENT });
+
+      const ready = (cv) => (cv && (cv.aruco_ArucoDetector || cv.ArucoDetector)
         ? resolve({ ok: true, cv })
         : resolve({ ok: false, reason: 'opencv_build_lacks_aruco' }));
-      if (cv.getBuildInformation) ready(); else cv.onRuntimeInitialized = ready;
+
+      // @techstark/opencv-js@4.11 resolves as a PROMISE, not a ready module.
+      // Measured in web/cvprobe.html: onload fires at 0.11s with
+      // typeof cv === 'object', getBuildInformation undefined, and cv.then a
+      // function; awaiting it yields the real module at 1.00s.
+      //
+      // The previous code checked getBuildInformation, found it undefined, and
+      // fell through to `cv.onRuntimeInitialized = ready` -- a callback a
+      // Promise never invokes. So the load hung forever on "loading vendored
+      // OpenCV…", geometry stayed unavailable, and the mat could never lock.
+      // A hang is worse than a failure here: OPENCV_ABSENT is at least an
+      // honest state the UI can show, and this reached neither.
+      if (typeof loaded.then === 'function') {
+        loaded.then((mod) => { globalThis.cv = mod; ready(mod); },
+                    () => resolve({ ok: false, reason: Reason.OPENCV_ABSENT }));
+        return;
+      }
+      if (loaded.getBuildInformation) return ready(loaded);
+      loaded.onRuntimeInitialized = () => ready(globalThis.cv);
     };
     document.head.appendChild(s);
   });
@@ -2462,6 +2499,44 @@ function boot() {
     applyPanelVisibility();
   }
 
+
+  /** Route a capability message to whichever panel registered for it. */
+  let brainView = null;
+
+  function deliverToPanel(id, msg) {
+    const p = registeredPanels && registeredPanels[id];
+    if (p && typeof p.onState === 'function') {
+      try { p.onState(msg); }
+      catch (e) {
+        // A panel that throws must name itself rather than taking the app down.
+        els.reason.textContent = `panel ${id} failed: ${e && e.message}`;
+      }
+    }
+  }
+
+  /**
+   * Record the brain's view of the session WITHOUT writing it into the billing
+   * reducer.
+   *
+   * The first version dispatched {type:'BRAIN_STATE'}, and the reducer refused
+   * it as unknown_action_BRAIN_STATE -- correctly, and the refusal is the
+   * reason this is now written differently rather than the reason an arm was
+   * added. Feeding brain state into the same reducer that owns the local basket
+   * would give the total TWO writers, and a money value with two writers has no
+   * authority at all. The reducer owns what this counter believes; the brain's
+   * view is displayed beside it, and any disagreement is a visible exception
+   * rather than a silent overwrite.
+   */
+  function onBrainState(m) {
+    brainView = m;
+    deliverToPanel('ledger', { type: 'ledger', head: m.ledger_head, count: m.ledger_lines });
+    if (typeof m.total_paise === 'number' && typeof state.totalPaise === 'number'
+        && m.total_paise !== state.totalPaise) {
+      els.reason.textContent =
+        `brain total ${m.total_paise}p disagrees with counter ${state.totalPaise}p`;
+    }
+  }
+
   function onBrainMessage(m) {
     switch (m.type) {
       case 'placement':
@@ -2474,6 +2549,41 @@ function boot() {
       case 'exit': dispatch({ type: 'EXIT', itemId: m.itemId ?? null, tap: m.tap === true }); break;
       case 'revert': dispatch({ type: 'REVERT', itemId: m.itemId }); break;
       case 'verdict': dispatch({ type: 'WEBHOOK', verdict: m.verdict }); break;
+
+      // Panel feeds. The brain emits one message per capability; each is routed
+      // to the panel that owns it and NEVER to the billing reducer -- none of
+      // these may move money, which is why they do not dispatch().
+      //
+      // These were previously hitting `default` and being discarded with
+      // "ignored unknown brain message", so every panel except CORE stayed
+      // empty while the brain was faithfully sending it data. The abstention
+      // was working exactly as designed and telling us so on screen; we just
+      // had not written the arms.
+      case 'mudra':
+      case 'peel':
+      case 'chilla':
+      case 'saaf':
+      case 'ledger':
+        deliverToPanel(m.type, m);
+        break;
+
+      // Brain-side session truth. `state` carries the authoritative session,
+      // total and amber set; the client renders it rather than recomputing.
+      case 'state': onBrainState(m); break;
+
+      // Housekeeping the client does not need to act on, but must not shout
+      // about either -- a keepalive is not an anomaly.
+      case 'keepalive':
+      case 'panel':
+      case 'refresh':
+        break;
+
+      // The brain refused something. This is a first-class outcome, not noise.
+      case 'refused':
+        els.reason.textContent =
+          `brain refused: ${m.reason || 'no reason given'}`;
+        break;
+
       default:
         // Unknown message types are abstained on loudly, never guessed at.
         els.reason.textContent = `ignored unknown brain message '${m.type}'`;
@@ -2566,9 +2676,22 @@ function boot() {
   });
 
   function makeDetector(cvv) {
-    const dict = cvv.getPredefinedDictionaryImpl
-      ? cvv.getPredefinedDictionaryImpl(cvv.DICT_4X4_50)
-      : new cvv.aruco_Dictionary(cvv.DICT_4X4_50);
+    // getPredefinedDictionary is THE api. Verified in a browser against the
+    // pinned 4.11.0 build (web/aprobe.js):
+    //   getPredefinedDictionary      = function   -> returns an aruco_Dictionary
+    //   getPredefinedDictionaryImpl  = undefined  <- the old first branch
+    //   DICT_4X4_50                  = 0
+    // The old code probed for ...Impl, found it undefined, and fell through to
+    // `new aruco_Dictionary(DICT)`, whose binding takes 0 or 3 arguments and
+    // NOT 1, so it threw:
+    //   BindingError: Tried to invoke ctor of aruco_Dictionary with invalid
+    //   number of parameters (1) - expected (0,3) parameters instead!
+    // OpenCV had loaded fine by then; the mat could still never lock, because
+    // the detector was never constructed.
+    if (typeof cvv.getPredefinedDictionary !== 'function') {
+      throw new Error('opencv_build_lacks_getPredefinedDictionary');
+    }
+    const dict = cvv.getPredefinedDictionary(cvv.DICT_4X4_50);
     const params = new cvv.aruco_DetectorParameters();
     params.cornerRefinementMethod = 1;   // CORNER_REFINE_SUBPIX, as in takhti.py
     const det = new cvv.aruco_ArucoDetector(dict, params, new cvv.aruco_RefineParameters(10, 3, true));

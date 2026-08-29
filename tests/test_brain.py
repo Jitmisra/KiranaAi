@@ -1076,37 +1076,54 @@ def test_websocket_sends_brain_state_as_json(tmp_path):
 def test_websocket_is_served_where_the_pwa_actually_dials(tmp_path):
     """The counter and its screen have to meet at the same URL.
 
-    `web/app.js` declares `WS_URL = 'ws://localhost:8787'` — the ROOT path. The
-    server mounted only `/ws`, so every other WebSocket test in this file passed
-    while the shipped PWA could not connect at all: a brain that streams
-    perfectly to a client nobody ships. That is the islands-never-touch failure
-    in miniature, and no test that picks its own path can catch it, so this one
-    reads the constant out of app.js and dials exactly that.
-    """
-    from urllib.parse import urlsplit
+    ORIGINAL FAILURE this guards: the server mounted only `/ws` while the PWA
+    dialled the ROOT, so every other WebSocket test here passed and the shipped
+    client could not connect at all -- a brain streaming perfectly to a client
+    nobody ships. No test that picks its own path can catch that.
 
+    UPDATED 2026-08-29: `WS_URL` used to be the literal 'ws://localhost:8787',
+    and this test read that string out of the source. That literal was itself a
+    bug -- opening the page on the loopback IP is a DIFFERENT origin, so CSP
+    blocked the socket, and a phone on the LAN never says "localhost" at all.
+    WS_URL now derives from `location.host`, i.e. the page's own origin, so the
+    invariant to assert is:
+
+        (a) the client dials its OWN ORIGIN and no hardcoded host, and
+        (b) the server serves a WebSocket at the ROOT path.
+
+    Assert both, because either alone lets the islands drift apart again.
+    """
     from fastapi.testclient import TestClient
 
-    app_js = Path(__file__).resolve().parent.parent / "web" / "app.js"
-    source = app_js.read_text(encoding="utf-8")
-    match = re.search(r"WS_URL\s*=\s*['\"]([^'\"]+)['\"]", source)
-    assert match, "web/app.js no longer declares WS_URL; this test must follow it"
-    url = urlsplit(match.group(1))
-    assert url.port == DEFAULT_PORT, (
-        f"the PWA dials port {url.port}, the brain serves {DEFAULT_PORT}"
+    app_js = (Path(__file__).resolve().parent.parent / "web" / "app.js").read_text(
+        encoding="utf-8"
     )
-    path = url.path or "/"
+    decl = re.search(r"export const WS_URL\s*=\s*(.+?);\s*\n", app_js, re.S)
+    assert decl, "web/app.js no longer declares WS_URL; this test must follow it"
+    expr = decl.group(1)
 
-    rig = _ws_rig(tmp_path)
-    try:
-        client = TestClient(create_app(rig.brain))
-        for dialled in {path, "/ws"}:
-            with client.websocket_connect(dialled) as socket:
-                first = socket.receive_json()
-                assert first["session_id"] == rig.brain.state().session_id, dialled
-    finally:
-        rig.close()
+    # (a) derives from the page origin, and names no host of its own
+    assert "location.host" in expr, (
+        "WS_URL must derive from location.host so it works on localhost, on the "
+        f"loopback IP and on a phone over the LAN alike. Got: {expr[:120]}"
+    )
+    hardcoded = re.findall(r"wss?://(?!\$\{)[A-Za-z0-9.\-*]+", expr)
+    assert hardcoded in ([], ["ws://localhost"]), (
+        f"WS_URL hardcodes a host, which is what broke it before: {hardcoded}"
+    )
 
+    # (b) the ROOT path is mounted as a WebSocket route at all. Asserted
+    # against the route table rather than by opening a socket, because
+    # test_websocket_root_path_is_served already drives a real connection and
+    # duplicating its rig here would test the rig, not the invariant.
+    app = create_app(_ws_rig(tmp_path).brain)
+    ws_paths = {
+        r.path for r in app.routes
+        if r.__class__.__name__ == "APIWebSocketRoute"
+    }
+    assert "/" in ws_paths, (
+        f"the PWA dials its own origin ROOT; websocket routes are {ws_paths}"
+    )
 
 def test_websocket_streams_a_whole_sale_and_ends_on_PAID(tmp_path):
     from fastapi.testclient import TestClient

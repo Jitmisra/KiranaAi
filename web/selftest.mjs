@@ -1547,7 +1547,16 @@ function makeCvStub(quadsById) {
     Size: class { constructor(w, h) { this.w = w; this.h = h; } },
     Scalar: class { },
     getBuildInformation: () => 'stub build',
-    getPredefinedDictionaryImpl: () => ({}),
+    // The REAL 4.11.0 build exposes getPredefinedDictionary and does NOT expose
+    // getPredefinedDictionaryImpl. This stub used to provide only the latter --
+    // i.e. it mirrored the implementation's mistake -- so all 291 selftests
+    // passed green while a real browser threw:
+    //   BindingError: Tried to invoke ctor of aruco_Dictionary with invalid
+    //   number of parameters (1) - expected (0,3) parameters instead!
+    // A test double built to match the code instead of the library can never
+    // catch the code being wrong about the library. Verified in-browser with
+    // web/aprobe.js before changing this.
+    getPredefinedDictionary: (which) => ({ stub: 'aruco_Dictionary', which }),
     aruco_DetectorParameters: class { constructor() { this.cornerRefinementMethod = 0; } },
     aruco_RefineParameters: class { constructor(a, b, c) { this.a = a; this.b = b; this.c = c; } },
     aruco_ArucoDetector: class {
