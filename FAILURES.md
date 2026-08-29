@@ -122,3 +122,58 @@ Run: `./.venv/bin/python tools/rzp_setup.py` against live Razorpay **test mode**
 **`upi_link: False`** — expected. That flag is Live-Mode and Android only; nothing depends on it, and a standard link returns the same `short_url`.
 
 **Two failures on the way in, both recorded because they cost real minutes.** The first secret paste never reached `.env` (file mtime unchanged — it went into the chat window instead). The second landed at **11 characters against an expected 24** — truncated by hand-selection or shell quoting. Both were caught by printing *character counts only*, never values. The setup tool masks key ids, reports secrets as `present, N chars`, and **refuses to run against any key id not starting `rzp_test_`**, so it structurally cannot touch a live key.
+
+---
+
+## 2026-08-29 — FIRST REAL RUPEE. Live gateway, live webhook, green off a signed delivery.
+
+`session counter_live_4` reached **PAID** on a genuine Razorpay `payment_link.paid`
+webhook: `total_paise 6900`, `authorised_paise 6900`, 62 ledger lines.
+
+**The result that matters:** the server committed **4** crossings and priced **3**.
+`unknown_sachet` crossed the exit line, was counted as having left, and was
+**excluded from the total** because the price book could not price it. ₹69.00 =
+2000 + 3500 + 1400. Invariant 7 held on real money: it counted an item it could
+not name, and refused to charge for it.
+
+### Three refusals on the way, each one the system working
+
+1. **`homography_rejected`** — the first `/intent` was refused because the submitted
+   corners did not land on the printed marker centres under the submitted H
+   (68 px out against an 8 px budget). paisa re-derives the geometry; it does not
+   rubber-stamp the phone's claim. That is invariant 5.
+2. **`zero_total`** — the second was refused with *"every committed line abstained
+   (1 amber); there is nothing to charge for"*, because no SKU was enrolled yet.
+   It would not invent a price.
+3. **`unknown_session`** — the very first real webhook (for a link minted by a probe
+   script rather than through `/intent`) verified its HMAC, matched the green event
+   set, and was then **refused on condition 3**: no open intent named it. Razorpay
+   said the money arrived. GAWAAH declined to claim it. That is the four-part
+   predicate doing exactly its job.
+
+### Two mistakes of mine, recorded because both were instructive
+
+**I misdiagnosed the `Gateway` Protocol as lying about its contract.** My live adapter
+raised `TypeError` because paisa passes `reference_id`, `description` and `idempotent`
+that my narrow signature did not accept. I inspected the Protocol with an AST walk
+that printed only positional arguments and **silently dropped `**kwargs`** — the
+Protocol is `create_payment_link(self, amount_paise, notes, **kwargs)` and was correct
+all along. The tooling was wrong and I blamed the code. The adapter now names the real
+fields rather than swallowing them, which is still the better design, but the
+diagnosis was mine to own.
+
+**The 502 that exposed it was the kernel behaving correctly.** A `TypeError` mid-call
+is an *indeterminate* outcome, so paisa parked the intent as `INDETERMINATE` for
+reconciliation instead of retrying. An unknown gateway outcome never became a second
+charge, under a failure I caused by accident.
+
+### Two operational notes
+
+- **cloudflared could not establish a QUIC connection** on this network (`failed to
+  dial to edge with quic: timeout`). `--protocol http2` connected on the first try.
+- `paisa` refuses to start in live mode without an injected gateway, so
+  `gawaah/rzp_live.py` + `gawaah/live_app.py` are the only files that can reach the
+  real API. `RazorpayLive` refuses any key id not starting `rzp_test_` unless
+  `GAWAAH_ALLOW_LIVE_KEYS=yes-i-mean-it`, so this build structurally cannot move
+  real money. `reference_id` carries the kernel nonce, so Razorpay itself rejects a
+  duplicate mint for one basket — exactly-once reaching the gateway.
