@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <!-- The paper ground (--surface-2), so the phone's own chrome matches the page. -->
+    <meta name="theme-color" content="#F7F5F0" />
+    <title>GAWAAH · गवाह</title>
+    <meta name="description" content="A camera-native kirana counter. It reads printed codes, prices them, and settles with a real payment link." />
+    <meta name="application-name" content="GAWAAH" />
+
+    <!-- The witness's eye, on an indigo square: the same glyph the bar wears.
+         An SVG data URI needs no file and no second request, and the CSP's
+         img-src permits data:. -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1' y='1' width='22' height='22' rx='6.5' fill='%234038BE'/><circle cx='12' cy='12' r='5.6' fill='none' stroke='%23FFFFFF' stroke-width='1.9'/><circle cx='12' cy='12' r='1.9' fill='%23FFFFFF'/></svg>" />
+
+    <!-- INSTALL TO A PHONE. iOS reads these three and ignores a manifest, and it
+         wants a raster icon, so a 180px PNG is rendered once and inlined: the
+         page must not depend on a file the till does not serve. A web app
+         manifest for Android is NOT linked here on purpose: the till's CSP is
+         default-src 'self', which governs manifest-src, so a data: manifest is
+         refused and logs a console error — and a console error fails the e2e
+         suite. See the redesign report for the one-file wiring that adds it. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="GAWAAH" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,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" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

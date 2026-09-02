@@ -1,0 +1,325 @@
+/* ===========================================================================
+   GAWAAH — the command palette (KHOJ).
+
+   Everything here is prefixed `pal-` and is imported by exactly one component.
+   No literal colour: every value is a token from tokens.css.
+
+   THE COLOUR RULE, KEPT. Blue is the machine's own mark — the selected row,
+   the letters that matched, the glyph beside a result. Amber appears in two
+   places only, and both mean the answer is SHORT: a source that could not be
+   read, and a refusal the server named. Nothing in this file is green. On this
+   product a green thing means a payment settled, and a search result is not a
+   payment.
+
+   THE SHAPE. A box near the top of the window on a desktop, because the eye
+   is already up there and a list that grows downwards from a fixed input does
+   not move the thing you are reading. On a phone it is the whole screen: a
+   centred box at 390 px is a box with no room either side of it, and the
+   keyboard would take what is left.
+   =========================================================================== */
+
+.pal-scrim {
+  position: fixed; inset: 0;
+  /* Above a dialog (--z-modal, 100) and below the notices (--z-toast, 120):
+     the palette covers the page, and a notice about something that just
+     happened is still worth seeing over it. It is a literal because tokens.css
+     is not this component's file to edit — it belongs there as --z-palette. */
+  z-index: 118;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 9vh var(--s5) var(--s5);
+  /* The softer of the two washes, not the dialog's. A palette is a way THROUGH
+     the page rather than a stop in front of it, and the screen underneath being
+     legible is what tells a shopkeeper where escape puts them back. */
+  background: var(--scrim);
+  animation: palScrimIn var(--fast) var(--ease) both;
+}
+@keyframes palScrimIn { from { opacity: 0; } to { opacity: 1; } }
+
+.pal {
+  display: flex; flex-direction: column; min-height: 0;
+  width: min(680px, 100%); max-height: min(74vh, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-4);
+  overflow: hidden;
+  animation: palIn var(--med) var(--ease-out) both;
+}
+@keyframes palIn {
+  from { opacity: 0; transform: translateY(-6px) scale(.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.pal-head {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: 0 var(--s4); height: 58px; flex: none;
+  border-bottom: 1px solid var(--line);
+}
+.pal-mag { flex: none; display: inline-grid; place-items: center; color: var(--ink-4); }
+
+.pal-inp {
+  flex: 1; min-width: 0;
+  appearance: none; border: 0; background: transparent; outline: none;
+  /* 16px, and not a step smaller: anything under it makes iOS zoom the whole
+     page the moment the field is focused, and the palette is then off-centre. */
+  font: 400 var(--t-lead)/1.4 var(--font);
+  color: var(--ink); letter-spacing: var(--tr-tight);
+  padding: 0;
+}
+.pal-inp::placeholder { color: var(--ink-5); letter-spacing: var(--tr-flat); }
+.pal-inp:focus-visible { outline: none; box-shadow: none; }
+
+.pal-clear {
+  appearance: none; border: 0; background: var(--surface-3); cursor: pointer;
+  flex: none; width: 22px; height: 22px; border-radius: var(--r-full);
+  display: inline-grid; place-items: center; color: var(--ink-3);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.pal-clear:hover { background: var(--surface-4); color: var(--ink); }
+
+.pal-close {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  flex: none; padding: 0; display: inline-grid; place-items: center;
+  color: var(--ink-3);
+}
+.pal-close-w { display: none; }
+.pal-close kbd, .pal-keys kbd, .pal-btn-k {
+  font: 600 var(--t-micro)/1 var(--mono);
+  color: var(--ink-3); background: var(--surface-2);
+  border: 1px solid var(--line-2); border-bottom-width: 2px;
+  border-radius: var(--r-xs); padding: 3px 5px;
+}
+.pal-close:hover kbd { color: var(--ink); border-color: var(--line-3); }
+
+/* ----------------------------------------------------------------- kinds --
+   A scrolling row rather than a wrapping one: six filters wrapped onto two
+   lines at 390 px push the first result off the screen, and the first result
+   is the whole point of the box. */
+
+.pal-kinds {
+  display: flex; gap: 6px; flex: none;
+  padding: var(--s3) var(--s4);
+  overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.pal-kinds::-webkit-scrollbar { display: none; }
+
+.pal-kind {
+  appearance: none; cursor: pointer; flex: none; white-space: nowrap;
+  height: var(--ctl-h-sm); padding: 0 var(--s3);
+  border: 1px solid var(--line-2); border-radius: var(--r-full);
+  background: var(--surface); color: var(--ink-2);
+  font: 600 var(--t-small)/1 var(--font);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.pal-kind:hover { border-color: var(--line-3); color: var(--ink); }
+.pal-kind[aria-pressed='true'] {
+  background: var(--blue-050); border-color: var(--blue-200); color: var(--blue-700);
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+.pal-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: var(--s2) var(--s2) var(--s3);
+  overscroll-behavior: contain;
+}
+.pal-block { padding: var(--s3) var(--s3) var(--s2); }
+
+.pal-group { padding-top: var(--s1); }
+
+.pal-group-h {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s3) var(--s3) 6px;
+  background: var(--surface);
+}
+.pal-group-n {
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.pal-group-line { flex: 1; height: 1px; background: var(--line); min-width: var(--s3); }
+
+.pal-forget {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  flex: none; padding: 0 2px; color: var(--ink-3);
+  font: 600 var(--t-micro)/1 var(--font); letter-spacing: var(--tr-flat);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pal-forget:hover { color: var(--ink); }
+
+/* -------------------------------------------------------------------- row -- */
+
+.pal-opt {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  /* The selected row is marked with a blue bar drawn INSIDE the row's own box,
+     so nothing on the list moves sideways as the selection walks down it. */
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: background var(--xfast) var(--ease);
+}
+.pal-opt[aria-selected='true'] {
+  background: var(--blue-050);
+  box-shadow: inset 2px 0 0 0 var(--blue-500);
+}
+
+.pal-m {
+  flex: none; width: 28px; height: 28px; border-radius: var(--r-sm);
+  display: inline-grid; place-items: center;
+  background: var(--surface-3); color: var(--ink-3);
+  transition: background var(--xfast) var(--ease), color var(--xfast) var(--ease);
+}
+.pal-opt[aria-selected='true'] .pal-m { background: var(--blue-100); color: var(--blue-700); }
+
+.pal-t { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pal-title {
+  font: 600 var(--t-body)/1.35 var(--font);
+  color: var(--ink); letter-spacing: var(--tr-tight);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pal-sub {
+  font-size: var(--t-small); color: var(--ink-3); line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The letters that matched. `mark` has a yellow default in every browser and
+   yellow is not in this palette; it is reset to the machine's own blue. */
+.pal-title mark, .pal-sub mark {
+  background: var(--blue-100); color: var(--blue-800);
+  border-radius: 3px; padding: 0 1px; font-weight: 700;
+}
+.pal-sub mark { font-weight: 600; }
+
+.pal-r {
+  flex: none; font-size: var(--t-micro); color: var(--ink-4);
+  white-space: nowrap; max-width: 12ch; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------- loading --
+   Rows at the height of the rows that are coming, so nothing on the list
+   jumps when they land. `.skel` is the app's own shimmer, borrowed rather
+   than redrawn. */
+
+.pal-skels { padding: var(--s2) var(--s3); display: flex; flex-direction: column; gap: var(--s3); }
+.pal-skel { display: flex; align-items: center; gap: var(--s3); min-height: 40px; }
+.pal-skel-m { width: 28px; height: 28px; border-radius: var(--r-sm); flex: none; }
+.pal-skel-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.pal-skel-t .skel { height: 10px; border-radius: var(--r-full); }
+
+/* ------------------------------------------------- a short answer, named -- */
+
+.pal-warn {
+  display: flex; gap: var(--s2); align-items: flex-start;
+  margin: var(--s2) var(--s3);
+  padding: var(--s3);
+  background: var(--amber-bg); border: 1px solid var(--amber-line);
+  border-radius: var(--r-md);
+  color: var(--amber);
+}
+.pal-warn-i { flex: none; display: inline-grid; place-items: center; margin-top: 1px; }
+.pal-warn-t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pal-warn-t b { font-size: var(--t-small); font-weight: 700; }
+.pal-warn-l { font-size: var(--t-micro); line-height: 1.5; color: var(--ink-2); }
+
+/* ------------------------------------------------ nothing found, and why -- */
+
+.pal-notlist, .pal-note {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: var(--s3); text-align: left;
+  font-size: var(--t-micro); color: var(--ink-3); line-height: 1.55;
+}
+.pal-notlist b {
+  font-size: var(--t-micro); font-weight: 700; color: var(--ink-2);
+  text-transform: uppercase; letter-spacing: var(--tr-caps);
+}
+
+/* How many matches did not fit. A line on the list, not a badge. */
+.pal-more {
+  margin: var(--s2) var(--s3) 0; padding: var(--s2) 0 0;
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5;
+}
+
+/* A footnote under a list that IS showing rows: what is missing from it. */
+.pal-notes {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: var(--s3) var(--s3) 0; padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.55;
+}
+
+/* ------------------------------------------------------------------ foot -- */
+
+.pal-foot {
+  display: flex; align-items: center; gap: var(--s3); flex: none;
+  padding: var(--s2) var(--s4); min-height: 38px;
+  border-top: 1px solid var(--line); background: var(--surface-2);
+}
+.pal-why {
+  flex: 1; min-width: 0;
+  font-size: var(--t-micro); color: var(--ink-3); line-height: 1.45;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pal-keys { flex: none; display: flex; align-items: center; gap: 4px; }
+.pal-keys span { font-size: var(--t-micro); color: var(--ink-4); margin-right: var(--s2); }
+.pal-keys kbd { min-width: 18px; text-align: center; }
+
+/* --------------------------------------------------------- the way in ---- */
+
+.pal-btn {
+  appearance: none; cursor: pointer; flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 28px; padding: 0 8px 0 9px;
+  border: 1px solid var(--bar-line); border-radius: var(--r-full);
+  background: var(--bar-sunk); color: var(--on-dark-2);
+  font: 600 var(--t-small)/1 var(--font);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.pal-btn:hover { background: var(--bar-hover); color: var(--on-dark); }
+.pal-btn-l { letter-spacing: var(--tr-flat); }
+.pal-btn .pal-btn-k {
+  background: transparent; border-color: var(--bar-line); border-bottom-width: 1px;
+  color: var(--on-dark-3); padding: 2px 4px;
+}
+
+/* ----------------------------------------------------------- the phone --
+   The whole screen. `100dvh` so the address bar collapsing does not leave the
+   footer under it; the plain `100vh` above it is what older browsers get. */
+
+@media (max-width: 620px) {
+  .pal-scrim { padding: 0; align-items: stretch; }
+  .pal {
+    width: 100%; max-height: none;
+    height: 100vh; height: 100dvh;
+    border: 0; border-radius: 0;
+    animation: none;
+    /* The notch, and the home indicator. Without the top inset the search field
+       sits under the clock; without the bottom one the footer sits under the
+       bar the thumb swipes on. */
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pal-head { height: 54px; }
+  .pal-inp { font-size: var(--t-lead); }
+  /* Six filters do not fit across a phone, and a row that scrolls sideways with
+     nothing to say so hides two of them. The palette owns the whole screen
+     here, so the second line is affordable and the sixth filter is visible. */
+  .pal-kinds { flex-wrap: wrap; overflow-x: visible; }
+  .pal-close kbd { display: none; }
+  .pal-close-w {
+    display: inline; padding-left: var(--s1);
+    font: 600 var(--t-small)/1 var(--font); color: var(--blue-600);
+  }
+  .pal-foot { padding-bottom: calc(var(--s2) + env(safe-area-inset-bottom, 0px)); }
+  /* There is no keyboard to explain. The row that says what matched stays. */
+  .pal-keys { display: none; }
+  .pal-btn-l, .pal-btn-k { display: none; }
+  .pal-btn { width: 28px; padding: 0; justify-content: center; }
+  .pal-group-n { display: none; }
+  .pal-opt { padding: var(--s3); }
+}
