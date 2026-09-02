@@ -283,7 +283,7 @@ def _default_embed_fn() -> Callable[[np.ndarray], Any]:
     it fails with a sentence rather than an ImportError traceback.
     """
     try:
-        from gawaah.embedder import embed  # noqa: PLC0415  (deliberately lazy)
+        from gawaah.embedder2 import embed  # noqa: PLC0415  (deliberately lazy)
     except ImportError as exc:
         raise RecogniserError(
             "no embed_fn was given and gawaah.embedder is not importable "

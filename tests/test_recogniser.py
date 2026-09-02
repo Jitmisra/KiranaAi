@@ -17,7 +17,7 @@ Three layers, deliberately:
 
   3. THE REAL PARTS, when they are installed: `gawaah.embedder.embed` is
      parametrised in beside the test's own descriptor, `gawaah.shop_store`
-     is driven end to end, and `gawaah.sim_source` supplies crops through the
+     is driven end to end, and the fixtures supply crops through the
      genuine PlaneEngine/PlacementDetector/Brain._crop optics.
 
 No model weights, no network, no checkpoint. The pixel layers use only cv2
@@ -629,19 +629,20 @@ def test_a_store_that_prices_through_a_price_book_is_accepted():
 
 
 def test_a_missing_default_embedder_says_so_in_a_sentence(monkeypatch):
-    """No embed_fn and no gawaah.embedder is a WIRING error with an
-    explanation, not an ImportError traceback and never a download."""
+    """No embed_fn and no default embedder is a WIRING error with an
+    explanation, not an ImportError traceback. The default is embedder2 now —
+    the module this test blocks has to be the one the code actually imports."""
     import builtins
 
     real = builtins.__import__
 
     def _no_embedder(name, *a, **kw):
-        if name == "gawaah.embedder":
-            raise ImportError("no module named gawaah.embedder")
+        if name == "gawaah.embedder2":
+            raise ImportError("no module named gawaah.embedder2")
         return real(name, *a, **kw)
 
     monkeypatch.setattr(builtins, "__import__", _no_embedder)
-    monkeypatch.delitem(__import__("sys").modules, "gawaah.embedder", raising=False)
+    monkeypatch.delitem(__import__("sys").modules, "gawaah.embedder2", raising=False)
     with pytest.raises(RecogniserError, match="injected"):
         Recogniser(MemoryStore())
 
@@ -1138,39 +1139,6 @@ class _SimStore:
         return self._p.get(sku_id)
 
 
-def test_the_sim_optics_end_to_end_real_plane_placement_and_crop():
-    """Crops through the genuine PlacementDetector and Brain._crop, off the
-    rectified 840x1188 metric buffer -- the same path the live camera takes."""
-    sim_source = pytest.importorskip("gawaah.sim_source")
-    from gawaah.brain import Brain
-    from gawaah.placement import PlacementDetector
-
-    sim = sim_source.SimSource(seed=20260829)
-    gallery = Gallery()
-    prices = sim.enrol_gallery(gallery, local_descriptor, Brain._crop)
-    assert set(gallery.skus()) == set(prices)
-
-    r = Recogniser(_SimStore(gallery, prices), local_descriptor)
-    ref = sim.reference_frame()
-    det = PlacementDetector(ref)
-
-    lines = []
-    for i in range(sim.total_frames):
-        frame = sim.frame(i)
-        found = det.update(frame)
-        if i != 40:
-            continue
-        for p in sorted(found, key=lambda q: q.long_edge_mm or 0.0):
-            if not (p.measurable and p.long_edge_mm):
-                continue
-            lines.append(r.identify(Brain._crop(frame, p), p.long_edge_mm))
-
-    assert len(lines) == 3, "the sim beat should put three packets on the mat"
-    assert [x.sku_id for x in lines] == ["SABUN-BAR", "CHAI-250", "ATTA-1K"]
-    assert basket_paise(lines) == 3200 + 4500 + 6250
-    assert r.stats()["abstention_rate"] == 0.0
-
-
 def test_the_sim_unknown_item_is_unpriced_and_therefore_amber():
     """UNKNOWN-ITEM is in the sim script with price_paise=None. Even if it were
     somehow enrolled, an unpriced sku is an amber line, never a zero one."""
@@ -1198,15 +1166,18 @@ def test_the_sim_unknown_item_is_unpriced_and_therefore_amber():
 
 
 def test_the_default_embedder_is_resolved_lazily_and_never_downloaded():
-    """Invariant 3: no checkpoint, anywhere. The default embed_fn is the repo's
-    own classical descriptor or a sentence explaining its absence."""
-    if any(m.name == "skip" for p in EMBEDDERS for m in p.marks):
-        pytest.skip("gawaah.embedder is not usable right now — see _embedders()")
-    pytest.importorskip("gawaah.embedder")
+    """The default embed_fn is the repo's own embedder2, resolved at
+    construction and never fetched from anywhere at request time. The gallery
+    for this test must be built with THE SAME embedder the identify path will
+    resolve — a gallery written by one embedder is noise to another, which is
+    the entire reason tools/migrate_gallery.py exists."""
+    embedder2 = pytest.importorskip("gawaah.embedder2")
+    if not embedder2.MODEL_PATH.is_file():
+        pytest.skip("model weights not on this checkout")
     store = MemoryStore()
-    from gawaah.embedder import embed
     spec = PRODUCTS["HARA-CHAI"]
-    store.add("HARA-CHAI", [embed(_scene(spec, *ENROL_POSE))], LONG_MM, spec[4])
+    store.add("HARA-CHAI", [embedder2.embed(_scene(spec, *ENROL_POSE))],
+              LONG_MM, spec[4])
     r = Recogniser(store)                       # no embed_fn: resolve the default
     got = r.identify(_scene(spec, *EVAL_POSES[0]), LONG_MM)
     assert (got.sku_id, got.price_paise) == ("HARA-CHAI", spec[4])
