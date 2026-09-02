@@ -40,6 +40,8 @@ from gawaah.identity import (
     DEFAULT_PHI,
     DEFAULT_TAU_MM,
     DEFAULT_THETA,
+    MODE_APPEARANCE_ONLY,
+    PHI_APPEARANCE_ONLY,
     Gallery,
     Identifier,
     IdentityError,
@@ -160,6 +162,237 @@ def test_a_missing_catalog_is_an_empty_shop_not_an_error(tmp_path):
     assert s.price_paise("anything") is None
     # and it wrote nothing, so opening a shop is not a mutation
     assert files_under(tmp_path / "never-used") == set()
+
+
+# ============================ 1b. the two ways to teach, and the weaker one
+# A shopkeeper can teach from a plain product photo with no TAKHTI in it. That
+# SKU is stored with NO footprint, judged on appearance alone, and labelled as
+# weaker everywhere it appears. What is proved here is that the DISTINCTION
+# survives — a missing footprint must never come back as 0.0, and a real one
+# must never come back as missing.
+
+def test_a_product_can_be_taught_from_a_plain_photo_with_no_mat(tmp_path):
+    """The feature: an ordinary downloaded product photo is teachable."""
+    s = ShopStore(tmp_path / "shop")
+    r = s.add_sku("colgate_carton", "Colgate 100g", 5500, [vec(1)], None)
+    assert r.ok and r.action == ACTION_ADDED
+    assert r.taught_by == MODE_APPEARANCE_ONLY
+    assert r.is_appearance_only
+    # and it SAYS so, unprompted, in words a shopkeeper can act on
+    assert "APPEARANCE-ONLY" in r.message
+    assert "TAKHTI" in r.message
+
+    rec = s.get("colgate_carton")
+    assert rec.footprint_mm is None
+    assert rec.is_appearance_only and rec.taught_by == MODE_APPEARANCE_ONLY
+    assert s.appearance_only_skus() == ("colgate_carton",)
+
+
+def test_a_mat_measured_product_says_it_was_measured(tmp_path):
+    s = ShopStore(tmp_path / "shop")
+    r = s.add_sku("parle_g_200g", "Parle-G", 2000, [vec(1)], 118.375)
+    assert r.taught_by == "mat_measured" and not r.is_appearance_only
+    assert "MAT-MEASURED at 118.4 mm" in r.message
+    assert s.get("parle_g_200g").taught_by == "mat_measured"
+    assert s.appearance_only_skus() == ()
+
+
+def test_a_missing_footprint_survives_a_restart_as_missing_not_as_zero(tmp_path):
+    """THE ROUND-TRIP THAT MATTERS.
+
+    ``None`` and ``0.0`` are not two spellings of the same thing. A reload that
+    turned a missing footprint into 0.0 would hand the metric tiebreak a size
+    nobody ever measured and silently gate a sale on it; a reload that turned a
+    real 118.375 into None would strip a mat-taught product of the very
+    discriminator it was enrolled with. Both directions are asserted, on the
+    same file, after a genuine reopen.
+    """
+    d = tmp_path / "shop"
+    s = ShopStore(d)
+    s.add_sku("photo_taught", "Photo", 2000, [vec(1)], None)
+    s.add_sku("mat_taught", "Mat", 2500, [vec(2)], 118.375)
+
+    # on disk: an explicit null, and the word for it beside it
+    raw = json.loads((d / "catalog.json").read_text())["skus"]
+    assert raw["photo_taught"]["footprint_mm"] is None
+    assert raw["photo_taught"]["taught_by"] == MODE_APPEARANCE_ONLY
+    assert raw["mat_taught"]["footprint_mm"] == 118.375
+    assert raw["mat_taught"]["taught_by"] == "mat_measured"
+
+    again = ShopStore(d)
+    photo, mat = again.get("photo_taught"), again.get("mat_taught")
+    assert photo.footprint_mm is None
+    # not merely falsy: a 0.0 would satisfy `not fp` and would then be COMPARED
+    # against by the metric tiebreak. The type is the assertion.
+    assert not isinstance(photo.footprint_mm, (int, float))
+    assert mat.footprint_mm == 118.375 and isinstance(mat.footprint_mm, float)
+    assert again.appearance_only_skus() == ("photo_taught",)
+    assert again.taught_by("photo_taught") == MODE_APPEARANCE_ONLY
+    assert again.taught_by("mat_taught") == "mat_measured"
+    assert again.taught_by("never_heard_of_it") is None
+
+
+def test_to_gallery_passes_the_absence_of_a_footprint_straight_through(tmp_path):
+    """The projection must not invent millimetres either. If it did, the till
+    would size-gate an appearance-only SKU on a fabricated measurement and the
+    catalog and the gallery would disagree about what was taught."""
+    s = ShopStore(tmp_path / "shop")
+    s.add_sku("photo_taught", "Photo", 2000, [vec(1)], None)
+    s.add_sku("mat_taught", "Mat", 2500, [vec(2)], 118.375)
+
+    g = s.to_gallery()
+    assert g.footprint("photo_taught") is None
+    assert g.footprint("mat_taught") == 118.375
+    assert g.appearance_only_skus() == ("photo_taught",)
+    # and the gallery agrees with the store about which half is weak
+    assert g.appearance_only_skus() == s.appearance_only_skus()
+
+
+def test_an_appearance_only_sku_is_actually_identifiable_end_to_end(tmp_path):
+    """Teaching from a photo is worth nothing if the till cannot then recognise
+    it. Taught with no mat, identified with no mat, priced from the catalog."""
+    s = ShopStore(tmp_path / "shop")
+    v = basis(0)
+    s.add_sku("photo_taught", "Photo", 5500, [v], None)
+
+    ident = Identifier(s.to_gallery(), lambda crop: v.copy())
+    r = ident.identify(np.zeros((4, 4), np.uint8), None)
+    assert r.sku_id == "photo_taught"
+    assert r.reason == REASON_MATCH
+    assert r.mode == MODE_APPEARANCE_ONLY
+    assert r.phi_applied == PHI_APPEARANCE_ONLY   # the higher bar, not phi
+    assert s.price_paise(r.sku_id) == 5500
+
+
+def test_a_hand_edited_taught_by_is_refused_rather_than_quietly_corrected(tmp_path):
+    """``taught_by`` is derived on write, so on read it can only ever reveal a
+    hand-edit. A record that disagrees with itself about whether it was
+    size-checked cannot be trusted to say so on screen, so it is refused instead
+    of being repaired to whichever field we happened to trust."""
+    d = tmp_path / "shop"
+    s = ShopStore(d)
+    s.add_sku("a", "A", 2000, [vec(1)], None)
+
+    data = json.loads(s.catalog_path.read_text())
+    data.pop("sha256")
+    data["skus"]["a"]["taught_by"] = "mat_measured"     # a lie about the evidence
+    data["sha256"] = _digest(data)
+    s.catalog_path.write_text(json.dumps(data))
+
+    with pytest.raises(ShopError) as e:
+        ShopStore(d)
+    assert "taught_by" in str(e.value)
+
+
+def test_a_catalog_with_weak_skus_records_the_bar_they_were_admitted_under(
+    tmp_path,
+):
+    """An appearance-only SKU has no size check, so the similarity bar is the
+    only thing protecting it. Reopening under a different one is refused for
+    the same reason theta and tau_mm are."""
+    d = tmp_path / "shop"
+    ShopStore(d).add_sku("a", "A", 2000, [vec(1)], None)
+    assert json.loads((d / "catalog.json").read_text())["gates"][
+        "phi_appearance_only"] == PHI_APPEARANCE_ONLY
+
+    with pytest.raises(ShopError) as e:
+        ShopStore(d, phi_appearance_only=0.95)
+    assert "phi_appearance_only" in str(e.value)
+    assert ShopStore(d).skus() == ("a",)          # the right gate still opens it
+
+
+def test_a_weak_sku_must_not_be_the_easier_one_to_match(tmp_path):
+    """Invariant 7 at the store's door: you may not buy the mode with fewer
+    discriminators a discount."""
+    with pytest.raises(ShopError) as e:
+        ShopStore(tmp_path / "shop", phi=0.90, phi_appearance_only=0.80)
+    assert "must not be the easier one to match" in str(e.value)
+
+
+def test_a_photo_taught_sku_is_guarded_more_strictly_not_less(tmp_path):
+    """Size cannot rescue a pair when one side has no size, so the guard tightens
+    for the weak mode. Two bottles 60 mm apart are fine when both are measured
+    and refused the moment one of them is taught from a photo."""
+    s = ShopStore(tmp_path / "shop")
+    s.add_sku("bottle_500", "Bottle 500ml", 2000, [vec(1)], 118.4)
+    assert s.add_sku("bottle_1l", "Bottle 1L", 3500, [vec(1)], 178.4).ok
+
+    r = s.add_sku("bottle_1l_photo", "Bottle 1L", 3500, [vec(1)], None)
+    assert r.ok is False and r.reason == REASON_COLLISION
+    assert r.footprint_delta_mm is None           # size did not exist, was not 0
+    assert "no size check can ever tell them apart" in r.message
+    assert "bottle_1l_photo" not in s
+
+
+def test_a_missing_footprint_key_is_not_read_as_taught_from_a_photo(tmp_path):
+    """A truncated or foreign file must not be silently downgraded into the weak
+    mode: that would strip a mat-taught SKU of its size check with nobody told.
+    An explicit null is a claim, an absent key is not."""
+    d = tmp_path / "shop"
+    s = ShopStore(d)
+    s.add_sku("a", "A", 2000, [vec(1)], 118.4)
+
+    data = json.loads(s.catalog_path.read_text())
+    data.pop("sha256")
+    del data["skus"]["a"]["footprint_mm"]
+    data["sha256"] = _digest(data)
+    s.catalog_path.write_text(json.dumps(data))
+
+    with pytest.raises(ShopError) as e:
+        ShopStore(d)
+    assert "no 'footprint_mm' key" in str(e.value)
+
+
+def test_a_mixed_shop_keeps_both_kinds_straight_across_a_restart(tmp_path):
+    """The realistic shop: some products taught properly on the mat, some
+    photographed in a hurry. The counter has to keep saying which is which."""
+    d = tmp_path / "shop"
+    s = ShopStore(d)
+    for i in range(6):
+        s.add_sku(f"sku_{i}", f"Item {i}", 1000 + i, [basis(i)],
+                  None if i % 2 else 100.0 + i)
+
+    again = ShopStore(d)
+    assert again.appearance_only_skus() == ("sku_1", "sku_3", "sku_5")
+    for i in range(6):
+        rec = again.get(f"sku_{i}")
+        expected_weak = bool(i % 2)
+        assert rec.is_appearance_only is expected_weak
+        assert (rec.footprint_mm is None) is expected_weak
+        assert rec.taught_by == (MODE_APPEARANCE_ONLY if expected_weak
+                                 else "mat_measured")
+    # the audit line carries it too, so a ledger can answer this later
+    assert again.to_gallery().appearance_only_skus() == \
+        again.appearance_only_skus()
+
+
+def test_a_weak_sku_can_be_re_taught_on_the_mat_and_stops_being_weak(tmp_path):
+    """The repair path the label exists to enable. ``taught_by`` is what lets a
+    shopkeeper find the weak ones; re-teaching with a measurement is what
+    actually fixes them, and the record has to follow."""
+    d = tmp_path / "shop"
+    s = ShopStore(d)
+    s.add_sku("colgate", "Colgate", 5500, [vec(1)], None)
+    assert s.appearance_only_skus() == ("colgate",)
+
+    r = s.add_sku("colgate", "Colgate", 5500, [vec(1)], 96.5)
+    assert r.ok and r.action == ACTION_REPLACED
+    assert r.taught_by == "mat_measured"
+    assert s.appearance_only_skus() == ()
+    assert ShopStore(d).get("colgate").footprint_mm == 96.5
+    # and it works in the other direction too, without leaving a stale 0.0
+    s.add_sku("colgate", "Colgate", 5500, [vec(1)], None)
+    assert ShopStore(d).get("colgate").footprint_mm is None
+
+
+def test_the_result_audit_line_names_how_it_was_taught(tmp_path):
+    s = ShopStore(tmp_path / "shop")
+    weak = s.add_sku("p", "P", 2000, [vec(1)], None).to_audit()
+    assert weak["taught_by"] == MODE_APPEARANCE_ONLY
+    assert json.loads(json.dumps(weak)) == weak
+
+    strong = s.add_sku("m", "M", 2000, [basis(3)], 118.4).to_audit()
+    assert strong["taught_by"] == "mat_measured"
 
 
 # ================================================ 2. a price cannot enter wrong
@@ -384,8 +617,14 @@ def test_the_guard_uses_the_same_gates_the_till_will_use(tmp_path):
     assert gates is None                      # nothing written until a mutation
     s.add_sku("a", "A", 2000, [vec(1)], 118.4)
     on_disk = json.loads(s.catalog_path.read_text())["gates"]
+    # UPDATED: the gates block gained a fourth key when the appearance-only mode
+    # landed. It is asserted here by exact equality, not by subset, because a
+    # gate that stops being persisted stops being checked on reopen, and this
+    # test is the only thing that would notice.
     assert on_disk == {"theta": DEFAULT_THETA, "phi": DEFAULT_PHI,
-                       "tau_mm": DEFAULT_TAU_MM}
+                       "tau_mm": DEFAULT_TAU_MM,
+                       "phi_appearance_only": PHI_APPEARANCE_ONLY}
+    assert s.phi_appearance_only == PHI_APPEARANCE_ONLY
 
 
 def test_a_catalog_admitted_under_different_gates_refuses_to_open(tmp_path):
@@ -727,11 +966,38 @@ def test_a_second_embedder_cannot_be_mixed_into_one_shop(store):
     assert store.skus() == ("a",)
 
 
-@pytest.mark.parametrize("bad", [0, -1, "118", None, True, float("nan"),
+@pytest.mark.parametrize("bad", [0, -1, "118", True, float("nan"),
                                  float("inf")])
 def test_a_footprint_that_is_not_a_measurement_is_refused(store, bad):
+    """UPDATED: ``None`` used to be in this list and is now legal.
+
+    It was the only value here that meant "there was no mat", and lumping it in
+    with 0 and NaN is what made a plain product photo unteachable. Everything
+    else stays refused, and the distinction is the point: absent is a mode,
+    invalid is a bug. See the test immediately below for the other half — a 0 is
+    still not a synonym for a missing measurement.
+    """
     with pytest.raises(ShopError):
         store.add_sku("x", "X", 2000, [vec(1)], bad)
+    assert len(store) == 0
+
+
+def test_absent_and_invalid_footprints_are_different_things(store):
+    """The distinction the parametrisation above now depends on.
+
+    A 0 is not "no measurement", it is a claim that the packet is zero
+    millimetres long, and the metric tiebreak would happily compare against it.
+    None is the absence of the claim. If these two ever collapse into each
+    other, a caller whose measurement silently failed gets an appearance-only
+    SKU and is never told.
+    """
+    ok = store.add_sku("photo_taught", "Photo", 2000, [vec(1)], None)
+    assert ok.ok and store.get("photo_taught").footprint_mm is None
+
+    with pytest.raises(ShopError) as e:
+        store.add_sku("zero_taught", "Zero", 2000, [vec(2)], 0.0)
+    assert "positive real" in str(e.value)
+    assert store.skus() == ("photo_taught",)
 
 
 # ==================================================== 9. photos, with numbers
