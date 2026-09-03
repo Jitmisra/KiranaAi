@@ -1,0 +1,246 @@
+/* ===========================================================================
+   GAWAAH — the Purchase order screen (routes/PurchaseOrder.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `po-` so it cannot collide
+   with the till's classes in app.css, the Stock screen's `st-`, or the Books
+   screens' `bk-`/`bh-`.
+
+   WHAT IS NOT HERE. The cards, the tables, the buttons, the modal, the stat
+   strip, the loading skeletons and the empty states are all the shared layer in
+   components/ui.tsx and app.css. This sheet holds only the five things this
+   screen genuinely has of its own: the unknown-cost figure, the order quantity,
+   the expected-spend block, the reasons list, and the message a shopkeeper
+   sends.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css.
+
+   COLOUR DISCIPLINE. Green, amber and red are reserved on this product for
+   money and recognition state. A shelf running low is neither — it is a fact
+   about a shop — so the quantity to order is QUIET: weight and size, not a
+   colour. The ONE amber this screen spends is on a cost that is not known,
+   which is a figure the counter abstained from, and that is exactly what amber
+   means everywhere else here. Red is kept for a hash chain that does not
+   verify.
+   =========================================================================== */
+
+/* A block between the page head and the next one. */
+.po-band { margin-bottom: var(--s5); }
+
+/* A figure on its way, drawn where the figure goes. `.stat .stat-v` is a
+   display-weight number, so the bar is given that height rather than the 12px
+   default — a hairline where a 42px figure lands is not a reservation, it is a
+   second layout. */
+.po-statskel { display: block; padding: 6px 0; }
+
+/* ------------------------------------------------------------ the figures -- */
+
+/* AN UNKNOWN COST, and the most important three rules in this file. It is set
+   in amber, in the same weight as a figure, and it says the word — because a
+   dash or an empty cell in a rupee column is read as nought by anyone glancing
+   down it, and a purchase order that appears to say four packets of soap are
+   free is the exact failure this counter exists to refuse. */
+.po-unknown {
+  color: var(--amber);
+  font-weight: 650;
+  font-size: var(--t-small);
+  letter-spacing: var(--tr-flat);
+  cursor: help;
+  border-bottom: 1px dotted var(--amber-line);
+}
+
+/* The same word where it qualifies a total that is real but short. */
+.po-plus { color: var(--amber); font-weight: 600; font-size: var(--t-small); }
+
+/* A shelf nobody has counted. Not a zero, and not an alarm either. */
+.po-absent {
+  color: var(--ink-4);
+  font-size: var(--t-small);
+  font-style: italic;
+}
+
+/* The quantity to order — the one number on every row that a shopkeeper reads
+   out loud down a phone. Set large and dark, with no colour spent on it. */
+.po-units {
+  font-size: var(--t-h2);
+  font-weight: 750;
+  letter-spacing: var(--tr-tight);
+  color: var(--navy-900);
+}
+
+/* --------------------------------------------------------------- the rows -- */
+
+.po-name { display: block; font-weight: 600; color: var(--ink); }
+.po-sku {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  letter-spacing: var(--tr-flat);
+  margin-top: 1px;
+}
+
+/* --------------------------------------------------------- expected spend -- */
+
+/* The card foot: the total, and the sentence saying what it does not cover.
+   The sentence is not small print — it is the difference between a figure a
+   shopkeeper can act on and one he will be surprised by at the wholesaler. */
+.po-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.po-expect { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.po-expect-l {
+  font-size: var(--t-micro);
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  font-weight: 700;
+}
+.po-expect-v {
+  font-family: var(--font-display);
+  font-size: var(--t-h1);
+  font-weight: 750;
+  letter-spacing: var(--tr-display);
+  color: var(--navy-900);
+  line-height: var(--lh-tight);
+}
+.po-expect-v.unknown { color: var(--amber); font-size: var(--t-h2); }
+.po-expect-s {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  max-width: 62ch;
+}
+
+.po-note {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  max-width: 48ch;
+  line-height: var(--lh-body);
+}
+
+/* ------------------------------------------------------- reasons and sums -- */
+
+.po-why {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: var(--lh-loose);
+  max-width: 68ch;
+  margin: var(--s3) 0;
+}
+
+/* The list of what was LEFT OFF the order. Every one of these is a product the
+   counter could have quietly ordered a guessed quantity of and did not. */
+.po-aside { display: flex; flex-direction: column; gap: var(--s2); }
+
+/* The three figures at the head of a dialog. Written here rather than borrowed
+   from `KV`, which draws a dotted leader from label to value — right down a
+   list, and across a row it reads as a rendering fault. */
+.po-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s6);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s4);
+}
+.po-fig { display: flex; flex-direction: column; gap: 1px; min-width: 76px; }
+.po-fig-l {
+  font-size: var(--t-micro);
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  font-weight: 700;
+}
+.po-fig-v {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: var(--tr-tight);
+  color: var(--navy-900);
+  line-height: var(--lh-tight);
+}
+
+/* The sentence introducing a full-bleed table, given the padding the table
+   itself no longer carries. */
+.po-intro { padding: var(--s4) var(--s5) 0; margin-top: 0; }
+
+/* A product left off the order: the name, and the reason UNDER it. A key on the
+   left with the sentence right-aligned a column away put the two halves of one
+   statement at opposite ends of a 1440 px row. */
+.po-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.po-reason:last-child { border-bottom: 0; padding-bottom: 0; }
+.po-reason-n { font-weight: 650; color: var(--ink); }
+.po-reason-w {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  max-width: 76ch;
+}
+
+/* A date set as two lines on purpose. */
+.po-day { display: block; white-space: nowrap; }
+.po-time {
+  display: block;
+  white-space: nowrap;
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+}
+
+/* An anchor wearing a button's clothes still gets the browser's underline, and
+   an underlined word inside a filled button reads as a link inside a button. */
+.po-print, .po-print:hover { text-decoration: none; }
+
+/* ------------------------------------------------------------ the message -- */
+
+/* SHOWN, NOT ONLY COPIED. A page served over plain HTTP to the phone in a
+   shopkeeper's hand has no clipboard, so the text has to be selectable by hand
+   or the button is the whole feature and it is broken. */
+.po-msg { margin-top: var(--s5); }
+.po-msg-l {
+  display: block;
+  font-size: var(--t-micro);
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  font-weight: 700;
+  margin-bottom: var(--s2);
+}
+.po-msg pre {
+  margin: 0;
+  padding: var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  font-family: var(--mono);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: all;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* ------------------------------------------------------------ the phone -- */
+
+@media (max-width: 560px) {
+  /* The foot stacks: the total is what a thumb scrolls to, and putting the
+     sentence beside it at 390 px leaves both unreadable. */
+  .po-foot { flex-direction: column; align-items: stretch; padding: var(--s4); }
+  .po-expect-v { font-size: var(--t-h2); }
+  .po-units { font-size: var(--t-h3); }
+  .po-sum { gap: var(--s4); }
+}
