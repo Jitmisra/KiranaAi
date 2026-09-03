@@ -1,0 +1,312 @@
+/* ===========================================================================
+   GAWAAH — the Books tab: History, Inventory, Settings.
+   ---------------------------------------------------------------------------
+   Imported by exactly those three routes. Everything here is prefixed `bk-`,
+   `bh-` (history) or `wh-` (the webhook hero) so it cannot collide with the
+   till's own classes in app.css.
+
+   No literal colour. Every value is a token, and the few names this sheet
+   needs that tokens.css does not define are `--books-*` locals derived from
+   existing tokens — so a re-theme in tokens.css reaches these screens too.
+
+   COLOUR DISCIPLINE, restated because these three screens are where it was
+   being broken: green, amber and red belong to money and recognition state.
+   On the Books screens a settled payment is the only green thing; an excluded
+   (unpriced) line is amber because that is a recognition verdict; a broken
+   chain, a refused mint and a dead webhook path are red because those are
+   earned. Everything else — a link that was merely sent, a bill that was
+   never charged, a taught-by provenance — is quiet.
+   =========================================================================== */
+
+:root {
+  --books-quiet-bg:   var(--surface-2);
+  --books-quiet-ink:  var(--ink-2);
+  --books-dim:        var(--ink-4);
+  --books-day-line:   var(--line-2);
+}
+
+/* ------------------------------------------------------------ quiet pills --
+   Two non-verdict settlement states. LINK SENT is a fact, not a warning: fifty
+   of them down a page in amber read as fifty alarms. NOT CHARGED is quieter
+   still — the dashed border says "nothing ever started here". */
+.pill.bk-quiet {
+  background: var(--books-quiet-bg);
+  color: var(--books-quiet-ink);
+  border-color: var(--line-2);
+}
+.pill.bk-ghost {
+  background: transparent;
+  color: var(--books-dim);
+  border-color: var(--line);
+  border-style: dashed;
+}
+
+/* -------------------------------------------------------- summary strip --
+   Computed client-side from the rows actually loaded, and labelled as such in
+   the markup. The strip is a single bordered bar split by hairlines, the way
+   a dashboard reports a day — not four floating cards. */
+.bk-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-1);
+}
+.bk-stat { background: var(--surface); padding: var(--s4) var(--s5); min-width: 0; }
+.bk-stat .l {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--books-dim);
+}
+.bk-stat .n {
+  display: block; margin-top: 2px;
+  font-size: var(--t-h1); font-weight: 800; letter-spacing: -.02em;
+  color: var(--navy-900); font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.bk-stat .s { display: block; margin-top: 2px; font-size: var(--t-micro); color: var(--books-dim); line-height: 1.45; }
+
+.bk-cap {
+  margin: var(--s2) var(--s1) 0;
+  font-size: var(--t-micro); color: var(--books-dim); line-height: 1.5;
+}
+.bk-strip-wrap { margin-bottom: var(--s5); }
+
+/* ------------------------------------------------------------- the wait --
+   Everything below is additive and `bh-`/`bk-` scoped: the skeleton borrows
+   .bk-strip, .bh-day, .bh-row and .bill-line rather than inventing boxes, so
+   the figures land exactly where the blanks were. Only what a blank cannot
+   inherit is said here. */
+
+/* The sentence sits above the strip it summarises, not welded to it. */
+.bk-strip-wrap > .insight,
+.bk-strip-wrap > .thinking { margin-bottom: var(--s5); }
+
+/* A blank standing in for a number carries the number's own margins. */
+.bh-skel .bk-stat .s-n { margin: 4px 0 3px; }
+
+/* A money blank is pushed hard right, because the figure that replaces it is
+   right-aligned and a left-aligned blank would slide across the row when the
+   bills land. `.bh-day .t` and `.bh-row .right` already do this themselves. */
+.bh-skel .bh-day .s-t { margin-left: auto; }
+.bh-skel .bill-line .s-amt,
+.bh-skel .bill-total .s-amt { margin-left: auto; }
+
+/* A row that is a skeleton is not a control: no pointer, no hover lift. */
+.bh-skel .bh-row { cursor: default; }
+.bh-skel .bh-row:hover { background: transparent; }
+
+/* ------------------------------------------------------- history: the list --
+   Bills grouped by day. The day header carries the date, the count and the
+   day's total (summed in integer paise from the rows under it), and stays
+   pinned under the top bar while its own rows scroll past. */
+.bh-day {
+  position: sticky; top: var(--topbar-h); z-index: 2;
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s3) var(--s2);
+  background: var(--surface);
+  border-bottom: 1px solid var(--books-day-line);
+}
+.bh-day .d { font-size: var(--t-small); font-weight: 800; color: var(--navy-900); letter-spacing: -.01em; }
+.bh-day .c { font-size: var(--t-micro); color: var(--books-dim); }
+.bh-day .t {
+  margin-left: auto; font-size: var(--t-small); font-weight: 700;
+  color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* A bill row is a control, so it is a real <button>: full width, text left,
+   and the open state keeps a blue left edge rather than a verdict colour. */
+.bh-row {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font: inherit; color: inherit; text-align: left; width: 100%;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--s4); align-items: center;
+  padding: var(--s3) var(--s2);
+  border-bottom: 1px dashed var(--line);
+  transition: background var(--fast) var(--ease);
+}
+.bh-row:hover { background: var(--surface-2); }
+.bh-row.open { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+.bh-sec:last-child .bh-row:last-child { border-bottom: 0; }
+
+.bh-row .tm {
+  font-size: var(--t-small); font-weight: 600; color: var(--ink-2);
+  font-variant-numeric: tabular-nums; white-space: nowrap; align-self: start;
+  padding-top: 1px;
+}
+.bh-row .what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bh-row .items { font-size: var(--t-small); color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
+/* The session id is evidence, not headline — smaller, dimmer, still whole. */
+.bh-row .sid {
+  font-family: var(--mono); font-size: 10px; color: var(--books-dim);
+  overflow-wrap: anywhere; line-height: 1.4;
+}
+.bh-row .bh-excl { margin-top: 2px; }
+.bh-row .right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  align-self: start;
+}
+/* THE AMOUNT IS THE ANCHOR. Fifty rows of one product at one price used to be
+   fifty rows in which the time, the name, the hash and the amount were all set
+   within a point of each other, so the eye had nothing to land on and the page
+   read as one grey block. The money steps up; the time and the hash beside it
+   are already quieter, and the settlement pill is trimmed below. Nothing here
+   is a verdict colour: LINK SENT is a fact, not a warning. */
+.bh-row .amt {
+  font-size: var(--t-lead);
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--navy-900);
+  letter-spacing: var(--tr-tight); line-height: 1.2;
+  white-space: nowrap;
+}
+/* Repeated down every row, the settlement pill was the loudest mark on the
+   screen and the least informative. Set at the caption size it still reads at
+   a glance without competing with the figure it sits under. */
+.bh-row .pill { font-size: var(--t-micro); padding-block: 2px; }
+
+/* On a laptop the open bill keeps pace with the list instead of being left
+   behind at the top of the page. Below the one-column breakpoint the panel
+   flows normally — sticky there would pin it over the list it explains. */
+@media (min-width: 1081px) {
+  .bh-aside {
+    position: sticky;
+    top: calc(var(--topbar-h) + var(--s4));
+    max-height: calc(100vh - var(--topbar-h) - var(--s7));
+    overflow-y: auto;
+    align-self: start;
+    border-radius: var(--r-lg);
+  }
+}
+
+/* The nothing-selected state: an honest hint, not a void and not a fake bill. */
+.bk-hintstate {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+  padding: var(--s7) var(--s5);
+  border: 1px dashed var(--line-2); border-radius: var(--r-md);
+  text-align: center;
+}
+.bk-hintstate .eyebrow { color: var(--books-dim); }
+.bk-hintstate p { font-size: var(--t-small); color: var(--ink-3); line-height: 1.65; max-width: 44ch; }
+
+/* ------------------------------------------------------------- inventory -- */
+
+/* Seven columns of truth need room; they get it inside their own scroller
+   (.scroll-x) rather than by widening the page. */
+table.moments.bk-inv { min-width: 820px; }
+table.moments.bk-inv th { white-space: nowrap; }
+/* A right-aligned count next to a left-aligned date needs more than the
+   default gutter or the two columns read as one. */
+table.moments.bk-inv th:not(:last-child),
+table.moments.bk-inv td:not(:last-child) { padding-right: var(--s6); }
+
+.bk-prod .nm { display: block; font-weight: 700; color: var(--navy-900); line-height: 1.35; }
+.bk-prod .sku { font-family: var(--mono); font-size: var(--t-micro); color: var(--books-dim); overflow-wrap: anywhere; }
+
+/* "not counted", "never", em-dashes: true, quiet, and said once per cell. */
+.bk-dim { color: var(--books-dim); font-size: var(--t-micro); }
+
+.bk-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s2) var(--s6);
+  margin-top: var(--s3); padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro); color: var(--books-dim); line-height: 1.55;
+}
+.bk-legend b { color: var(--ink-2); font-weight: 700; }
+
+/* The dead-stock block is a reconciliation note — an accountant's margin
+   entry, set off by a rule, in the ledger's own voice. */
+.bk-recon { border-left: 3px solid var(--line-2); padding-left: var(--s4); }
+.bk-recon .ledger-line .nm { font-family: var(--mono); font-size: var(--t-small); font-weight: 600; }
+
+/* -------------------------------------------------------------- settings -- */
+
+.bk-section { display: flex; flex-direction: column; gap: var(--s4); }
+.bk-section-h { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; padding: 0 var(--s1); }
+.bk-section-h .sub { font-size: var(--t-micro); color: var(--books-dim); }
+
+/* Long KV lists read as two columns on a wide screen instead of a full-width
+   scroll of rows. Verdicts, hints and empties keep the full width. */
+.bk-kv2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); column-gap: var(--s7); align-items: start; }
+.bk-kv2 > .verdict, .bk-kv2 > .hint, .bk-kv2 > .empty,
+.bk-kv2 > .bk-kv-wide { grid-column: 1 / -1; }
+
+/* A hash you can take with you. Plain button, action blue, no library.
+   `anywhere`, not `break-word`: break-word is defined NOT to shrink a flex
+   item's min-content width, which is how a 64-character chain head once
+   walked clean through the neighbouring column. */
+.bk-hash { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--s2); flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.bk-hash .mono { overflow-wrap: anywhere; min-width: 0; }
+.bk-copy {
+  appearance: none; cursor: pointer; flex: none;
+  font: 700 10px/1 var(--font); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--blue-600); background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  padding: 3px 8px;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.bk-copy:hover { background: var(--blue-050); border-color: var(--blue-400); }
+.bk-copy.done { color: var(--ink-3); border-color: var(--line); background: var(--surface-2); }
+
+/* ------------------------------------------------------ the webhook hero --
+   Three states that must be unmistakable across a shop counter:
+     never-heard  — red. Nothing can turn a bill green. The worst one.
+     heard-long-ago — amber. It worked once; it may be dead now.
+     heard-recently — green. Money can actually reach this counter — the one
+                      non-settlement green these screens carry, and it is a
+                      money fact, per the token sheet's own rule.
+   `unknown` (the money service did not answer) is deliberately colourless:
+   we cannot say, so the panel does not pretend to. */
+.wh-hero { border: 1px solid; border-radius: var(--r-md); padding: var(--s5); }
+.wh-hero.bad  { background: var(--red-bg);   border-color: var(--red-line); }
+.wh-hero.ok   { background: var(--green-bg); border-color: var(--green-line); }
+.wh-hero.warn { background: var(--amber-bg); border-color: var(--amber-line); }
+.wh-hero.unk  { background: var(--surface-3); border-color: var(--line-2); }
+
+.wh-state { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.wh-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.wh-hero.bad  .wh-dot { background: var(--red); }
+.wh-hero.ok   .wh-dot { background: var(--green); animation: pulse 2s var(--ease) infinite; }
+.wh-hero.warn .wh-dot { background: var(--amber); }
+.wh-hero.unk  .wh-dot { background: var(--books-dim); }
+
+/* flex + min-width so the title shrinks and wraps BESIDE the dot on a phone
+   instead of dropping whole to the next line and stranding the dot alone. */
+.wh-word {
+  flex: 1 1 200px; min-width: 0;
+  font-size: var(--t-h2); font-weight: 800; letter-spacing: -.015em; line-height: var(--lh-tight);
+}
+.wh-hero.bad  .wh-word { color: var(--red); }
+.wh-hero.ok   .wh-word { color: var(--green); }
+.wh-hero.warn .wh-word { color: var(--amber); }
+.wh-hero.unk  .wh-word { color: var(--ink-2); }
+
+.wh-tag {
+  margin-left: auto;
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  padding: 3px 10px; border-radius: var(--r-full); border: 1px solid currentColor;
+}
+.wh-hero.bad  .wh-tag { color: var(--red); }
+.wh-hero.ok   .wh-tag { color: var(--green); }
+.wh-hero.warn .wh-tag { color: var(--amber); }
+.wh-hero.unk  .wh-tag { color: var(--ink-3); }
+
+.wh-line { margin-top: var(--s3); font-size: var(--t-small); color: var(--ink-2); line-height: 1.6; max-width: 78ch; }
+
+/* The facts row inside the hero. (app.css has a .wh-facts for the old span
+   markup; these rules re-anchor it under .wh-hero with a token border.) */
+.wh-hero .wh-facts {
+  display: flex; flex-wrap: wrap; gap: var(--s4) var(--s6);
+  margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid var(--line-2);
+}
+.wh-hero .wh-fact { display: flex; flex-direction: column; gap: 2px; }
+.wh-hero .wh-n {
+  font-size: var(--t-h2); font-weight: 700; letter-spacing: -.02em;
+  color: var(--navy-900); font-variant-numeric: tabular-nums;
+}
+.wh-hero .wh-l {
+  font-size: var(--t-micro); text-transform: uppercase; letter-spacing: .08em;
+  color: var(--ink-3);
+}
+.wh-last { margin-top: var(--s3); color: var(--ink-3); }

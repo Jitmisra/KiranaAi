@@ -1,0 +1,82 @@
+/* ===========================================================================
+   TODAY — the day brief.
+   The stat row is the screen: four numbers a shopkeeper reads from across the
+   counter. Everything else supports them. Green appears exactly once, on the
+   settled tile, because that is the one figure a verified webhook stands
+   behind — the same reservation every other screen honours.
+   =========================================================================== */
+
+.brief-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+}
+@media (max-width: 900px) { .brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px) { .brief-grid { grid-template-columns: 1fr; } }
+
+.brief-stat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+}
+.brief-stat .lbl {
+  font: 600 11px/1.2 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.brief-stat .val {
+  font: 700 clamp(22px, 2.4vw, 30px)/1.1 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.brief-stat .sub { font-size: 12px; color: var(--ink-3); }
+.brief-stat .delta { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+
+/* The one green on the page — settled money, nothing else. */
+.brief-stat.green { border-color: var(--green-line); background: var(--green-bg); }
+.brief-stat.green .val { color: var(--green); }
+
+/* ------------------------------------------------------------- top sellers -- */
+
+.sellers { display: flex; flex-direction: column; }
+.seller {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line);
+}
+.seller:last-child { border-bottom: 0; }
+.seller .rank {
+  width: 22px; height: 22px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 700 11px/1 var(--font);
+  color: var(--blue-700); background: var(--blue-050);
+  border: 1px solid var(--blue-200); border-radius: 6px;
+}
+.seller .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.seller .units { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.seller .amt {
+  min-width: 5.5rem; text-align: right;
+  font-weight: 600; font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- the wait --
+   The skeleton is laid out by the SAME rules as the thing it stands in for —
+   it borrows .brief-stat, .seller and .kv rather than inventing boxes — so
+   nothing moves when the figures land. Only the flex behaviour of each blank
+   needs saying here; the blank's own size is given at the call site.
+
+   A money blank is pushed hard right, because the figure that replaces it is
+   right-aligned and a left-aligned blank would slide across the row. */
+.tdy-skel .s-rank  { flex: none; }
+.tdy-skel .s-nm    { flex: 1; min-width: 0; }
+.tdy-skel .s-units { flex: none; }
+.tdy-skel .s-amt   { flex: none; margin-left: auto; }
+
+/* The tiles' figure sits on the same baseline as the value it replaces: the
+   blank is the height of the number, not of the line box around it. */
+.tdy-skel .brief-stat .s-val { margin: 3px 0 1px; }

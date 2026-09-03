@@ -1,0 +1,775 @@
+/* ===========================================================================
+   GAWAAH — HISAAB, the day close.
+   ---------------------------------------------------------------------------
+   Imported by one route, `routes/DayClose.tsx`, and by the one component that
+   route is built out of, `components/Denominations.tsx` — which imports this
+   sheet itself so it cannot be rendered unstyled. Every class is prefixed `dc-`
+   so it cannot collide with the till's own classes in app.css or with the Books
+   sheet, and so nothing else in the program can quietly come to depend on a
+   rule written for this screen.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css, or a `--dc-*`
+   local derived from one, so a re-theme there reaches this screen too.
+
+   COLOUR DISCIPLINE. Green, amber and red belong to money and recognition
+   state. Here green appears on exactly two things — the settled figure in the
+   review, and the settled figure frozen into a closed day — because that is
+   money a signature-verified webhook stands behind. Closing a day is a
+   deliberate act and an important one, and it still gets BLUE: it is the
+   action colour, and a green CLOSE button would be borrowing the meaning of a
+   payment that settled. An early close, a voided expense and a record digest
+   are quiet, because none of them is a verdict.
+   =========================================================================== */
+
+:root {
+  --dc-quiet-bg:  var(--surface-2);
+  --dc-quiet-ink: var(--ink-2);
+  --dc-rule:      var(--line);
+}
+
+/* ------------------------------------------------------------- the day bar --
+   The segmented control and the day being reviewed. It wraps rather than
+   scrolls: on a 390 px phone the date input is a whole row of its own, and a
+   control a shopkeeper has to scroll sideways to reach is one he will not find.
+*/
+
+.dc-bar {
+  display: flex; align-items: center; gap: var(--s4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s5);
+}
+
+.dc-pick {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-left: auto;
+}
+.dc-pick label {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-pick input[type='date'] {
+  font: 600 var(--t-small)/1 var(--font);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 8px var(--s3);
+  min-height: 34px;
+}
+.dc-pick input[type='date']:focus-visible {
+  outline: none; border-color: var(--blue-500); box-shadow: var(--ring);
+}
+@media (max-width: 560px) {
+  .dc-pick { margin-left: 0; width: 100%; }
+  .dc-pick input[type='date'] { flex: 1; min-width: 0; }
+}
+
+/* --------------------------------------------------------------- the stats --
+   Four figures a shopkeeper reads from across the counter, in the same shape
+   the day brief uses, because they are the same four numbers.
+*/
+
+.dc-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+}
+@media (max-width: 1000px) { .dc-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px)  { .dc-stats { grid-template-columns: 1fr; } }
+
+.dc-stat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+}
+.dc-stat .lbl {
+  font: 600 11px/1.2 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-stat .val {
+  font: 700 clamp(21px, 2.3vw, 29px)/1.1 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+/* A figure that does not exist yet is not set in the size of one. "no figure"
+   at 29px reads as a number the eye then fails to find. */
+.dc-stat .val.quiet {
+  font-size: var(--t-h2); font-weight: 600; color: var(--ink-4);
+  align-self: start; padding: 4px 0;
+}
+.dc-stat .sub { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+
+/* Settled money, and nothing else on this screen. */
+.dc-stat.green { border-color: var(--green-line); background: var(--green-bg); }
+.dc-stat.green .val { color: var(--green); }
+
+/* ------------------------------------------------------------- top sellers -- */
+
+.dc-sellers { display: flex; flex-direction: column; }
+.dc-seller {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--dc-rule);
+}
+.dc-seller:last-child { border-bottom: 0; }
+.dc-seller .rank {
+  width: 22px; height: 22px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 700 11px/1 var(--font);
+  color: var(--blue-700); background: var(--blue-050);
+  border: 1px solid var(--blue-200); border-radius: 6px;
+}
+.dc-seller .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.dc-seller .units { color: var(--ink-3); }
+.dc-seller .amt { min-width: 5.5rem; text-align: right; font-weight: 600; }
+
+/* ------------------------------------------------------------- what went out -- */
+
+.dc-cats { display: flex; flex-direction: column; }
+.dc-cat {
+  display: grid;
+  grid-template-columns: 1fr auto minmax(5.5rem, auto);
+  align-items: baseline; gap: var(--s3);
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--dc-rule);
+}
+.dc-cat .nm { min-width: 0; overflow-wrap: anywhere; }
+.dc-cat .n {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-micro); color: var(--ink-4);
+}
+.dc-cat .amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.dc-splits { margin-top: var(--s3); }
+
+/* ---------------------------------------------------------------- closing --
+   The act, given the width of the page. Three blocks, in the order the work is
+   actually done: COUNT the drawer, then read WHY these figures are about to
+   stop moving, then sign it off in the rail — where the counted figure sits
+   directly above the button that freezes it.
+
+   On a phone the prose moves BELOW the form. It is the reasoning behind the
+   act, and a wall of it between the count and the button is a wall between a
+   shopkeeper and the thing he came here to do.
+*/
+
+.dc-close { border-color: var(--blue-200); }
+.dc-close .card-head { background: var(--blue-050); border-bottom-color: var(--blue-200); }
+.dc-close .card-head h2 { color: var(--blue-700); }
+
+.dc-close-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-areas:
+    'count form'
+    'why   form';
+  align-content: start;
+  gap: var(--s6);
+  padding: var(--s5);
+}
+.dc-count      { grid-area: count; min-width: 0; }
+.dc-close-why  { grid-area: why;   min-width: 0; }
+/* The rail follows the counting. Eleven boxes are taller than a laptop screen,
+   so a shopkeeper part-way down the sheet would otherwise be typing with the
+   running total and the button both scrolled off the top. Sticky only where
+   there is a second column to stick in. */
+.dc-close-form {
+  grid-area: form; min-width: 0;
+  position: sticky; align-self: start;
+  top: calc(var(--topbar-h) + var(--s4));
+}
+@media (max-width: 900px) {
+  .dc-close-body {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'count' 'form' 'why';
+    gap: var(--s5);
+  }
+  /* One column: the rail is no longer a rail, and a sticky block in the middle
+     of a scrolling phone page is a block that covers the sheet. */
+  .dc-close-form { position: static; }
+}
+
+/* --------------------------------------------------------- counting it --
+   A DRAWER IS NOT COUNTED AS A TOTAL. It is counted as piles: the five
+   hundreds, then the hundreds, then the coin tray. This is that sheet, and the
+   only arithmetic on this screen the browser does — whole counts times whole
+   paise, which is why it is allowed to do it. See components/Denominations.tsx.
+*/
+
+.dc-how { margin-bottom: var(--s4); }
+.dc-how .dc-eyebrow { margin-bottom: var(--s2); }
+
+.dc-typed { max-width: 460px; }
+
+.dc-denoms-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); margin-bottom: var(--s3);
+}
+.dc-denoms-head .dc-eyebrow { margin-bottom: 0; }
+
+/* Notes and coins side by side, because that is how they sit on the counter —
+   the bundle in one hand and the tray in the other. Below 760 they stack, and
+   the order is still notes first. */
+.dc-denoms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s4);
+  align-items: start;
+}
+@media (max-width: 760px) { .dc-denoms { grid-template-columns: 1fr; } }
+
+.dc-group {
+  padding: var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+
+/* One column definition, used by the header and every row, so a heading can
+   never end up over the wrong box. */
+/* The last column is sized for the widest figure this sheet can produce —
+   ₹4,99,500.00, which is 999 five-hundreds. A money column that wraps mid-figure
+   is a money column somebody misreads. */
+.dc-group-head,
+.dc-denom {
+  display: grid;
+  grid-template-columns: 4.25rem minmax(0, 1fr) minmax(5.75rem, 7rem);
+  gap: var(--s3);
+  align-items: center;
+}
+
+.dc-group-head {
+  padding: 0 var(--s2) var(--s2);
+  border-bottom: 1px solid var(--line-2);
+}
+.dc-group-head .nm {
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--ink-2);
+}
+.dc-group-head .hd {
+  font: 600 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-4);
+  text-align: center;
+}
+.dc-group-head .hd.amt { text-align: right; }
+
+/* THE WHOLE ROW IS THE TARGET. It is a <label>, so a thumb landing anywhere on
+   it — on the ×500, on the subtotal, on the space between — puts the caret in
+   that box. At ten at night, with one hand in the drawer, a 44px box somebody
+   has to hit exactly is a box that gets missed. */
+.dc-denom {
+  padding: var(--s2);
+  border-radius: var(--r-md);
+  border-bottom: 1px dashed var(--dc-rule);
+  cursor: text;
+  transition: background var(--fast) var(--ease);
+}
+.dc-denom:last-of-type { border-bottom: 0; }
+.dc-denom:hover { background: var(--surface-3); }
+/* Which pile you are on, without looking at the caret. */
+.dc-denom:focus-within { background: var(--blue-050); }
+
+.dc-denom .mult {
+  display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 1px;
+}
+.dc-denom .mult .x { font-size: var(--t-micro); color: var(--ink-4); }
+.dc-denom .mult b {
+  font: 700 var(--t-h2)/1 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tr-tight);
+}
+
+/* These boxes are not inside a `.field`, so they carry the control treatment
+   themselves — the same tokens app.css uses, so they read as the same object.
+   Set at --t-h2 for two reasons: it is legible from standing height, and 16px
+   is the floor below which iOS zooms the page when a field takes focus, which
+   on a phone throws away the layout mid-count. */
+.dc-denom input {
+  width: 100%;
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--s2);
+  font: 700 var(--t-h2)/1 var(--font);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-0);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.dc-denom input::placeholder { color: var(--ink-5); font-weight: 400; }
+.dc-denom input:hover:not(:disabled):not(:focus) { border-color: var(--line-3); }
+.dc-denom input:focus {
+  outline: none; border-color: var(--blue-500); box-shadow: var(--ring);
+}
+.dc-denom input:disabled { background: var(--surface-3); color: var(--ink-4); cursor: not-allowed; }
+/* Red, and only here: a box that cannot be read is the same refusal a server
+   field gets in app.css, and it stops the total dead rather than being skipped. */
+.dc-denom input[aria-invalid='true'] { border-color: var(--red); }
+.dc-denom input[aria-invalid='true']:focus { border-color: var(--red); box-shadow: var(--ring-red); }
+
+.dc-denom .sum {
+  text-align: right;
+  font-size: var(--t-small); font-weight: 600;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dc-denom .sum .none { color: var(--ink-5); font-weight: 400; }
+.dc-denom .sum .bad { color: var(--red); font-size: var(--t-micro); }
+
+.dc-group-sum {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+  margin-top: var(--s2);
+  padding: var(--s3) var(--s2) 0;
+  border-top: 1px solid var(--line-2);
+}
+.dc-group-sum .nm {
+  font: 600 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-group-sum .amt {
+  font: 700 var(--t-h3)/1.2 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+}
+.dc-group-sum .amt .none { font-size: var(--t-small); font-weight: 600; color: var(--ink-4); }
+
+/* A sheet that will not add up says so, in the colour this product uses for a
+   refusal. Nothing was read as zero to produce a total anyway. */
+.dc-count-bad {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  font-size: var(--t-small); line-height: 1.55;
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid var(--red-line);
+  border-radius: var(--r-md);
+}
+.dc-count-sheet > .hint { margin-top: var(--s3); }
+
+@media (max-width: 560px) {
+  .dc-group-head,
+  .dc-denom { grid-template-columns: 3.25rem minmax(0, 1fr) minmax(5.75rem, 6.5rem); }
+  /* A thumb, not a mouse. */
+  .dc-denom { padding: var(--s2) var(--s1); }
+  .dc-denom input { min-height: 52px; }
+}
+
+/* ------------------------------------------------------ the counted figure --
+   The one number this act writes, in the rail, directly above the button that
+   freezes it. BLUE AND NOT GREEN: green on this product means a payment a
+   signed webhook stands behind, and a drawer count is one person's word. It is
+   the accent because it is what the counter just worked out from the sheet.
+*/
+.dc-counted {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s4);
+  margin-bottom: var(--s4);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+}
+.dc-counted .lbl {
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--blue-700);
+}
+.dc-counted .val {
+  font: 700 clamp(26px, 3vw, 36px)/1.15 var(--font-display);
+  letter-spacing: var(--tr-display);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.dc-counted .sub { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+/* No figure yet is not a figure. It is not set in the size of one, and it does
+   not wear the accent, because nothing has been counted. */
+.dc-counted.none { background: var(--surface-2); border-color: var(--line); }
+.dc-counted.none .lbl { color: var(--ink-3); }
+.dc-counted.none .val {
+  font: 600 var(--t-h2)/1.3 var(--font);
+  letter-spacing: var(--tr-flat);
+  color: var(--ink-4);
+}
+
+.dc-eyebrow {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s3);
+}
+
+.dc-freeze {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px var(--s4);
+  align-items: baseline;
+  padding: var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.dc-freeze span {
+  font: 600 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-freeze b {
+  text-align: right;
+  font-size: var(--t-h3); font-weight: 700;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-close-form .field:last-of-type { margin-bottom: var(--s4); }
+.dc-close-form textarea { resize: vertical; }
+.dc-close-form input[aria-invalid='true'] { border-color: var(--amber-line); }
+
+.dc-form-refusal { margin-bottom: var(--s4); }
+
+.dc-gate {
+  font-size: var(--t-small); color: var(--ink-3);
+  align-self: center;
+}
+
+/* On a phone the act gets the width of the screen. This is the last button in
+   a day and it is pressed one-handed; GO BACK drops to its own line under it,
+   which also puts a little distance between the irreversible thing and the way
+   out of it. */
+@media (max-width: 560px) {
+  .dc-close-form .btn-row { row-gap: var(--s2); }
+  .dc-close-form .btn-row .btn.primary { width: 100%; }
+}
+
+/* The confirmation, which is a DIALOG.
+   It used to replace the button in the rail, on the reasoning that a box over
+   the page hides the figures being confirmed. What it actually did was ask the
+   one irreversible question on this counter in a panel two thirds of the way
+   down a long screen, below the fold on a phone, in the flow of a page the
+   shopkeeper was already scrolling — which is the shape of a question that gets
+   pressed past. The figures it needs are echoed inside it instead: the amount
+   as the exact string that will be sent, and the piles it was counted off. */
+.dc-confirm-amount {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s4); flex-wrap: wrap;
+  padding: var(--s4);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+}
+.dc-confirm-amount span {
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--blue-700);
+}
+.dc-confirm-amount b {
+  font: 800 clamp(22px, 4vw, 30px)/1.05 var(--font);
+  color: var(--navy-900); overflow-wrap: anywhere;
+}
+/* What the sheet counted, in pieces, at the last moment it can still be
+   checked against the piles on the counter. */
+.dc-confirm-pieces {
+  margin-top: var(--s3);
+  font-size: var(--t-small); font-weight: 600; line-height: 1.6;
+  color: var(--blue-700);
+}
+.dc-confirm-why {
+  margin-top: var(--s3);
+  font-size: var(--t-small); color: var(--ink-2); line-height: 1.6;
+}
+
+/* The bar travels; it does not claim a fraction. The stages belong to the
+   server — take the figures again, write the record, sign it onto the chain —
+   and this page cannot see which one it is in, so a percentage here would be a
+   number nobody measured. */
+.dc-closing {
+  display: flex; flex-direction: column; gap: var(--s2);
+  margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.dc-closing span { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+.dc-actions { display: inline-flex; margin-top: var(--s3); }
+
+/* ----------------------------------------------------------- a quiet pill --
+   Not a verdict. An early close, a voided expense, a record that has not been
+   edited: facts, none of which earns green, amber or red.
+*/
+.pill.dc-quiet {
+  background: var(--dc-quiet-bg);
+  color: var(--dc-quiet-ink);
+  border-color: var(--line-2);
+}
+
+/* -------------------------------------------------------- the closed days -- */
+
+.dc-rows { display: flex; flex-direction: column; }
+
+.dc-rows-head {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1.4fr) 5rem repeat(3, minmax(5.5rem, 1fr)) 1.5rem;
+  gap: var(--s3);
+  padding: 0 var(--s2) var(--s2);
+  border-bottom: 1px solid var(--line-2);
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-rows-head span:nth-child(3),
+.dc-rows-head span:nth-child(4),
+.dc-rows-head span:nth-child(5) { text-align: right; }
+/* On a phone each figure in a row names itself, so the header would be a
+   second set of labels for the same three numbers. */
+@media (max-width: 760px) { .dc-rows-head { display: none; } }
+
+.dc-row {
+  appearance: none; cursor: pointer; text-align: left;
+  display: grid;
+  grid-template-columns: minmax(9rem, 1.4fr) 5rem repeat(3, minmax(5.5rem, 1fr)) 1.5rem;
+  align-items: center; gap: var(--s3);
+  width: 100%;
+  padding: var(--s3) var(--s2);
+  background: transparent;
+  border: 0; border-bottom: 1px solid var(--dc-rule);
+  font: inherit; color: var(--ink);
+  transition: background var(--fast) var(--ease);
+}
+.dc-row:last-of-type { border-bottom: 0; }
+.dc-row:hover { background: var(--surface-2); }
+.dc-row.open { background: var(--blue-050); }
+.dc-row .dy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dc-row .dy b { font-size: var(--t-small); font-weight: 700; color: var(--navy-900); }
+.dc-row .t {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: var(--t-micro); color: var(--ink-4);
+}
+.dc-row .n { font-size: var(--t-small); color: var(--ink-2); }
+.dc-row .amt { text-align: right; font-weight: 600; }
+/* Settled money keeps its colour in the list, for the same reason it keeps it
+   in the tile: it is the only column here that a webhook stands behind. */
+.dc-row .amt.set { color: var(--green); }
+/* Nothing settled that day. The figure stays, the colour does not. */
+.dc-row .amt.set.none { color: var(--ink-4); font-weight: 500; }
+.dc-row .chev {
+  text-align: right;
+  font: 700 var(--t-h3)/1 var(--font);
+  color: var(--ink-4);
+}
+
+/* On a phone the three money columns lose their header, so each one names
+   itself. Three bare rupee figures in a row is the shape of a bug report. */
+@media (max-width: 760px) {
+  .dc-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: var(--s3);
+    padding: var(--s4) var(--s2);
+  }
+  .dc-row .dy   { grid-row: 1; grid-column: 1 / 3; }
+  .dc-row .chev { grid-row: 1; grid-column: 3; align-self: start; }
+  .dc-row .n    { grid-column: 1 / 4; }
+  .dc-row .amt  { text-align: left; }
+  .dc-row .amt::before {
+    display: block;
+    font: 700 10px/1.6 var(--font);
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-4);
+  }
+  /* Named by class, not by `nth-of-type`: every child of a row is a span, so an
+     ordinal selector counts the day block and the chevron too and labels the
+     wrong columns the moment one of them moves. */
+  .dc-row .amt.bill::before { content: 'billed'; }
+  .dc-row .amt.set::before  { content: 'settled'; }
+  .dc-row .amt.cnt::before  { content: 'counted'; }
+}
+
+.dc-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4);
+  margin-top: var(--s4); padding-top: var(--s3);
+  border-top: 1px dashed var(--dc-rule);
+  font-size: var(--t-micro); color: var(--ink-3);
+}
+.dc-legend b { color: var(--ink-2); }
+.dc-legend b.set { color: var(--green); }
+
+/* ------------------------------------------------------- one closed day -- */
+
+/* The sentence that says why these numbers do not move. It is set apart rather
+   than dropped in as a hint, because it is the whole reason the record exists
+   and a shopkeeper reading a figure that disagrees with today's screen needs to
+   find it without looking. */
+.dc-frozen {
+  font-size: var(--t-small); line-height: 1.65; color: var(--ink-2);
+  padding: var(--s4);
+  background: var(--surface-2);
+  border-left: 3px solid var(--line-2);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  margin-bottom: var(--s5);
+}
+
+.dc-frozen-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+@media (max-width: 900px) { .dc-frozen-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 420px) { .dc-frozen-grid { grid-template-columns: 1fr; } }
+.dc-frozen-grid .dc-stat { padding: var(--s4); box-shadow: none; }
+.dc-frozen-grid .dc-stat .val { font-size: clamp(18px, 2vw, 22px); }
+
+.dc-note {
+  padding: var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  margin-top: var(--s4);
+}
+.dc-note p { font-size: var(--t-small); color: var(--ink); line-height: 1.6; }
+
+.dc-block {
+  margin-top: var(--s6);
+  padding-top: var(--s5);
+  border-top: 1px solid var(--dc-rule);
+}
+
+.dc-same {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  font-size: var(--t-small); color: var(--ink-2); line-height: 1.6;
+}
+
+/* The difference table. Four columns and never three: the frozen figure, the
+   live one and the gap between them are three separate claims, and a table that
+   showed only the gap would leave a reader working out which way it went. */
+.dc-diff {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.dc-diff-head, .dc-diff-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1.4fr) repeat(3, minmax(4.5rem, 1fr));
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  align-items: baseline;
+}
+.dc-diff-head {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.dc-diff-head span:not(:first-child),
+.dc-diff-row  span:not(:first-child) { text-align: right; }
+.dc-diff-row { border-bottom: 1px dashed var(--dc-rule); font-size: var(--t-small); }
+.dc-diff-row:last-child { border-bottom: 0; }
+.dc-diff-row .k { color: var(--ink-2); font-weight: 600; }
+.dc-diff-row .delta { font-weight: 700; color: var(--navy-900); }
+
+/* Same rule as the list: without the header row each figure names itself,
+   because "frozen", "now" and "the difference" are three different claims and
+   nobody should have to guess which column they are reading. */
+@media (max-width: 560px) {
+  .dc-diff-head { display: none; }
+  .dc-diff-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 4px;
+  }
+  .dc-diff-row .k { grid-column: 1 / 4; }
+  .dc-diff-row span:not(.k) { text-align: left; }
+  .dc-diff-row span:not(.k)::before {
+    display: block;
+    font: 700 10px/1.6 var(--font);
+    letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-4);
+  }
+  .dc-diff-row span:nth-child(2)::before { content: 'frozen'; }
+  .dc-diff-row span:nth-child(3)::before { content: 'now'; }
+  .dc-diff-row span:nth-child(4)::before { content: 'difference'; }
+}
+
+/* ============================================================== waiting ==
+   NO PANEL ON THIS SCREEN RENDERS BLANK.
+
+   This screen fetches a preview, a cash position, the day's outgoings and the
+   list of closed days, and it used to answer every one of them with a grey
+   sentence in an otherwise empty card. Four figures, two columns of cards and
+   the close form then landed at once, moving whatever the shopkeeper's thumb
+   was already reaching for.
+
+   Every block below is the SAME grid, the SAME padding and the SAME number of
+   rows as the thing that replaces it. The blocks themselves are `.skel` from
+   app.css — pale blue, because a skeleton is the machine working and blue is
+   the machine's own colour on this product. Green, amber and red are spoken
+   for: settled, abstained, refused.
+*/
+
+/* A tile, waiting. It keeps the tile's border and padding so nothing about the
+   box changes when the figure arrives — only its contents. */
+.dc-skel-stat { gap: var(--s3); box-shadow: none; background: var(--surface-2); }
+
+/* A name and a figure. THE FIGURE'S BLOCK IS HARD RIGHT, at the edge the rupees
+   will occupy: a money column whose skeleton sits on the left teaches the eye
+   the wrong place to look and then moves the number there. */
+.dc-skel-amts { display: flex; flex-direction: column; }
+.dc-skel-amt {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: 11px 0;
+  border-bottom: 1px dashed var(--dc-rule);
+}
+.dc-skel-amt:last-child { border-bottom: 0; }
+.dc-skel-amt > .skel:first-child { flex: 0 1 auto; }
+.dc-skel-amt > .skel:last-child  { flex: none; margin-left: auto; }
+
+/* The closed-day rows, at the grid `.dc-row` uses — restated rather than shared,
+   because `.dc-row` is a button and carries a pointer cursor, a hover wash and
+   the per-figure labels a phone adds. A skeleton wants the geometry and none of
+   the behaviour. */
+.dc-skel-days { display: flex; flex-direction: column; }
+.dc-skel-day {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1.4fr) 5rem repeat(3, minmax(5.5rem, 1fr)) 1.5rem;
+  align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s2);
+  border-bottom: 1px solid var(--dc-rule);
+}
+.dc-skel-day:last-child { border-bottom: 0; }
+.dc-skel-day .dy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.dc-skel-day .amt > .skel,
+.dc-skel-day .n > .skel { margin-left: auto; }
+
+/* The same fold the real rows take at 760px: three columns, the day across the
+   top. The figures stop being a right-aligned column there, so their blocks
+   stop being right-aligned with them. */
+@media (max-width: 760px) {
+  .dc-skel-day {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: var(--s3);
+    padding: var(--s4) var(--s2);
+  }
+  .dc-skel-day .dy { grid-column: 1 / 4; }
+  .dc-skel-day .n  { grid-column: 1 / 4; }
+  .dc-skel-day .amt > .skel,
+  .dc-skel-day .n > .skel { margin-left: 0; }
+}
+
+/* A column of the close card, waiting. */
+.dc-skel-block { display: flex; flex-direction: column; gap: var(--s3); }
+
+/* A frozen record, waiting: the sentence about what a record is, the four
+   figures, and the sentence about what is not compared. */
+.dc-skel-record { display: flex; flex-direction: column; gap: var(--s4); }
+.dc-skel-record .dc-frozen-grid { margin-bottom: 0; }
