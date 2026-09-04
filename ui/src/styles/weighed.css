@@ -1,0 +1,362 @@
+/* ===========================================================================
+   GAWAAH — the By-weight screen (routes/Weighed.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `wg-` so it cannot reach
+   into the till's classes in app.css or any other screen's sheet by accident.
+
+   WHAT IS NOT HERE. Cards, buttons, inputs, selects, the segmented control,
+   the pills, the verdicts, the loading skeletons and the empty states are the
+   shared layer in components/ui.tsx and app.css. This sheet holds only what
+   the screen genuinely has of its own: the readout, the keypad, the presets,
+   the priced-line block and the list row.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css, referenced by
+   name. The palette is being rebuilt; nothing here assumes what a token holds.
+
+   COLOUR DISCIPLINE. Green, amber and red mean money and recognition state.
+   A priced weight is not settled money, so the figure is set in ink, large,
+   and never green. The one amber this screen earns is the stated limit — a
+   weighed line cannot yet be charged through the gateway — which is exactly
+   the kind of money fact amber is for.
+
+   ONE-HANDED. This is a scale-side screen: a shopkeeper with a scoop in one
+   hand and a thumb free. Nothing that has to be pressed is under 44 px; the
+   keypad keys and the presets are 56 px; the add button is the biggest thing
+   on the page. The digits are the biggest type the ramp has.
+   =========================================================================== */
+
+.wg-page { display: flex; flex-direction: column; gap: var(--s5); }
+.wg-page > .page-head { margin-bottom: 0; }
+
+.wg-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 460px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+/* One column below the point where the pad and the list stop fitting side by
+   side. The pad goes first: it is what the shopkeeper came here to press.
+
+   `minmax(0, 1fr)` AND NOT `1fr`, AND THAT ONE WORD WAS THE WHOLE BUG.
+   `1fr` is shorthand for `minmax(auto, 1fr)`, and the `auto` floor is
+   min-content — so the single column refused to go narrower than the widest
+   thing inside the pad (the keypad and the preset row) and simply grew. At
+   390 that made the card 550 px wide and the WHOLE PAGE scrolled sideways,
+   176 px past the viewport. A zero floor lets the track shrink to the phone
+   and the content reflows inside it: measured after, scrollWidth == 390 ==
+   clientWidth, with nothing left past the right edge. */
+@media (max-width: 960px) {
+  .wg-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.wg-lede {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: var(--lh-loose);
+  max-width: 68ch;
+  margin-bottom: var(--s4);
+}
+
+/* ------------------------------------------------------------ the readout -- */
+
+.wg-pad { display: flex; flex-direction: column; gap: var(--s4); }
+
+/* The weight, as typed, and the unit it is in. The input IS the readout: a
+   keyboard can type into it and the keypad below writes into it. Tabular
+   figures so "1.25" and "1.5" do not shift the unit sideways. */
+.wg-readout {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-in);
+}
+.wg-readout input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--navy-900);
+  font: 800 var(--t-mega)/var(--lh-tight) var(--font-display, var(--font));
+  letter-spacing: var(--tr-mega);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 0;
+  box-shadow: none;
+}
+.wg-readout input::placeholder { color: var(--ink-5); font-weight: 600; }
+.wg-readout input:focus, .wg-readout input:focus-visible { box-shadow: none; outline: none; }
+.wg-readout:focus-within { border-color: var(--blue-500); box-shadow: var(--ring); }
+.wg-unit {
+  flex: none;
+  font: 700 var(--t-h2)/1 var(--font);
+  color: var(--ink-3);
+  letter-spacing: var(--tr-flat);
+  min-width: 2.2em;
+}
+
+/* The same weight in the other unit, small, from the server's answer. */
+.wg-also {
+  font-size: var(--t-small);
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.4em;
+  text-align: right;
+}
+
+.wg-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.wg-row > .seg { flex: none; }
+.wg-row > .field { flex: 1; min-width: 160px; margin-bottom: 0; }
+
+/* ------------------------------------------------------------- the presets -- */
+
+.wg-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s2);
+}
+.wg-preset {
+  appearance: none;
+  cursor: pointer;
+  min-height: 56px;
+  padding: 0 var(--s2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: 700 var(--t-h3)/1.2 var(--font);
+  letter-spacing: var(--tr-flat);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-0);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.wg-preset:hover:not(:disabled) { border-color: var(--line-3); background: var(--surface-2); }
+.wg-preset:active:not(:disabled) { box-shadow: var(--shadow-in); }
+.wg-preset[aria-pressed='true'] {
+  background: var(--blue-050);
+  border-color: var(--blue-500);
+  color: var(--blue-700);
+}
+.wg-preset:disabled { opacity: .45; cursor: not-allowed; }
+/* The rupee figure under the weight, read from the server's example. */
+.wg-preset small {
+  display: block;
+  font: 600 var(--t-micro)/1.3 var(--font);
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+.wg-preset[aria-pressed='true'] small { color: var(--blue-700); }
+
+/* -------------------------------------------------------------- the keypad -- */
+
+.wg-keys {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s2);
+}
+.wg-key {
+  appearance: none;
+  cursor: pointer;
+  min-height: 56px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--navy-900);
+  font: 700 var(--t-h1)/1 var(--font-display, var(--font));
+  letter-spacing: var(--tr-tight);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-0);
+  transition: background var(--fast) var(--ease);
+  touch-action: manipulation;   /* no double-tap zoom on a thumb that is quick */
+  user-select: none;
+}
+.wg-key:hover:not(:disabled) { background: var(--surface-2); }
+.wg-key:active:not(:disabled) { background: var(--surface-3); box-shadow: var(--shadow-in); }
+.wg-key:disabled { opacity: .35; cursor: not-allowed; }
+.wg-key.fn { background: var(--surface-3); color: var(--ink-2); font-size: var(--t-h3); }
+.wg-key.fn:hover:not(:disabled) { background: var(--surface-4); }
+
+/* --------------------------------------------------------- the priced line -- */
+
+/* The server's arithmetic, laid out as a sum a shopkeeper can check by eye:
+   the per-kilo price, times the weight, equals the figure. */
+.wg-sum {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  min-height: 116px;
+}
+.wg-sum-l {
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.wg-sum-eq {
+  color: var(--ink-2);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+.wg-sum-v {
+  color: var(--navy-900);
+  font: 800 var(--t-display)/var(--lh-tight) var(--font-display, var(--font));
+  letter-spacing: var(--tr-tight);
+  font-variant-numeric: tabular-nums;
+}
+.wg-sum-v.quiet { color: var(--ink-5); font-weight: 600; }
+/* The paisa the floor dropped. Small and factual: it is under one paisa, it
+   went to the customer, and it is said rather than hidden. */
+.wg-sum-drop {
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.wg-sum-why { font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-body); }
+
+.wg-add { min-height: 56px; font-size: var(--t-h3); }
+
+/* The stated limit. Amber because it is a money fact — this line cannot yet
+   be charged through the gateway — and not a decoration. */
+.wg-limit {
+  display: flex;
+  gap: var(--s2);
+  align-items: flex-start;
+  padding: var(--s3);
+  border-radius: var(--r-md);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+  color: var(--amber);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+}
+.wg-limit svg { flex: none; margin-top: 2px; }
+
+/* ------------------------------------------------ lines written this session -- */
+
+.wg-recent { display: flex; flex-direction: column; gap: var(--s2); }
+.wg-recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s2) var(--s3);
+  align-items: center;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--t-small);
+}
+.wg-recent-row b { color: var(--navy-900); font-variant-numeric: tabular-nums; }
+.wg-recent-row .wg-id {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  word-break: break-all;
+}
+
+/* ------------------------------------------------------------- the list -- */
+
+.wg-list { display: flex; flex-direction: column; gap: var(--s3); }
+.wg-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.wg-item-main { flex: 1; min-width: 0; }
+.wg-item-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+.wg-item-name .wg-perkg { color: var(--ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wg-item-sku {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  margin-top: 2px;
+  word-break: break-all;
+}
+/* What the presets cost, as four small facts in a row. Server's numbers. */
+.wg-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s3);
+  margin-top: var(--s2);
+  font-size: var(--t-small);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.wg-examples b { color: var(--ink); font-weight: 600; }
+.wg-item-note { margin-top: var(--s2); font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5; }
+.wg-item-actions { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: var(--s2); }
+
+@media (max-width: 560px) {
+  .wg-item { flex-direction: column; }
+  .wg-item-actions { flex-direction: row; width: 100%; justify-content: flex-end; }
+}
+
+.wg-form { border-top: 1px solid var(--line); padding-top: var(--s4); margin-top: var(--s4); }
+.wg-form .btn-row { margin-top: var(--s2); }
+
+/* ------------------------------------------------------------- the rule -- */
+
+.wg-rule { font-family: var(--mono); font-size: var(--t-small); color: var(--ink); }
+/* A definition list, not a ledger: the key takes a fixed column and the value
+   reads from the left beside it. The shared `.kv` right-aligns its value for
+   figures that are compared down a column, which these sentences are not. */
+.wg-kvs .kv { justify-content: flex-start; }
+.wg-kvs .kv > b { flex: 0 0 150px; }
+/* Ranged left because the value here is a SENTENCE, not a figure — so it also
+   drops the semibold the shared `.kv` gives a value. That weight is there to
+   make a number carry down a column; on two lines of prose it just shouts. */
+.wg-kvs .kv > span { flex: 1; text-align: left; max-width: 80ch; word-break: break-word; font-weight: 500; }
+@media (max-width: 560px) {
+  .wg-kvs .kv { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .wg-kvs .kv > b { flex: none; }
+}
+
+/* ---------------------------------------------------- a dead control's why --
+   MARK IT is dead every time this page is opened, for one of three reasons,
+   and it used to give none of them. This is the answer, in the place the hand
+   already is.
+
+   QUIET INK, NOT A COLOUR. A control that is not applicable yet is not a
+   refusal and not an abstention; on this product amber and red are spoken for.
+   Amber on this screen belongs to one thing — a weighed line the gateway will
+   not charge — and that statement is drawn by the shared Verdict. */
+.wg-whydead {
+  margin-top: var(--s3);
+  font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-loose);
+  max-width: 64ch;
+}
+
+/* A refused unmark sits above the form, under its own name, rather than being
+   filed under the page banner about a request that had just succeeded. */
+.wg-unmark-err { margin-top: var(--s4); }
+
+/* An anchor styled as a button. `.btn` in app.css does not clear the
+   underline — only `a.btn.pay.big` does — so every link-button on this screen
+   carried a stray rule through the middle of its label. Scoped to this
+   screen's own class rather than `a.btn`, because this stylesheet stays in
+   the document once the route has been visited and must not restyle the
+   nineteen screens it does not own. */
+a.btn.wg-linkbtn { text-decoration: none; }

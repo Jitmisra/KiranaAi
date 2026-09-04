@@ -1,0 +1,172 @@
+/* ===========================================================================
+   GAWAAH — the share sheet (components/ShareSheet.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one component. Everything is prefixed `sh-` so it cannot
+   collide with the till's classes in app.css, the Stock screen's `st-`, or the
+   Books screens' `bk-`/`bh-`.
+
+   WHAT IS NOT HERE. The dialog, its scrim, its focus trap and its conversion
+   to a bottom sheet on a phone are all `Modal` in components/ui.tsx and
+   app.css. So are the button, the field, the input, the pill, the loading
+   card, the empty state and the refusal. This sheet holds only the four things
+   the share flow genuinely has of its own: the message block, the meta row
+   above it, the WhatsApp anchor (which has to be an <a> and therefore does not
+   inherit `.btn`'s reset for a link), and the limits disclosure.
+
+   NO LITERAL COLOUR. Every value below is a token from tokens.css.
+
+   COLOUR DISCIPLINE. Green, amber and red are reserved on this product for
+   money and recognition state, and this sheet spends them on exactly one
+   thing: the payment pill, through the shared `Pill` — green only when a
+   signed webhook settled the bill, amber when the counter recorded a
+   settlement the gateway has not confirmed. WhatsApp's own green is NOT used.
+   A brand colour on the send button would sit next to a payment pill and mean
+   nothing, and a shopkeeper glancing across the counter cannot be asked to
+   tell a brand from a verdict by a shade. The send button is the indigo
+   accent, like every other action on this counter.
+   =========================================================================== */
+
+.sh { display: flex; flex-direction: column; gap: var(--s4); }
+
+/* --- the row above the message ------------------------------------------
+   The state, the money and the length, on one baseline. `flex-wrap` because
+   at 390 px a long status and a total do not share a line. */
+.sh-meta {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+}
+
+.sh-total {
+  font-family: var(--font-display);
+  font-size: var(--t-h2); font-weight: 700;
+  letter-spacing: var(--tr-tight);
+  color: var(--navy-900);
+}
+
+/* Shown only when the message is within a quarter of the server's cap. A
+   character count on a 300-character bill is a number about nothing; near the
+   cap it is why the next line might be refused. Not a warning colour: the
+   server refuses over its own cap, and nothing here is a verdict. */
+.sh-count {
+  margin-left: auto;
+  font-size: var(--t-micro); color: var(--ink-4);
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+}
+
+/* --- the message ---------------------------------------------------------
+   THE SERVER'S BYTES, SET AS THEY WILL BE SENT. `pre-wrap` keeps the line
+   breaks that are actually in the string and wraps the long ones; anything
+   that reflowed this would be showing the shopkeeper a message other than the
+   one he is about to send.
+
+   Set in the interface font and not the mono stack on purpose: this is prose a
+   customer will read on a phone, and monospace would make a bill look like a
+   log file. `user-select: text` is explicit because this block IS the
+   desktop's fallback — a laptop with no WhatsApp session copies from here. */
+.sh-msg {
+  margin: 0;
+  padding: var(--s4);
+  font: 400 var(--t-body)/var(--lh-body) var(--font);
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-300);
+  border-radius: var(--r-lg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;   /* a long product name must not push the page sideways */
+  user-select: text;
+  /* NO max-height AND NO overflow HERE, deliberately. `Modal`'s body already
+     scrolls, and a scroller inside a scroller cut the message mid-sentence
+     with no visible scrollbar to say it had — measured at 390 px, where the
+     reorder message ended on "does not know your case". The server caps the
+     message at 1600 characters, so its longest possible form is a page the
+     sheet can scroll in one motion. */
+}
+
+/* Why the receipt address is not in the message — a loopback counter, or a
+   Host header this server could not read. Quiet: it is a fact about the
+   network, not a verdict about money, so it wears no verdict colour. */
+.sh-note {
+  margin: 0;
+  font-size: var(--t-small); line-height: var(--lh-body);
+  color: var(--ink-3);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line-2);
+}
+
+.sh-from { color: var(--ink-4); }
+
+/* What pressing the button actually does — the server's own sentence. NO left
+   rule, unlike `.sh-note` above it: the two sat one under the other and read as
+   two of the same thing, when one is a condition of THIS counter (a loopback
+   address) and the other is a permanent fact about the mechanism. */
+.sh-said {
+  margin: 0;
+  font-size: var(--t-small); line-height: var(--lh-body);
+  color: var(--ink-4);
+}
+
+/* --- the send button -----------------------------------------------------
+   An <a> carrying `.btn.primary`. The anchor is what keeps the user gesture
+   intact — a window.open() after an await is blocked by every mobile browser
+   worth naming — so these three lines undo what a browser does to a link and
+   nothing else. */
+.sh-wa { text-decoration: none; color: var(--on-dark); }
+.sh-wa:hover { text-decoration: none; }
+.sh-wa:visited { color: var(--on-dark); }
+
+/* --- what this does, and what it does not --------------------------------
+   Collapsed by default and worth having open: a shopkeeper who believes this
+   counter SENDS messages will stop checking that they went. */
+.sh-limits {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+}
+
+.sh-limits > summary {
+  cursor: pointer; list-style: none;
+  font-size: var(--t-small); font-weight: 600; color: var(--accent-600);
+  padding: var(--s1) 0;
+}
+.sh-limits > summary::-webkit-details-marker { display: none; }
+.sh-limits > summary::after {
+  content: '';
+  display: inline-block; vertical-align: middle;
+  margin-left: var(--s2);
+  width: 6px; height: 6px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform var(--fast) var(--ease);
+}
+.sh-limits[open] > summary::after { transform: rotate(-135deg) translate(-1px, -1px); }
+.sh-limits > summary:hover { color: var(--accent-700); }
+
+.sh-limits-body {
+  display: flex; flex-direction: column; gap: var(--s3);
+  padding-top: var(--s3);
+  font-size: var(--t-small); line-height: var(--lh-body); color: var(--ink-3);
+}
+.sh-limits-body .sh-fine { color: var(--ink-4); font-size: var(--t-micro); }
+
+/* --- the phone ---------------------------------------------------------- */
+
+/* A number is compared against a contact card digit by digit, so it does not
+   jitter, and it is set a step larger than body text because it is the one
+   field on this sheet where a wrong character sends a bill to a stranger. */
+.sh #sh-phone {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-lead);
+  letter-spacing: .02em;
+}
+
+/* --- a thumb, over a counter -------------------------------------------- */
+@media (max-width: 560px) {
+  /* The message can take the height here: `Modal` is already a bottom sheet at
+     this width and the field below it is one line. */
+  .sh-msg { padding: var(--s3); }
+  .sh-count { margin-left: 0; width: 100%; }
+  /* The footer buttons share the width at this breakpoint (app.css sets
+     `flex: 1` on `.modal-foot .btn`), and the anchor is not a `.btn` child by
+     tag, so it is told to behave like one. */
+  .modal-foot .sh-wa { flex: 1; }
+}

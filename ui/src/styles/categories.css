@@ -1,0 +1,591 @@
+/* ===========================================================================
+   Categories — the filing screen.
+
+   Imported by `routes/Categories.tsx` and by nothing else. Every colour is a
+   token from tokens.css; there is not one literal hex in this file, so a
+   re-theme there reaches this screen too.
+
+   Every rule is prefixed `cat-` or scoped under one of those classes. The
+   till's own stylesheet belongs to another part of the program and this file
+   must not be able to reach into it by accident — a shared bare class name is
+   exactly how one screen's tweak silently moves another screen's layout.
+
+   ON COLOUR. Green, amber and red mean MONEY and RECOGNITION state on this
+   product and nothing here may borrow them. Filing is neither: a shelf with
+   nothing on it is not a warning and an unfiled packet is not a failure, so
+   every count, chip and selected row on this screen is ink, grey or the action
+   blue. The only warm colour that appears is inside the shared Refusal and
+   Verdict components, where it means what it means everywhere else.
+   =========================================================================== */
+
+.cat-page { display: flex; flex-direction: column; gap: var(--s5); }
+.cat-page > .page-head { margin-bottom: 0; }
+/* Verdicts and refusals inside a card space themselves with the card's own
+   rhythm rather than stacking two margins. */
+.cat-page .verdict { margin-top: var(--s4); }
+.cat-page .card-body > .verdict:first-child { margin-top: 0; }
+
+/* A small grey line of type used all over this screen: a hint under an input,
+   a note beside a control. `.field .sub` already looks like this; this puts the
+   same voice on the ones that are not inside a field. */
+.cat-page .sub {
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  line-height: 1.5;
+}
+
+.cat-lede {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  max-width: 74ch;
+  margin-bottom: var(--s4);
+}
+
+.cat-note {
+  margin-top: var(--s4);
+  font-size: var(--t-micro);
+  line-height: 1.7;
+  color: var(--ink-3);
+  max-width: 78ch;
+}
+
+/* --------------------------------------------------------- the four counts -- */
+
+.cat-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+}
+@media (max-width: 720px) {
+  .cat-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.cat-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s4) var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+}
+.cat-stat b {
+  font-size: var(--t-h1);
+  font-weight: 800;
+  letter-spacing: -.02em;
+  color: var(--navy-900);
+}
+.cat-stat span {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.cat-statskel { height: 74px; border-radius: var(--r-lg); }
+
+/* ------------------------------------------------------------- the layout -- */
+
+/* The shelves are the narrower half and are capped rather than shared evenly:
+   a menu of one-word labels needs 340 px and the product list needs everything
+   that is left, because its five columns are what get squeezed first. */
+.cat-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 344px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+/* One column below the point where a menu and a product list stop being
+   readable side by side. The shelves go first: on a phone the shopkeeper came
+   here to make a shelf, not to audit one. */
+@media (max-width: 1000px) {
+  .cat-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.cat-skels { display: flex; flex-direction: column; gap: var(--s3); }
+
+/* A PANEL THAT IS RE-READING SOMETHING IT ALREADY SHOWS.
+   Not a skeleton — the rows below are still true, only a moment old, and
+   replacing them with grey bars every time a filter changes makes the list
+   flash and lose its place. Blue, because it is the machine working, and
+   green/amber/red are money and recognition on this counter. */
+.cat-working {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-top: var(--s3);
+  font-size: var(--t-micro);
+  color: var(--blue-700);
+}
+
+/* CREATE ALL, counting its own round trips. There is no route that makes
+   several categories at once, so the bar measures requests this browser has
+   actually finished rather than a stage it is guessing at. */
+.cat-run {
+  margin-top: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  background: var(--blue-050);
+}
+.cat-run-head {
+  display: flex; align-items: center; gap: var(--s3);
+  font-size: var(--t-small); font-weight: 600; color: var(--blue-700);
+  margin-bottom: var(--s3);
+}
+.cat-run-head .tnum { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* A refusal about ONE row, on that row. It takes the row's whole width so the
+   server's sentence is never squeezed into the gap beside four icons. */
+.cat-rowerr { flex-basis: 100%; }
+.cat-rowerr .verdict { margin-top: var(--s2); }
+
+/* ------------------------------------------------------------ the shelves -- */
+
+/* ADD on its own line under the two fields. Beside them it took seventy pixels
+   out of a 340 px column and the parent select rendered "Househo". */
+.cat-new {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: end;
+}
+.cat-new .field { margin-bottom: 0; }
+.cat-new .btn { grid-column: 1 / -1; height: 40px; }
+@media (max-width: 560px) {
+  .cat-new { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Why the two boxes above are off. OUTSIDE the grid on purpose — see the note
+   in Categories.tsx: hanging it inside one cell of a bottom-aligned two-column
+   grid dropped the other cell's label a row. */
+.cat-why {
+  margin-top: var(--s3);
+  font-size: var(--t-micro);
+  line-height: 1.6;
+  color: var(--ink-3);
+  max-width: 74ch;
+}
+
+.cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+/* A child is indented and hung off a rule, so one level of nesting is visible
+   at a glance and a second level would look obviously wrong if it ever existed. */
+.cat-row.kid {
+  margin-left: var(--s6);
+  border-left: 3px solid var(--line-2);
+}
+.cat-row.editing { display: block; background: var(--surface-2); }
+.cat-row.editing .field:last-of-type { margin-bottom: var(--s3); }
+
+/* The name is a filter button. It looks like a label until it is hovered,
+   because it is a label first and a control second. */
+.cat-name {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s2);
+  border-radius: var(--r-sm);
+}
+/* A forty-character name in a 150 px column has to break somewhere, and the
+   only alternative to breaking it is drawing it over the buttons beside it. */
+.cat-name .l {
+  font-size: var(--t-small); font-weight: 700; color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.cat-name .s { font-size: var(--t-micro); color: var(--ink-4); }
+.cat-name:hover { background: var(--surface-2); }
+.cat-name[aria-pressed='true'] { background: var(--blue-050); }
+.cat-name[aria-pressed='true'] .l { color: var(--blue-700); }
+.cat-name[aria-pressed='true'] .s { color: var(--blue-600); }
+
+.cat-tools { display: flex; align-items: center; gap: 4px; flex: none; }
+
+.cat-icon {
+  width: 27px; height: 27px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink-3);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.cat-icon:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
+.cat-icon:disabled { opacity: .35; cursor: not-allowed; }
+/* The bin while its confirmation is open. Ink, not red: red on this product
+   means money, and the sentence in the box is what carries the warning. */
+.cat-icon.armed { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+/* A touch target of 27 px is fine for a mouse and small for a thumb, so on a
+   device with no hover the icons grow rather than staying decorative. */
+@media (hover: none) {
+  .cat-icon { width: 34px; height: 34px; }
+}
+
+/* The confirmation takes the whole width of the row it belongs to, so the
+   sentence about what is about to happen is never squeezed into a corner. */
+.cat-confirm {
+  flex-basis: 100%;
+  margin-top: var(--s2);
+  padding: var(--s3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.cat-confirm b { font-size: var(--t-small); color: var(--navy-900); }
+.cat-confirm p {
+  margin: var(--s2) 0 var(--s3);
+  font-size: var(--t-micro);
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------- the product list -- */
+
+.cat-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, .9fr) minmax(0, 1fr);
+  gap: var(--s3);
+}
+.cat-filters .field { margin-bottom: 0; }
+@media (max-width: 620px) {
+  .cat-filters { grid-template-columns: minmax(0, 1fr); }
+}
+
+.cat-prods {
+  margin-top: var(--s4);
+  display: flex;
+  flex-direction: column;
+}
+
+.cat-prod {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1.7fr) 84px 148px minmax(0, 1.2fr);
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.cat-prod:last-child { border-bottom: 0; }
+.cat-prod.on { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+
+.cat-prod.head {
+  padding-top: 0; padding-bottom: var(--s2);
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+.cat-prod.head .num { text-align: right; }
+
+.cat-prod-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cat-prod-main .nm { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+/* ONE LINE, clipped. The sku id and how it was taught are context, not the
+   row: wrapped over three lines they made every product forty pixels taller
+   and pushed the shelf control off the first screen. */
+.cat-prod-main .mono {
+  color: var(--ink-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cat-prod-price {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 0;
+  font-size: var(--t-small);
+}
+.cat-prod-price b { color: var(--navy-900); font-weight: 700; }
+.cat-prod-price s { color: var(--ink-4); font-size: var(--t-micro); }
+
+.cat-prod-shelf select {
+  width: 100%;
+  font: 400 var(--t-small)/1.3 var(--font);
+  color: var(--ink);
+  padding: 6px var(--s2);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+.cat-prod-shelf select:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+
+.cat-prod-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+
+/* A phone reads this as a stack: the checkbox and the name on one line, then
+   the price, then the shelf, then the tags. A five-column grid at 390 px is
+   four illegible columns and a scrollbar. */
+@media (max-width: 900px) {
+  .cat-prod {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'check main price'
+      '.     shelf shelf'
+      '.     tags  tags';
+    row-gap: var(--s2);
+    padding: var(--s3) var(--s2) var(--s4);
+  }
+  .cat-prod > input[type='checkbox'] { grid-area: check; align-self: start; margin-top: 3px; }
+  .cat-prod-main { grid-area: main; }
+  .cat-prod-price { grid-area: price; align-self: start; }
+  .cat-prod-shelf { grid-area: shelf; }
+  .cat-prod-tags { grid-area: tags; }
+  .cat-prod.head { display: none; }
+}
+
+/* --------------------------------------------------------------- the chips -- */
+
+.cat-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px var(--s2);
+  border-radius: var(--r-full);
+  font: 600 var(--t-micro)/1.4 var(--font);
+  color: var(--ink-2);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.cat-chip button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  color: var(--ink-4);
+}
+.cat-chip button:hover:not(:disabled) { background: var(--line-2); color: var(--ink); }
+.cat-chip button:disabled { opacity: .4; cursor: not-allowed; }
+
+/* A chip that is a button to add another one. Blue because it is an action. */
+.cat-chip.add {
+  cursor: pointer;
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border-color: var(--blue-200);
+  letter-spacing: .06em;
+}
+.cat-chip.add:hover:not(:disabled) { background: var(--blue-100); }
+.cat-chip.add:disabled { opacity: .5; cursor: not-allowed; }
+
+/* A chip that is only ever read — a keyword in the rule table, a product the
+   list would not guess at. */
+.cat-chip.flat { background: var(--surface-2); color: var(--ink-3); font-weight: 400; }
+
+.cat-tagadd { display: inline-flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cat-tagadd input {
+  width: 140px; max-width: 100%;
+  font: 400 var(--t-small)/1.3 var(--font);
+  padding: 4px var(--s2);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+}
+.cat-tagadd input:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+
+/* ---------------------------------------------------------- the bulk bar --- */
+
+/* Pinned under the dark bar rather than floating over the bottom of the list:
+   a bar at the foot of a four-hundred-row list covers the rows still being
+   ticked, which is exactly the moment it is in the way. */
+.cat-bulk {
+  position: sticky; top: calc(var(--topbar-h) + var(--s2)); z-index: 20;
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  margin-top: var(--s4);
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+}
+.cat-bulk b { font-size: var(--t-small); color: var(--navy-900); }
+.cat-bulk select {
+  font: 400 var(--t-small)/1.3 var(--font);
+  padding: 6px var(--s2);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+  min-width: 180px;
+}
+.cat-bulk select:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.cat-bulk .sub { flex-basis: 100%; }
+
+/* ------------------------------------------------------------ the proposals -- */
+
+.cat-sugbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.cat-sugbar .spacer, .cat-accept .spacer { flex: 1; }
+
+.cat-props { margin-top: var(--s4); display: flex; flex-direction: column; }
+
+.cat-prop {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.cat-prop:last-child { border-bottom: 0; }
+.cat-prop.on { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+/* A proposal whose shelf does not exist yet is drawn faintly rather than
+   hidden: it is the reason the CREATE ALL button above it exists. */
+.cat-prop.cold { color: var(--ink-4); }
+.cat-prop.cold .nm { color: var(--ink-3); }
+
+.cat-prop.head {
+  padding-top: 0; padding-bottom: var(--s2);
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.cat-prop-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cat-prop-main .nm { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+.cat-prop-to { font-size: var(--t-small); font-weight: 600; color: var(--ink-2); display: flex; flex-direction: column; gap: 1px; }
+
+/* The word that decided it, in the machine's own typeface — this is the whole
+   explanation of the proposal and it has to be readable as a quotation. */
+.cat-word {
+  font: 600 var(--t-micro)/1.4 var(--mono);
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-sm);
+  padding: 2px 6px;
+}
+
+/* On a phone the product name gets the whole line and the two halves of the
+   reason share the one under it. Sharing the first line with "this shop has no
+   Personal care yet" broke "Colgate MaxFresh 150g" over three lines. */
+@media (max-width: 900px) {
+  .cat-prop {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'check main main'
+      '.     why  to';
+    row-gap: var(--s2);
+    align-items: start;
+  }
+  .cat-prop > input[type='checkbox'] { grid-area: check; align-self: start; margin-top: 3px; }
+  .cat-prop-main { grid-area: main; }
+  .cat-prop-why { grid-area: why; }
+  .cat-prop-to { grid-area: to; align-items: flex-end; text-align: right; }
+  .cat-prop.head { display: none; }
+}
+
+.cat-accept {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+/* Why ACCEPT is off, on its own line under the row rather than squeezed
+   between two buttons where it would wrap to four words a line. */
+.cat-accept-why { flex-basis: 100%; max-width: 78ch; }
+
+/* ---------------------------------------------------------- where it lives -- */
+
+/* A KV row puts its value hard right, which is right for a rupee total and
+   wrong for an absolute path on a 390 px screen — the label ended up with two
+   characters and the path with a column four words wide. Below the phone
+   breakpoint the two stack. */
+@media (max-width: 560px) {
+  .cat-page .kv { flex-direction: column; align-items: flex-start; gap: 2px; }
+  /* `break-word` will not break inside a long path segment, so the tail of an
+     absolute path sat a few pixels past the card's own border. */
+  .cat-page .kv > span { text-align: left; overflow-wrap: anywhere; }
+}
+
+/* --------------------------------------------------------------- details --- */
+
+.cat-details { margin-top: var(--s4); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.cat-details summary {
+  cursor: pointer;
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-4);
+}
+.cat-details summary:hover { color: var(--ink-2); }
+
+.cat-unmatched { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--s3); }
+
+.cat-rules { display: flex; flex-direction: column; gap: var(--s3); margin-top: var(--s3); }
+.cat-rule {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: baseline;
+}
+.cat-rule b { font-size: var(--t-small); color: var(--ink-2); }
+.cat-words { display: flex; flex-wrap: wrap; gap: 4px; }
+@media (max-width: 620px) {
+  .cat-rule { grid-template-columns: minmax(0, 1fr); gap: var(--s2); }
+}
+
+/* ===========================================================================
+   THE THUMB FLOOR — CATEGORIES
+   ---------------------------------------------------------------------------
+   Measured at 390x844 signed in with touch emulation on: 151 controls under
+   32x32 inside the route. Four repeated controls are 148 of them.
+
+     x76  16x16      .cat-chip button   the ✕ that takes a tag off a product
+     x36  13x13      .cat-prod checkbox the bulk-select tick
+     x36  51.8x23.4  .cat-chip.add      "+ TAG"
+     x36  27x27      .cat-icon          move / rename / delete a category
+                                        (already 34x34 under `hover: none`, so
+                                        on a REAL phone this one was never
+                                        broken — see the note in app.css)
+
+   Nothing here is hidden, moved behind a menu, or dropped. A tag a shopkeeper
+   cannot remove is a tag they have to phone somebody about.
+   =========================================================================== */
+@media (max-width: 560px), (pointer: coarse) {
+  /* THE ✕ ON A TAG, 76 OF THEM, AND THE REASON IT GROWS RATHER THAN CHEATING.
+     The obvious trick is an invisible `::before { inset: -8px }` — the hit area
+     grows, the dot stays 16px. It is wrong HERE: `.cat-prod-tags` sets
+     `gap: 4px` and wraps, so two chips sit 4px apart and two 32px hit areas
+     around 16px dots overlap by 12px. A thumb aimed at one tag's ✕ deletes the
+     neighbour's. Overlapping invisible targets are worse than small visible
+     ones, so the chip itself grows and the ✕ is honestly 32px wide.
+
+     The right padding drops to 2px so the chip gains ~16px of width, not 32:
+     the ✕ now sits flush in the space the padding used to hold. */
+  .cat-chip { min-height: 32px; padding: 3px 2px 3px var(--s3); }
+  .cat-chip button { width: 32px; height: 32px; }
+
+  /* A chip with nothing to remove keeps its symmetry — no ✕ means no reason
+     to hold a gap open on the right. `:has()` is used elsewhere in this
+     product (see the top bar's order-bell yield in app.css). */
+  .cat-chip:not(:has(button)) { padding-inline: var(--s3); }
+
+  /* "+ TAG" is a button wearing a chip's clothes, so it takes the floor too. */
+  .cat-chip.add { min-height: 32px; padding-inline: var(--s3); }
+
+  /* THE BULK-SELECT TICK. 13x13 is the browser's default and it is half a
+     thumb. The grid column it sits in was 20px and is widened to match, or a
+     32px box would push the product name sideways into the price. */
+  .cat-prod { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .cat-prod > input[type='checkbox'] {
+    width: 32px; height: 32px; margin-top: 0;
+    accent-color: var(--blue-500);
+  }
+}
+
+/* And the same floor for a narrow window with a mouse, which the
+   `hover: none` rule above deliberately does not cover. */
+@media (max-width: 560px) {
+  .cat-icon { width: 34px; height: 34px; }
+}

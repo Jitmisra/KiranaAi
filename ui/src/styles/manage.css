@@ -1,0 +1,439 @@
+/* ===========================================================================
+   GAWAAH — the three shopkeeper-management screens.
+   Products (teach + catalogue) · Offers · Your shop.
+
+   Everything here is prefixed `mg-` and imported by exactly those three
+   routes. No literal colour: every value is a token from tokens.css, so a
+   re-theme reaches these screens too. Green/amber/red keep their reserved
+   meaning — money and recognition state — and are never decorative here:
+   the one green control on these screens is the offer switch, and an offer
+   that is ON is a fact about what the gateway will charge.
+   =========================================================================== */
+
+/* ------------------------------------------------------------------------ */
+/* PRODUCTS — the teach panel                                                */
+/* ------------------------------------------------------------------------ */
+
+/* Two jobs, two zones. The form (what it is, what it costs) sits beside the
+   picture (how the counter will see it), and the action row hangs under the
+   form so TEACH is never below the fold of a camera preview. On a phone the
+   zones stack in task order: describe it, show it, teach it. */
+.mg-teach {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+  grid-template-areas: 'form pic' 'act pic';
+  grid-template-rows: auto 1fr;
+  column-gap: var(--s7);
+  row-gap: var(--s4);
+  align-items: start;
+}
+.mg-teach-form { grid-area: form; min-width: 0; }
+.mg-teach-pic  { grid-area: pic;  min-width: 0; }
+.mg-teach-act  { grid-area: act;  min-width: 0; }
+
+@media (max-width: 1080px) {
+  .mg-teach {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'form' 'pic' 'act';
+    grid-template-rows: auto;
+  }
+}
+
+.mg-teach-form .field:last-child { margin-bottom: 0; }
+
+/* The picture zone header: source toggle on the left, capture state beside. */
+.mg-pic-head {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+
+/* Code typed, nothing to photograph: the zone says so instead of collapsing
+   and leaving half the card blank. */
+.mg-pic-quiet {
+  display: grid; place-items: center; text-align: center;
+  min-height: 200px; height: 100%;
+  padding: var(--s6);
+  border: 1px dashed var(--line-2); border-radius: var(--r-lg);
+  background: var(--surface-2);
+  color: var(--ink-3); font-size: var(--t-small); line-height: 1.7;
+}
+.mg-pic-quiet b { color: var(--ink-2); display: block; font-size: var(--t-h3); margin-bottom: var(--s1); }
+
+/* The frozen capture, covering the live feed without unmounting it. Contain,
+   not cover: the shopkeeper is checking WHAT was kept, and a crop would hide
+   the edge of the very packet being judged. */
+.mg-still {
+  position: absolute; inset: 0; z-index: 2;
+  width: 100%; height: 100%;
+  object-fit: contain; background: var(--navy-900);
+}
+
+/* Waiting for the browser to hand the camera over. On the dark stage, so it
+   takes the stage's own two-step ink. */
+.camgate-wait {
+  margin-top: var(--s3);
+  max-width: 46ch;
+  color: var(--on-dark-2);
+  font-size: var(--t-micro);
+  line-height: 1.6;
+}
+
+/* ------------------------------------------------------- the long jobs --- */
+
+/* THE BURST, REPORTING ITSELF. Eight frames taken in this browser over about
+   a second, counted as they arrive. Blue, like every working state here:
+   green, amber and red are money and recognition and a capture is neither. */
+.mg-work {
+  margin-top: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  background: var(--blue-050);
+}
+.mg-work-head {
+  display: flex; align-items: center; gap: var(--s3);
+  font-size: var(--t-small); font-weight: 600; color: var(--blue-700);
+  margin-bottom: var(--s3);
+}
+/* The count sits hard right so the eye reads 1..8 in one place rather than
+   following the sentence as it grows. */
+.mg-work-head .tnum { margin-left: auto; font-variant-numeric: tabular-nums; }
+.mg-work .progress { margin-bottom: var(--s2); }
+.mg-work .hint { margin-top: var(--s2); }
+
+/* The thinking panel wherever this screen raises one: the gate, and teaching. */
+.mg-thinking { margin-top: var(--s4); }
+
+/* The honesty footnotes. Visible, not tucked away: the one under the camera
+   toggle states which teaching path the burst gate protects, and hiding that
+   would imply a protection that is not there. */
+.mg-fine {
+  margin-top: var(--s4); padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+.mg-fine .hint { margin-top: var(--s2); }
+.mg-fine .hint:first-child { margin-top: 0; }
+
+/* ------------------------------------------------------------------------ */
+/* PRODUCTS — the catalogue                                                  */
+/* ------------------------------------------------------------------------ */
+
+.mg-cat {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--s4);
+}
+@media (max-width: 560px) {
+  .mg-cat { grid-template-columns: minmax(0, 1fr); }
+}
+
+.mg-sku {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden;
+  transition: box-shadow var(--med) var(--ease), transform var(--med) var(--ease),
+              border-color var(--med) var(--ease);
+}
+.mg-sku:hover { box-shadow: var(--shadow-2); transform: translateY(-2px); border-color: var(--line-2); }
+
+/* A CARD THAT HAS NOT ARRIVED, AT THE SHAPE OF ONE THAT HAS.
+   The well, the name, the price, the pills and the action row, in the same
+   places and at the same heights as the real card — so nothing on the page
+   moves when the catalogue lands. It is NOT `.mg-sku`: the e2e suite counts
+   that class to know how many products this shop has, and a skeleton must
+   never be counted as a product. */
+.mg-sku-skel {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden;
+}
+.mg-sku-skel-well {
+  height: 128px; flex: none;
+  display: grid; place-items: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.mg-sku-skel-body {
+  padding: var(--s3) var(--s4) var(--s4); flex: 1;
+  display: flex; flex-direction: column; gap: var(--s2);
+}
+.mg-sku-skel-pills { display: flex; gap: 6px; margin-top: var(--s1); }
+.mg-sku-skel-acts {
+  display: flex; align-items: center; gap: var(--s3); flex: none;
+  padding: var(--s3) var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+/* A refusal about ONE product, inside that product's card. It keeps the
+   card's own gutters so it reads as part of the card and not as a banner
+   that happened to land near it. */
+.mg-sku-refusal { margin: 0 var(--s3) var(--s3); }
+.mg-sku-refusal .verdict { margin-top: var(--s2); }
+
+/* "reading the catalogue again" beside the count. The grid below stays on
+   screen and stays true; only its age is in question. */
+.mg-refreshing {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  margin-right: var(--s3);
+  font-size: var(--t-micro); color: var(--blue-700);
+}
+
+/* The photo well. `--surface-2`, contain, and a hairline under it so the
+   picture reads as a specimen in a tray rather than a banner.
+
+   A BLOCK, not a grid. In a grid the only row is auto-sized, so `height:100%`
+   on the image resolves against an indefinite track and falls back to the
+   image's intrinsic size — a 840×1015 QR sticker rendered 306 px tall inside
+   a 128 px well and `overflow:hidden` showed its middle slice, which read as
+   a cropped QR. Against a block with a definite height the percentage
+   resolves, and object-fit needs nothing else. (app.css hit the same trap on
+   `.sku .thumb` and documents it.) */
+/* THE PRODUCT IS THE POINT OF THE CARD, so it gets the room.
+   This was 128px tall with 10px of padding and `contain`, which rendered a
+   192px photograph at about 108px — a stamp in the middle of a card. Worse,
+   the catalogue now holds real photographs whose own background is white, and
+   against `--surface-2` that read as a white square floating on a blue tile
+   rather than as a picture. Taller well, less padding, and a white ground so
+   the photograph's own margin disappears into the card instead of drawing a
+   box around itself. QR tiles were already white, so they gain the same. */
+.mg-sku-well {
+  height: 172px; flex: none;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.mg-sku-well img { width: 100%; height: 100%; object-fit: contain; padding: 6px; display: block; }
+.mg-sku-well img.mg-qr { padding: 14px; }
+
+.mg-sku-body { padding: var(--s3) var(--s4) var(--s4); flex: 1; }
+
+.mg-sku-name { font-weight: 700; font-size: var(--t-small); color: var(--ink); line-height: 1.35; }
+
+.mg-sku-price {
+  display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap;
+  margin-top: 2px; font-variant-numeric: tabular-nums;
+}
+.mg-sku-price b { color: var(--navy-900); font-weight: 800; font-size: var(--t-h3); }
+/* The struck marked price, same pattern the offers screen and the storefront
+   use: what the sign says, then what is actually charged. */
+.mg-was {
+  color: var(--ink-4); text-decoration: line-through;
+  font-size: var(--t-small); font-variant-numeric: tabular-nums; font-weight: 400;
+}
+
+.mg-sku-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: var(--s3); }
+
+/* The action bar is part of the card, not bolted on: quiet text buttons on a
+   hairline, EDIT holds its open state, FORGET keeps the danger colour and its
+   distance on the far side. */
+.mg-sku-actions {
+  display: flex; align-items: center; gap: 2px; flex: none;
+  padding: var(--s1) var(--s2);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.mg-act {
+  appearance: none; border: 0; cursor: pointer; background: transparent;
+  padding: 7px 9px; border-radius: var(--r-sm);
+  font: 700 var(--t-micro)/1 var(--font); letter-spacing: .06em;
+  color: var(--ink-3); text-decoration: none;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.mg-act:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
+.mg-act:disabled { opacity: .5; cursor: default; }
+.mg-act[aria-expanded='true'] { background: var(--blue-050); color: var(--blue-700); }
+.mg-act.danger { color: var(--red); margin-left: auto; }
+.mg-act.danger:hover { background: var(--red-bg); color: var(--red); }
+/* A label-as-button (the file-input +VIEW) sits like its siblings. */
+label.mg-act { display: inline-flex; align-items: center; }
+/* A <label> cannot be `:disabled`, so the one state it can hold is spelled
+   out. Same weight as `.mg-act:disabled`, and it stops the click as well —
+   otherwise a second picture starts a second request into the same gallery. */
+label.mg-act.off { opacity: .5; cursor: default; pointer-events: none; }
+
+/* The inline editor opens as a section of the card itself. */
+.mg-sku .adm-edit {
+  margin: 0; border: 0; border-top: 1px solid var(--blue-200);
+  border-radius: 0;
+}
+.mg-sku > .adm-note,
+.mg-sku > .hint { margin: var(--s2) var(--s3) var(--s3); }
+
+/* The legend. Four load-bearing paragraphs, tucked behind one disclosure the
+   way History tucks its timeline — present, verbatim, and not in the way. */
+.mg-legend { margin-top: var(--s5); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.mg-legend > summary {
+  cursor: pointer; display: inline-block;
+  font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-4);
+}
+.mg-legend > summary:hover { color: var(--ink-2); }
+.mg-legend[open] > summary { color: var(--ink-2); margin-bottom: var(--s2); }
+.mg-legend .hint { margin-top: var(--s2); max-width: 88ch; }
+
+/* ------------------------------------------------------------------------ */
+/* OFFERS — the switch                                                       */
+/* ------------------------------------------------------------------------ */
+
+/* Readable from across the room: a real switch, green only when the price
+   book is actually applying the discount — green is money state, and this is
+   one. */
+.mg-state { display: inline-flex; align-items: center; gap: var(--s2); }
+.mg-switch {
+  appearance: none; cursor: pointer; flex: none;
+  position: relative; width: 46px; height: 26px;
+  border: 1px solid var(--line-2); border-radius: var(--r-full);
+  background: var(--surface-3);
+  transition: background var(--med) var(--ease), border-color var(--med) var(--ease);
+}
+.mg-switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(2, 4, 43, .25);
+  transition: transform var(--med) var(--ease);
+}
+.mg-switch[aria-checked='true'] { background: var(--green); border-color: var(--green); }
+.mg-switch[aria-checked='true']::after { transform: translateX(20px); }
+.mg-switch:disabled { opacity: .5; cursor: wait; }
+.mg-switch:focus-visible { outline: none; box-shadow: var(--ring); }
+
+.mg-onoff {
+  font: 800 var(--t-micro)/1 var(--font); letter-spacing: .08em;
+  color: var(--ink-4); min-width: 26px;
+}
+.mg-onoff.on { color: var(--green); }
+
+/* ------------------------------------------------------------------------ */
+/* YOUR SHOP — field groups and the storefront preview                       */
+/* ------------------------------------------------------------------------ */
+
+.mg-group + .mg-group {
+  margin-top: var(--s5); padding-top: var(--s5);
+  border-top: 1px solid var(--line);
+}
+.mg-group-h {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-4);
+  margin-bottom: var(--s3);
+}
+/* The action row closes the form under its own hairline. */
+.mg-group ~ .adm-actions {
+  margin-top: var(--s5); padding-top: var(--s5);
+  border-top: 1px solid var(--line);
+}
+
+/* Seven equal days. `min-width: 0` overrides the 56 px floor from admin.css
+   so the row fits a 390 px phone without wrapping into an eight-and-six. */
+.mg-days {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+}
+.mg-days .adm-day {
+  min-width: 0; padding: var(--s2) 0; text-align: center;
+  font-size: var(--t-small);
+}
+
+/* The preview is shaped like the storefront's own header — the thing the
+   customer's phone shows above the catalogue — down to the hairline under
+   the name. */
+.mg-front {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface); box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.mg-front-bar {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s4);
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-4);
+}
+.mg-front-in { padding: var(--s5); }
+.mg-front-in h3 { font-size: var(--t-h1); letter-spacing: -.02em; margin-bottom: var(--s2); }
+.mg-front-line {
+  color: var(--ink-2); font-size: var(--t-small); line-height: var(--lh-body);
+  white-space: pre-line;
+}
+.mg-front-hours {
+  margin-top: var(--s3); font-variant-numeric: tabular-nums;
+  color: var(--ink); font-weight: 600; font-size: var(--t-small);
+}
+.mg-front-unset { color: var(--ink-4); font-style: italic; }
+
+/* ------------------------------------------------------------------------ */
+/* shared bits                                                               */
+/* ------------------------------------------------------------------------ */
+
+/* Skeletons for a list still being read. */
+.mg-skels { display: flex; flex-direction: column; gap: var(--s3); }
+
+/* ------------------------------------------------------------- crop layer --
+   The frozen still with a draggable rectangle. The dimmed surround is the
+   point: everything outside the box is what USED to fail the gate — the wall,
+   the light, the operator — and showing it dimmed says "this part does not
+   count" better than any sentence. */
+/* NOT `inset: 0`. The layer is pinned to the frozen PICTURE, and the picture
+   is `object-fit: contain` inside a stage of a different shape, so it does not
+   fill the stage — a 16:9 camera in a 4:3 box leaves 12.5% of black bar top
+   and bottom. `inset: 0` put the drag layer over the bars as well, which made
+   a fraction of the layer mean something different from a fraction of the
+   frame, and the crop that was actually taught was 1.333x tighter than the box
+   the operator drew. Products.tsx supplies left/top/width/height inline from
+   `containedBoxPct`, which is where that arithmetic and its measurements live. */
+.mg-croplayer {
+  position: absolute; z-index: 3;
+  cursor: crosshair; touch-action: none;
+}
+.mg-croprect {
+  position: absolute;
+  border: 2px dashed var(--blue-400);
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px rgba(2, 4, 43, .48);
+  pointer-events: none;
+}
+
+/* The shelf strip on a Products card: the count, the floor and what the
+   storefront will sell, between the pills and the action bar. Own gutters,
+   hairline above, so it reads as a section of the card like the editor. */
+.mg-sku-stock {
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* ===========================================================================
+   THE THUMB FLOOR — PRODUCTS
+   ---------------------------------------------------------------------------
+   Measured at 390x844 signed in with touch: 120 controls under 32x32. 108 of
+   them are one action row repeated down the catalogue —
+
+     x36  36.3x25  a.mg-act          QR
+     x36  44.4x25  button.mg-act     EDIT
+     x36  66.6x25  .mg-act.danger    FORGET
+
+   — plus 72 `.btn.sm` (RECORD / SET in the stock editor), which the shared
+   floor in app.css already lifts to 36.
+
+   WHY THE THREE ACTIONS ALL STAY ON THE CARD, against the obvious advice to
+   put a phone's secondary actions behind a "…" menu. I measured the row before
+   deciding: at 390 the card's content box is 316px, `.mg-sku-actions` uses
+   `gap: 2px`, and the three buttons come to 36.3 + 44.4 + 66.6 + 4 = 151.3px —
+   under half the row, with FORGET's `margin-left: auto` still holding it at the
+   far end. There is nothing to win by hiding two of them, and a menu would put
+   EDIT — the thing a shopkeeper opens most on this screen — two taps away to
+   buy back space that was never short. Height was the whole defect.
+   =========================================================================== */
+@media (max-width: 560px), (pointer: coarse) {
+  /* 25px tall because the padding was 7px against an 11px cap-height line.
+     `min-height` rather than a taller padding so the label stays optically
+     centred and the row keeps the type it was designed with. */
+  .mg-act {
+    min-height: 36px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  /* The legend is a disclosure, and a 17px summary is a line of text you are
+     expected to hit. Scoped to this one `<details>` so no other screen's
+     disclosure moves. */
+  .mg-legend > summary { min-height: 32px; padding-block: 7px; }
+}

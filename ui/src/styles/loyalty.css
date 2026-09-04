@@ -1,0 +1,181 @@
+/* ===========================================================================
+   Loyalty — points on money that arrived.
+
+   Imported by `routes/Loyalty.tsx` and by nothing else. Every colour here is a
+   token from tokens.css by name; this file defines no literal colour of its
+   own, so the palette can be rebuilt without this screen noticing.
+
+   Every rule is prefixed `ly-`. The till's own stylesheet is owned by another
+   part of the program and this file must not be able to reach into it by
+   accident.
+
+   One rule about colour. Green, amber and red mean MONEY and RECOGNITION state
+   on this product. A settled bill is green because a gateway webhook said the
+   money arrived; a link that was sent and not paid is amber because the counter
+   is waiting; a point balance is neither — points are not money — and is drawn
+   in ink.
+   =========================================================================== */
+
+.ly-page { display: flex; flex-direction: column; gap: var(--s5); }
+.ly-page > .page-head { margin-bottom: 0; }
+
+.ly-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .ly-grid { grid-template-columns: 1fr; }
+}
+
+.ly-lede {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: var(--lh-loose);
+  max-width: 68ch;
+  margin-bottom: var(--s4);
+}
+
+/* ------------------------------------------------------------- the rule -- */
+
+.ly-rule-form { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+.ly-rule-form .field { margin-bottom: 0; }
+@media (max-width: 480px) { .ly-rule-form { grid-template-columns: 1fr; } }
+
+/* What 100 points buy, as the SERVER worked it out. Reads as a receipt line,
+   not a headline: it is an example, not a balance. */
+.ly-example {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin: var(--s4) 0;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+}
+.ly-example b { color: var(--navy-900); font-size: var(--t-body); font-variant-numeric: tabular-nums; }
+.ly-example.muted { color: var(--ink-4); }
+
+.ly-note {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro);
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------- the lookup -- */
+
+/* One field and its button on one baseline. The input takes the width; the
+   button takes only what its word needs. */
+.ly-row { display: flex; gap: var(--s2); align-items: flex-end; }
+.ly-row .field { flex: 1; margin-bottom: 0; min-width: 0; }
+.ly-row .btn { flex: none; min-height: var(--ctl-h); }
+@media (max-width: 480px) {
+  .ly-row { flex-direction: column; align-items: stretch; }
+  .ly-row .btn { width: 100%; }
+}
+
+.ly-result { margin-top: var(--s5); display: flex; flex-direction: column; gap: var(--s5); }
+
+/* The balance figure. Ink, deliberately: a point is not a rupee. */
+.ly-balance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2) var(--s4);
+}
+.ly-balance .n {
+  font-family: var(--font-display, var(--font));
+  font-size: var(--t-display);
+  font-weight: 800;
+  letter-spacing: var(--tr-tight);
+  line-height: var(--lh-tight);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+}
+.ly-balance .u { font-size: var(--t-h3); color: var(--ink-3); font-weight: 600; }
+.ly-balance .w { flex-basis: 100%; font-size: var(--t-small); color: var(--ink-3); }
+
+/* The account's parts. Four small figures in a row that wraps on a phone. */
+.ly-parts { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s6); }
+.ly-parts > div { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.ly-parts .l {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.ly-parts .v { font-size: var(--t-h3); font-weight: 700; color: var(--navy-900); font-variant-numeric: tabular-nums; }
+.ly-parts .s { font-size: var(--t-micro); color: var(--ink-4); }
+
+/* ------------------------------------------------------------- redeeming -- */
+
+.ly-redeem { padding-top: var(--s4); border-top: 1px solid var(--line); }
+.ly-redeem-h {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s3);
+}
+
+/* A proposal is a line the till can draw. It is boxed the way a bill line is
+   boxed and the discount is written as `− ₹x`, never as a negative price. */
+.ly-proposal {
+  border: 1px solid var(--blue-200);
+  background: var(--blue-050);
+  border-radius: var(--r-md);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.ly-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+  font-size: var(--t-body);
+  color: var(--navy-900);
+}
+.ly-line b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ly-line .id { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-4); display: block; margin-top: 2px; word-break: break-all; }
+
+.ly-must { margin: 0; padding-left: 1.2em; font-size: var(--t-small); color: var(--ink-2); line-height: 1.6; }
+.ly-must li + li { margin-top: var(--s1); }
+.ly-must code { font-family: var(--mono); font-size: var(--t-micro); background: var(--surface); padding: 1px 4px; border-radius: var(--r-xs); }
+
+/* ------------------------------------------------------------- the ledger -- */
+
+.ly-pts { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy-900); white-space: nowrap; }
+.ly-pts.zero { color: var(--ink-4); font-weight: 500; }
+.ly-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* An id is one token. Clipped with an ellipsis rather than broken mid-word,
+   because "till_next_bi / ll_7" reads as two ids; the full string is in the
+   title. */
+.ly-what .id {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22em;
+}
+.ly-when { white-space: nowrap; }
+.ly-when-sm { display: none; font-size: var(--t-micro); color: var(--ink-4); }
+@media (max-width: 720px) { .ly-when-sm { display: block; } }
+.ly-why { font-size: var(--t-small); color: var(--ink-3); line-height: 1.5; max-width: 42ch; }
+
+/* ------------------------------------------------------------- members -- */
+
+.ly-phone { font-family: var(--mono); font-variant-numeric: tabular-nums; }

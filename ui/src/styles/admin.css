@@ -1,0 +1,289 @@
+/* ===========================================================================
+   GAWAAH — the two screens that CORRECT rather than create.
+
+   Everything here is prefixed `adm-` and everything here is new markup. That
+   is not tidiness: `app.css` is owned by another surface and is being rebuilt,
+   so a class this file invented and a class that file already had must never
+   turn out to be the same name. The shared components in `components/ui.tsx`
+   (Card, Field, Pill, Verdict, Refusal) carry their own classes and are used
+   for all the structure; this file only styles what they do not cover.
+
+   No literal colour. Every value comes from `tokens.css`, so the till can
+   still be re-themed in one place.
+   =========================================================================== */
+
+/* --- the inline product editor -------------------------------------------
+   It opens INSIDE the catalogue card it belongs to. A dialog would take the
+   product's picture off the screen at the moment the shopkeeper is deciding
+   whether this is the right product to correct. */
+
+.adm-edit {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  background: var(--blue-050);
+}
+
+.adm-edit label {
+  display: block;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s1);
+}
+
+.adm-edit input {
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.adm-edit input:focus-visible {
+  outline: none;
+  border-color: var(--blue-500);
+  box-shadow: var(--ring);
+}
+
+.adm-row + .adm-row { margin-top: var(--s3); }
+
+/* Rupees are compared down a column and typed one-handed, so the price field
+   gets tabular figures and does not shrink below a thumb. */
+.adm-money input {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+}
+
+.adm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  align-items: center;
+  margin-top: var(--s4);
+}
+
+/* A note that is not a refusal: what the edit did, in the shopkeeper's words. */
+.adm-note {
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+  background: var(--green-bg);
+  border: 1px solid var(--green-line);
+  border-radius: var(--r-sm);
+}
+
+.adm-note b { color: var(--green); }
+
+/* Dropping a code is the one thing an edit does that a shopkeeper may not have
+   meant. It is never buried in prose. */
+.adm-warn {
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  font-size: var(--t-small);
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--r-sm);
+}
+
+.adm-hint {
+  margin-top: var(--s2);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-3);
+}
+
+.adm-mono {
+  font-family: var(--mono);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  word-break: break-all;
+}
+
+/* --- what a price has been ------------------------------------------------
+   One row per recorded change, oldest first, so a bill from last week can be
+   explained by reading down. */
+
+.adm-history { margin-top: var(--s3); border-top: 1px solid var(--line); }
+
+.adm-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-small);
+}
+
+.adm-history-when {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 128px;
+}
+
+.adm-history-what { color: var(--ink); }
+
+.adm-history-what s { color: var(--ink-4); }
+
+.adm-history-what b { font-variant-numeric: tabular-nums; }
+
+/* --- the shop's own identity --------------------------------------------- */
+
+.adm-form { max-width: 560px; }
+
+.adm-form .adm-row label {
+  display: block;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s1);
+}
+
+.adm-form input,
+.adm-form textarea {
+  width: 100%;
+  padding: var(--s3);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.adm-form textarea { min-height: 84px; resize: vertical; }
+
+.adm-form input:focus-visible,
+.adm-form textarea:focus-visible {
+  outline: none;
+  border-color: var(--blue-500);
+  box-shadow: var(--ring);
+}
+
+.adm-sub {
+  display: block;
+  margin-top: var(--s1);
+  font-size: var(--t-small);
+  color: var(--ink-3);
+}
+
+/* --- a field the server refused ------------------------------------------
+   The reason lands under the box it is about, in the server's own words, and
+   the box itself carries the refusal so the eye finds it without reading. RED
+   is right here and is not decoration: this is a refusal, which is one of the
+   three things on this product allowed to wear a verdict colour. The border
+   takes the full red rather than the pale line colour — a refusal the eye has
+   to hunt for is a refusal that gets typed past, which is the same reasoning
+   `.field.bad` uses in the shared layer. */
+
+.adm-row.bad > input,
+.adm-row.bad > textarea,
+.adm-row.bad .adm-days,
+.adm-row.adm-times.bad input {
+  border-color: var(--red);
+}
+
+.adm-row.bad > input:focus-visible,
+.adm-row.bad > textarea:focus-visible,
+.adm-row.adm-times.bad input:focus-visible {
+  border-color: var(--red);
+  box-shadow: var(--ring-red);
+}
+
+/* The day toggles are seven controls answering one question, so the mark goes
+   round the group rather than round each button. */
+.adm-row.bad .adm-days {
+  border: 1px solid var(--red);
+  border-radius: var(--r-sm);
+  padding: var(--s2);
+}
+
+.adm-err {
+  display: block;
+  margin-top: var(--s2);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--red);
+}
+
+/* The reason names itself first, in the machine's own spelling. */
+.adm-err .adm-mono { color: var(--red); }
+
+.adm-times {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.adm-times > div { flex: 1 1 140px; }
+
+/* Days are a row of toggles, not a multi-select: a shopkeeper standing at a
+   counter has to see at a glance which day is missing. Each is at least 44 px
+   because this is used one-handed. */
+.adm-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.adm-day {
+  min-width: 56px;
+  min-height: 44px;
+  padding: var(--s2) var(--s3);
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.adm-day[aria-pressed='true'] {
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border-color: var(--blue-500);
+  box-shadow: inset 0 0 0 1px var(--blue-500);
+}
+
+/* --- the shutter card ----------------------------------------------------
+   A preview of what a customer sees after scanning the QR. It is deliberately
+   shaped like the header of the storefront rather than like a form summary:
+   the shopkeeper is checking that their shop looks right, not that a field
+   was saved. */
+
+.adm-preview {
+  padding: var(--s5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.adm-preview h3 {
+  font-size: var(--t-h1);
+  margin-bottom: var(--s2);
+}
+
+.adm-preview .adm-preview-line {
+  color: var(--ink-2);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  white-space: pre-line;
+}
+
+.adm-preview .adm-preview-hours {
+  margin-top: var(--s3);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}

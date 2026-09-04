@@ -1,0 +1,468 @@
+/* ===========================================================================
+   GAWAAH — the customer display
+   ---------------------------------------------------------------------------
+   A screen that faces the OTHER side of the counter. Dark ground, white type,
+   sized to be read from arm's length by somebody who did not choose to look
+   at it. Everything hangs off `.disp`; nothing here is shared with the
+   shopkeeper's screens.
+
+   Colour is the house rule restated. The ground is `--navy-900` — the darkest
+   ink — and the type is the `--on-dark` ramp, which tokens.css reserves for a
+   genuinely dark surface. The faint rules and chips are that same white mixed
+   down over the ground, so they follow the token if it ever moves. Blue is the
+   machine's own mark — the wash a landing line wears. AMBER appears once, on
+   the dot that means "waiting for your payment"; GREEN appears once, on the
+   PAID block that renders only after a verified webhook. Nothing decorative
+   borrows either. No literal hex anywhere: every colour is a token, an alpha
+   mix of a token's channels, or a color-mix of a token.
+
+   Deliberately NOT the `--bar-*` tokens: those describe the shopkeeper's top
+   bar, which has already been light once and dark once, and a screen a
+   customer reads must not change its ground because the chrome on the other
+   side of the counter was restyled.
+
+   Type is sized with clamp() against the viewport, not the app ramp: the ramp
+   is for a screen read at a desk, and this one is read from a metre away on
+   whatever spare panel the shop owns.
+   =========================================================================== */
+
+/* ---------------------------------------------------------- no chrome --
+   Set on <body> by the screen while it is mounted. The shell's own pieces are
+   hidden by class, and the root below is fixed to the viewport on top of
+   whatever is left, so the screen is full-bleed wherever the router put it.
+   `!important` because the sidebar and dock are positioned by rules of their
+   own and a tie here would leave a stripe of shopkeeper UI beside the
+   customer's bill. */
+body.display-mode { overflow: hidden; }
+body.display-mode .topbar,
+body.display-mode .side,
+body.display-mode .scrim,
+body.display-mode .chatdock,
+body.display-mode .chatdock-fab { display: none !important; }
+
+/* ---------------------------------------------------------------- root -- */
+
+.disp {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: flex; flex-direction: column;
+  padding: clamp(16px, 3vw, 44px) clamp(16px, 3.5vw, 56px);
+  overflow: hidden;
+  color: var(--on-dark);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  /* A vignette rather than flat navy: flat, the idle screen reads as a
+     monitor somebody forgot to plug in. The lift is the brand blue at a
+     whisper, mixed from its channels. */
+  background-color: var(--navy-900);
+  background-image:
+    radial-gradient(120% 80% at 50% 0%, rgba(var(--blue-rgb), .16) 0%, var(--navy-900) 62%);
+
+  /* The faint white of a rule, a chip at rest, a chip hovered: the on-dark
+     type colour mixed down, so all three follow it. The @supports block below
+     gives a browser without color-mix a solid mid-grey instead — plainer, and
+     still a rule and not a white bar. */
+  --disp-rule:  color-mix(in srgb, var(--on-dark) 14%, transparent);
+  --disp-sunk:  color-mix(in srgb, var(--on-dark) 7%, transparent);
+  --disp-hover: color-mix(in srgb, var(--on-dark) 12%, transparent);
+
+  /* Derived sizes, so a breakpoint changes them in one place. */
+  --disp-gap: clamp(16px, 3vw, 48px);
+  --disp-line: clamp(20px, 2.3vw, 34px);
+  --disp-total: clamp(56px, 8.5vw, 132px);
+  --disp-label: clamp(12px, 1.1vw, 15px);
+}
+
+@supports not (color: color-mix(in srgb, red 50%, transparent)) {
+  .disp { --disp-rule: var(--on-dark-3); --disp-sunk: var(--on-dark-3); --disp-hover: var(--on-dark-2); }
+}
+
+/* The skeleton in app.css is light grey on white. On this ground it needs the
+   on-dark mix, or it reads as a bright bar somebody left on the screen. */
+.disp .skel {
+  background: linear-gradient(90deg, var(--disp-sunk) 25%, var(--disp-hover) 50%, var(--disp-sunk) 75%);
+  background-size: 200% 100%;
+}
+
+/* ---------------------------------------------------------------- head -- */
+
+.disp-head {
+  flex: none;
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4);
+  padding-bottom: clamp(10px, 1.2vw, 16px);
+  border-bottom: 1px solid var(--disp-rule);
+}
+.disp-shop {
+  font-size: clamp(18px, 2vw, 26px); font-weight: 700;
+  letter-spacing: var(--tr-tight); color: var(--on-dark);
+  overflow-wrap: anywhere;
+}
+.disp-shop-skel { display: inline-block; width: 12em; height: 1.1em; border-radius: var(--r-sm); }
+.disp-brand { font-weight: 800; letter-spacing: -.02em; }
+.disp-brand-deva { color: var(--blue-400); font-weight: 700; margin-left: 2px; }
+.disp-head-note {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: clamp(12px, 1.2vw, 15px); font-weight: 700;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--on-dark-2);
+}
+
+/* The one amber thing: money mid-flight. It breathes; nothing else does. */
+.disp-dot {
+  display: inline-block; width: .7em; height: .7em; border-radius: var(--r-full);
+  background: var(--on-dark-3);
+}
+.disp-dot.amber {
+  background: var(--amber-on-dark);
+  will-change: opacity;
+  animation: pulse 2s var(--ease) infinite;
+}
+
+/* ---------------------------------------------------------------- body --
+   Wide: the lines down the left, the total (or the code) on the right where
+   the eye lands. Narrow: one column, and on the pay screen the code goes
+   FIRST — the customer has to point a phone at it, and a QR below the fold is
+   a QR nobody scans. */
+
+.disp-body {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 40%);
+  gap: var(--disp-gap);
+  padding-top: clamp(8px, 1.5vw, 24px);
+}
+
+/* --------------------------------------------------------------- lines -- */
+
+.disp-lines {
+  min-height: 0; overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--on-dark-3) transparent;
+}
+.disp-line {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline; gap: var(--s4);
+  padding: clamp(10px, 1.2vw, 18px) var(--s3);
+  margin-left: calc(-1 * var(--s3));
+  border-bottom: 1px dashed var(--disp-rule);
+  font-size: var(--disp-line);
+  line-height: var(--lh-head);
+  border-radius: var(--r-sm);
+  /* THE LANDING. A slide-in so a line arriving is seen arriving from a metre
+     away, then a blue wash that decays. Blue: the machine's mark. Only
+     transform, opacity and a background colour, so a shop tablet keeps up. */
+  animation: disp-land var(--med) var(--ease) both, disp-wash 1.2s var(--ease);
+}
+@keyframes disp-land { from { opacity: 0; transform: translateX(-16px); } }
+@keyframes disp-wash {
+  0%   { background: rgba(var(--blue-rgb), .20); box-shadow: inset 4px 0 0 var(--blue-500); }
+  100% { background: transparent;               box-shadow: inset 4px 0 0 transparent; }
+}
+.disp-line .nm { font-weight: 600; letter-spacing: var(--tr-tight); overflow-wrap: anywhere; }
+.disp-line .qty { color: var(--on-dark-2); font-size: .72em; font-weight: 600; }
+.disp-line .amt {
+  font-weight: 700; text-align: right; min-width: 5.5em;
+  /* Keyed on the quantity in the TSX, so a changed count lands again. */
+  animation: disp-land var(--med) var(--ease) both;
+}
+.disp-line .was {
+  color: var(--on-dark-3); font-weight: 400; font-size: .68em;
+  text-decoration: line-through; text-decoration-color: var(--on-dark-3);
+  margin-right: .5em;
+}
+
+/* A payment with nothing itemised beside it. The column keeps its width and
+   says which state it is in, so the customer is not left reading a blank half
+   of the screen as a bill that failed to arrive. */
+.disp-lines-empty { display: flex; align-items: center; }
+.disp-nolines {
+  max-width: 30ch;
+  color: var(--on-dark-2);
+  font-size: clamp(16px, 1.8vw, 26px); font-weight: 600;
+  line-height: var(--lh-head); letter-spacing: var(--tr-tight);
+}
+.disp-nolines span {
+  display: block; margin-top: var(--s3);
+  color: var(--on-dark-3); font-weight: 400;
+  font-size: clamp(13px, 1.2vw, 17px); line-height: var(--lh-body);
+}
+
+/* --------------------------------------------------------------- total -- */
+
+.disp-total, .disp-pay { min-height: 0; }
+.disp-total {
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+  text-align: right;
+}
+.disp-total .lbl, .disp-pay .lbl {
+  font-size: var(--disp-label); font-weight: 800;
+  letter-spacing: var(--tr-caps-wide); text-transform: uppercase;
+  color: var(--on-dark-2);
+}
+.disp-total .amt {
+  font-family: var(--font-display, var(--font));
+  font-size: var(--disp-total); font-weight: 800;
+  letter-spacing: var(--tr-mega); line-height: var(--lh-tight);
+  color: var(--on-dark);
+  /* A double rule over it, the way paper says "stop adding". */
+  border-top: 3px double var(--on-dark-3);
+  padding-top: var(--s3); margin-top: var(--s2);
+  animation: disp-land var(--med) var(--ease) both;
+}
+.disp-total .sub { color: var(--on-dark-3); font-size: clamp(13px, 1.3vw, 18px); margin-top: var(--s1); }
+
+/* The total the display refuses to show. Amber, because this is money state
+   the counter could not stand behind — and no number appears at all. */
+.disp-cannot {
+  font-family: var(--font-display, var(--font));
+  font-size: clamp(28px, 3.8vw, 56px); font-weight: 700;
+  letter-spacing: var(--tr-tight); line-height: var(--lh-tight);
+  color: var(--amber-on-dark);
+  border-top: 3px double var(--on-dark-3);
+  padding-top: var(--s3); margin-top: var(--s2);
+}
+.disp-total-disagree .sub {
+  color: var(--on-dark-2); max-width: 34ch; line-height: var(--lh-body);
+  margin-top: var(--s2);
+}
+
+/* ----------------------------------------------------------------- pay -- */
+
+.disp-pay {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: var(--s1);
+}
+.disp-pay .amt {
+  font-family: var(--font-display, var(--font));
+  font-size: clamp(40px, 5.6vw, 88px); font-weight: 800;
+  letter-spacing: var(--tr-mega); line-height: var(--lh-tight);
+  color: var(--on-dark);
+}
+.disp-pay-note {
+  color: var(--amber-on-dark); max-width: 36ch;
+  font-size: clamp(13px, 1.2vw, 16px); line-height: var(--lh-body);
+  margin-top: var(--s2);
+}
+
+/* The frame is reserved before the image arrives — a shimmer, never a dark
+   hole under the words "Scan with any UPI app". The loaded image fades in
+   over it. White card: a QR is read by contrast, and the customer's camera
+   does not care what the rest of the screen looks like. */
+.disp-qr {
+  position: relative;
+  width: min(100%, clamp(220px, 30vw, 420px)); aspect-ratio: 1;
+  margin-top: var(--s3);
+  padding: clamp(8px, 1vw, 14px);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+}
+.disp-qr::before {
+  content: '';
+  position: absolute; inset: clamp(8px, 1vw, 14px);
+  border-radius: var(--r-md);
+  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 50%, var(--surface-3) 75%);
+  background-size: 200% 100%;
+  animation: sh 1.4s linear infinite;
+}
+.disp-qr.shown::before { display: none; }
+.disp-qr img {
+  position: relative; display: block; width: 100%; height: 100%;
+  opacity: 0; transition: opacity var(--med) var(--ease);
+}
+.disp-qr.shown img { opacity: 1; }
+/* The quiet pulse of "awaiting": a blue ring breathing round the card. Blue,
+   not green — the machine is working; nothing has settled. Opacity only. */
+.disp-qr::after {
+  content: '';
+  position: absolute; inset: 0; border-radius: inherit;
+  pointer-events: none; will-change: opacity;
+  box-shadow: 0 0 0 clamp(6px, .8vw, 12px) rgba(var(--blue-rgb), .28);
+  opacity: 0;
+  animation: disp-await 3s ease-in-out infinite;
+}
+@keyframes disp-await { 50% { opacity: 1; } }
+
+.disp-pay-how {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-top: var(--s4);
+  font-size: clamp(15px, 1.5vw, 21px); color: var(--on-dark-2);
+}
+.disp .disp-link {
+  color: var(--on-dark-3); font-size: clamp(11px, 1vw, 14px);
+  max-width: 100%; overflow-wrap: anywhere;
+}
+
+/* The code is late. Plain ink, not amber: amber here is money the counter
+   abstained on, and a slow render is not that. */
+.disp-pay-late {
+  margin-top: var(--s3); max-width: 34ch;
+  color: var(--on-dark-2); font-weight: 600;
+  font-size: clamp(14px, 1.3vw, 18px); line-height: var(--lh-body);
+}
+.disp-pay-late span {
+  display: block; margin-top: var(--s1);
+  color: var(--on-dark-3); font-weight: 400;
+}
+
+/* The refusal: the server would not render the code, and it said why. The
+   reason is repeated in the server's own words, and the customer is told
+   what to do. Amber title — money state, not decoration. */
+.disp-refusal {
+  margin-top: var(--s4);
+  padding: var(--s5);
+  max-width: 44ch; text-align: left;
+  background: var(--disp-sunk); border: 1px solid var(--disp-rule);
+  border-radius: var(--r-lg);
+  color: var(--on-dark-2);
+  animation: disp-land var(--med) var(--ease) both;
+}
+.disp-refusal-t {
+  display: block; color: var(--amber-on-dark); font-weight: 700;
+  font-size: clamp(16px, 1.5vw, 21px); letter-spacing: var(--tr-tight);
+}
+.disp .disp-refusal-r {
+  display: block; color: var(--on-dark-3);
+  font-size: clamp(11px, 1vw, 13px); margin: var(--s1) 0 var(--s2);
+}
+.disp-refusal p { font-size: clamp(13px, 1.2vw, 16px); line-height: var(--lh-body); margin-top: var(--s2); }
+.disp-refusal p:last-child { color: var(--on-dark); font-weight: 600; }
+
+/* ---------------------------------------------------------------- paid --
+   The one green thing. Renders only after the Till saw a signature-verified
+   webhook, so the colour IS the fact. A check that draws itself, one bloom,
+   then still. */
+
+.disp-paid {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: var(--s2);
+}
+.disp-paid-check {
+  width: clamp(72px, 10vw, 140px); height: auto;
+  color: var(--green-on-dark);
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(var(--green-rgb), .45);
+  animation: disp-pop var(--slow) var(--ease) both, disp-bloom .9s ease-out .15s both;
+}
+.disp-paid-check circle { fill: none; stroke: currentColor; stroke-width: 3; opacity: .45; }
+.disp-paid-check path {
+  fill: none; stroke: currentColor; stroke-width: 4;
+  stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 36; stroke-dashoffset: 36;
+  animation: disp-draw .5s var(--ease) .18s forwards;
+}
+@keyframes disp-pop   { from { transform: scale(.55); opacity: 0; } 70% { transform: scale(1.06); } }
+@keyframes disp-draw  { to { stroke-dashoffset: 0; } }
+@keyframes disp-bloom { to { box-shadow: 0 0 0 clamp(24px, 3vw, 48px) rgba(var(--green-rgb), 0); } }
+.disp-paid-word {
+  margin-top: var(--s3);
+  font-size: clamp(14px, 1.5vw, 20px); font-weight: 800;
+  letter-spacing: .22em; text-transform: uppercase;
+  color: var(--green-on-dark);
+}
+.disp-paid-amt {
+  font-family: var(--font-display, var(--font));
+  font-size: var(--disp-total); font-weight: 800;
+  letter-spacing: var(--tr-mega); line-height: var(--lh-tight);
+  color: var(--on-dark);
+}
+.disp-paid p { color: var(--on-dark-2); font-size: clamp(15px, 1.5vw, 21px); max-width: 40ch; }
+
+/* ---------------------------------------------------------------- idle -- */
+
+.disp-idle { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.disp-welcome {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: var(--s3);
+}
+.disp .disp-welcome-shop {
+  font-family: var(--font-display, var(--font));
+  font-size: clamp(40px, 7vw, 112px); font-weight: 800;
+  letter-spacing: var(--tr-mega); line-height: var(--lh-tight);
+  color: var(--on-dark);
+  overflow-wrap: anywhere;
+  animation: disp-land var(--slow) var(--ease) both;
+}
+.disp-welcome-word { font-size: clamp(20px, 2.6vw, 40px); font-weight: 500; color: var(--on-dark-2); }
+.disp-welcome-skel { display: block; width: min(60vw, 520px); height: clamp(40px, 6vw, 96px); border-radius: var(--r-md); }
+
+/* Notes for whoever set the screen up. Quiet, at the foot, never a number.
+   Each one is a DRAWN row — a rule, a titled line, and the next step — rather
+   than a sentence floating in the space under the welcome, which read as a
+   screen that had half failed to load. */
+.disp-notes {
+  flex: none;
+  display: flex; flex-wrap: wrap; align-items: stretch; justify-content: center;
+  gap: var(--s3);
+  padding-top: var(--s4);
+  color: var(--on-dark-3); font-size: clamp(12px, 1.1vw, 14px); line-height: var(--lh-body);
+}
+.disp-notes p { max-width: 52ch; text-align: center; }
+.disp .disp-notes .mono { font-size: inherit; color: var(--on-dark-2); }
+
+.disp-note {
+  flex: 0 1 46ch; min-width: 0;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s3) var(--s4);
+  text-align: left;
+  border-radius: var(--r-md);
+  background: var(--disp-sunk);
+  /* The mark: a quiet bar on the leading edge. Deliberately the on-dark ink
+     and not an accent — a setup hint has no claim on this screen's colour. */
+  box-shadow: inset 3px 0 0 var(--on-dark-3);
+}
+/* A state that will not resolve by waiting. Still not red: nothing has been
+   refused and no money is involved — the bar simply goes solid so the eye
+   lands on it first. */
+.disp-note.stop { box-shadow: inset 3px 0 0 var(--on-dark); background: var(--disp-hover); }
+.disp-note-t {
+  color: var(--on-dark); font-weight: 700;
+  font-size: clamp(13px, 1.2vw, 16px); letter-spacing: var(--tr-tight);
+}
+.disp-note-b { color: var(--on-dark-3); overflow-wrap: anywhere; }
+.disp-fs {
+  /* `align-self`, because the notes row stretches its children to a common
+     height so two notes of different lengths square up. A pill stretched to
+     the height of a three-line note is a circle, which is what this was. */
+  align-self: center;
+  appearance: none; cursor: pointer;
+  background: var(--disp-sunk); border: 1px solid var(--disp-rule);
+  color: var(--on-dark-2);
+  font: 700 var(--t-micro)/1 var(--font); letter-spacing: var(--tr-caps);
+  padding: 10px 14px; border-radius: var(--r-full);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.disp-fs:hover { background: var(--disp-hover); color: var(--on-dark); }
+
+/* ---------------------------------------------------------- small rooms --
+   A phone or a small tablet, portrait. One column. The pay screen puts the
+   code first and lets the lines scroll under it. */
+
+@media (max-width: 800px) {
+  .disp-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .disp-total { align-items: stretch; text-align: right; padding-bottom: var(--s2); }
+  .disp-body-pay { grid-template-rows: auto minmax(0, 1fr); }
+  .disp-body-pay .disp-pay { order: -1; padding-bottom: var(--s3); border-bottom: 1px solid var(--disp-rule); }
+  .disp-qr { width: min(100%, 62vw); }
+  .disp-pay-how { margin-top: var(--s3); }
+  .disp-line { gap: var(--s3); }
+  .disp-line .amt { min-width: 0; }
+  /* The head note (WAITING FOR YOUR PAYMENT) is wider than a phone can spare
+     beside the shop's name; let it drop to its own row rather than fold the
+     name in half. */
+  .disp-head { flex-wrap: wrap; row-gap: var(--s1); }
+  .disp-head-note { font-size: var(--t-micro); }
+}
+
+/* Very short landscape (a phone on its side): drop the padding so the total
+   still fits above the fold. */
+@media (max-height: 480px) {
+  .disp { padding: 12px 20px; }
+  .disp-body { padding-top: 6px; }
+}

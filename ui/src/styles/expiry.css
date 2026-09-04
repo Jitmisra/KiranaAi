@@ -1,0 +1,246 @@
+/* ===========================================================================
+   GAWAAH — the Expiry screen (routes/Expiry.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `ex-` so it cannot collide
+   with the till's classes in app.css, the Stock screen's `st-` or the Books
+   screens' `bk-`/`bh-`.
+
+   WHAT IS NOT HERE. The summary figures, the buttons, the inputs, the loading
+   skeletons, the empty states, the segmented control, the table and the dialog
+   are all the shared layer in components/ui.tsx and app.css. This sheet holds
+   only what the screen has of its own: the lead list's line, the booking pad,
+   and the table's small-screen behaviour.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css, referenced by
+   name; the palette is being rebuilt and nothing here assumes what a token
+   currently holds.
+
+   COLOUR DISCIPLINE. Green, amber and red are reserved on this product for
+   money and recognition state. A packet past its date is neither: it is a
+   fact about a shelf. So an expired line is HEAVY rather than red — the
+   darkest ink, a thick rule down the side, the word EXPIRED in caps — and a
+   line going off today or tomorrow gets weight, not colour. Amber is earned by
+   one thing on this screen, a write-off whose stock line did not land, and it
+   is drawn by the shared Verdict, not here. Red is kept for a chain that does
+   not verify.
+
+   ONE-HANDED. The booking pad is sized for a thumb on a phone held over a
+   crate: the quantity keys are 52 px, the date jumps are 44 px, and the
+   product picker is the operating system's own.
+   =========================================================================== */
+
+:root {
+  --ex-dim:   var(--ink-4);
+  --ex-quiet: var(--surface-2);
+  --ex-rule:  var(--line-2);
+  --ex-heavy: var(--navy-900);
+}
+
+/* A block between the page head and the grid, or a full-width card below it. */
+.ex-band { margin-bottom: var(--s5); }
+.ex-band.top { margin-top: var(--s5); margin-bottom: 0; }
+
+/* --------------------------------------------------------------- the grid -- */
+
+/* The list is the point of the page and gets the wider column. Below 1080 px
+   the grid is one column and the source order — the list, then the booking
+   pad — is the reading order a phone wants. */
+.ex-grid { grid-template-columns: minmax(0, 1.25fr) minmax(340px, .85fr); align-items: start; }
+@media (max-width: 1080px) { .ex-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* --------------------------------------------------------------- the list -- */
+
+.ex-list { display: flex; flex-direction: column; gap: var(--s5); }
+.ex-group { display: flex; flex-direction: column; gap: var(--s2); }
+.ex-group .eyebrow { color: var(--ex-dim); margin-bottom: var(--s1); }
+
+/* One line: when · name · what is left | the marked value | the two actions.
+   The date phrase is FIRST and set small-caps, because "tomorrow" is the thing
+   a shopkeeper is scanning the list for; the name is the largest text on the
+   line because it is what he then reaches for on the shelf. */
+.ex-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--s2) var(--s5);
+  align-items: center;
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-3);
+  border-radius: var(--r-md);
+}
+.ex-row.expired { border-left: 5px solid var(--ex-heavy); padding-left: calc(var(--s4) - 2px); }
+.ex-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ex-name { font-size: var(--t-h3); font-weight: 700; color: var(--navy-900); line-height: var(--lh-head); overflow-wrap: anywhere; }
+.ex-meta { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.45; overflow-wrap: anywhere; }
+
+.ex-when {
+  font-size: var(--t-micro); letter-spacing: .04em; color: var(--ink-3);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ex-when b { color: var(--ink-2); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.ex-when.gone b { color: var(--ex-heavy); }
+.ex-when.soon b { color: var(--navy-900); }
+
+.ex-left b { color: var(--ink); font-weight: 700; }
+.ex-left-of { color: var(--ex-dim); }
+
+/* The marked value. Weight and tabular figures; never a verdict colour, because
+   on this product a coloured rupee means something settled or was refused. */
+.ex-row-val { text-align: right; white-space: nowrap; }
+.ex-val { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.ex-val b { font-size: var(--t-h3); font-weight: 700; color: var(--navy-900); letter-spacing: var(--tr-tight); }
+.ex-val-l { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ex-dim); }
+
+/* An absence, never a zero. */
+.ex-absent { font-size: var(--t-micro); color: var(--ex-dim); white-space: nowrap; }
+
+.ex-row-act { display: flex; gap: var(--s2); }
+
+@media (max-width: 640px) {
+  .ex-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ex-row-act { grid-column: 1 / -1; }
+  .ex-row-act .btn { flex: 1; min-height: 44px; }
+}
+
+.ex-note { margin-top: 0; max-width: 72ch; }
+
+/* --------------------------------------------------------------- the form -- */
+
+.ex-form { display: flex; flex-direction: column; gap: var(--s4); }
+.ex-form .field { margin-bottom: 0; }
+.ex-form .opt { margin: 0; }
+
+.ex-qty { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+/* Wide enough for six digits: the cap is 100,000 and a refused number has to be
+   readable in the box it was refused from. */
+.ex-qty .ex-qty-in {
+  width: 116px; height: 52px; text-align: center;
+  font-size: var(--t-h1); font-weight: 800; color: var(--navy-900);
+}
+.btn.ex-qbig {
+  width: 52px; height: 52px; min-height: 52px; padding: 0;
+  font-size: 24px; font-weight: 700; line-height: 1; color: var(--blue-600);
+}
+.ex-jump { display: flex; gap: var(--s2); margin-left: auto; }
+.ex-jump .btn { min-width: 44px; min-height: 38px; }
+
+.ex-date { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ex-date .inp { flex: 1; min-width: 160px; }
+
+@media (max-width: 560px) {
+  .ex-jump { margin-left: 0; width: 100%; }
+  .ex-jump .btn { flex: 1; }
+  /* Four figures stacked one per screen push the list below the fold, and the
+     list is what a shopkeeper opened this page to read. Two across, smaller. */
+  .ex-band .statgrid { grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .ex-band .stat { padding: var(--s3) var(--s4); }
+  .ex-band .stat .stat-v { font-size: var(--t-h2); }
+}
+
+/* --------------------------------------------------------------- the table -- */
+
+.ex-filters { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ex-filters .inp { min-width: 180px; }
+.ex-filters .opt { margin: 0; }
+
+.ex-cell-name { display: flex; flex-direction: column; gap: 1px; min-width: 140px; }
+.ex-cell-name .nm { font-weight: 700; color: var(--navy-900); line-height: 1.35; }
+.ex-cell-name .ex-sku {
+  font-family: var(--mono); font-size: var(--t-micro); color: var(--ex-dim);
+  overflow-wrap: anywhere;
+}
+.ex-cell-btns { display: inline-flex; gap: var(--s2); white-space: nowrap; }
+.ex-table td.ex-cell-act { text-align: right; }
+/* The row classes are prefixed: a bare `open` is the shared table's
+   expanded-row style. */
+.ex-table tr.ex-expired td:first-child { box-shadow: inset 4px 0 0 var(--ex-heavy); }
+.ex-table tr.ex-closed { color: var(--ex-dim); }
+.ex-table tr.ex-closed .nm { color: var(--ink-3); font-weight: 600; }
+
+/* Between a phone and a laptop the table keeps a floor width and scrolls
+   inside `.tbl-wrap` rather than folding a product name over three lines.
+   Below 560 it stops being a table at all — see the block after this one. */
+@media (max-width: 720px) {
+  .ex-table { min-width: 620px; }
+  .ex-cell-btns { flex-direction: column; }
+  .ex-filters { width: 100%; }
+  .ex-filters .inp { flex: 1; min-width: 0; }
+}
+
+/* ------------------------------------------------- the table on a phone --
+   THE PARAGRAPH ABOVE USED TO END "...a row whose buttons are off to the right
+   has not lost anything a thumb needs today", and that was the wrong trade.
+   Measured at 390: this table ran 338 px past the viewport inside its scroller
+   and the `Booked` column was deleted outright by the shared `.drop` rule, so
+   the date a batch was booked was on no screen a phone could reach. The row
+   now restacks into a card (`tbl-cards` in app.css) and every column comes
+   back, labelled. What is left here is the three things the card needs that
+   the generic restack cannot know about. */
+@media (max-width: 560px) {
+  /* 1. THE STATE MARKER MOVES FROM THE CELL TO THE CARD. As an inset shadow on
+        the first cell it was drawn straight through the first letter of the
+        product name — "Amul" rendered as "\mul" at 390. A left border on the
+        card edge is also what the lead list above already does for an expired
+        batch (`.ex-row.expired`), so the two lists now say it the same way. */
+  .ex-table tr.ex-expired td:first-child { box-shadow: none; }
+  .ex-table.tbl-cards > tbody > tr.ex-expired {
+    border-left: 5px solid var(--ex-heavy);
+  }
+
+  /* 2. The two actions sit SIDE BY SIDE across the foot of the card. The 720
+        rule above stacks them into a column, which inside a card is two
+        full-width bars where one row of two buttons fits. */
+  .ex-cell-btns { flex-direction: row; }
+  /* `text-align: right` on the actions cell would strand a wrapped button. */
+  .ex-table td.ex-cell-act { text-align: left; }
+
+  /* 3. The name is the card's heading and wants the room the marker took. */
+  .ex-cell-name { min-width: 0; }
+}
+
+/* ---------------------------------------------------- a dead control's why --
+   BOOK BATCH is dead every time this page is opened, because no product is
+   chosen yet, and it used to account for itself nowhere. This is the answer,
+   in the place the hand already is.
+
+   QUIET INK, NOT A COLOUR. A control that is not applicable yet is not a
+   refusal and not an abstention; on this product amber and red are spoken for.
+   The link inside it is the accent, like every other action on the screen. */
+.ex-whydead {
+  /* Inside `.ex-form`, a flex column whose gap already spaces it. */
+  margin-top: 0;
+  font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-loose);
+  max-width: 64ch;
+}
+.ex-jumplink {
+  appearance: none; background: none; border: 0; padding: 0;
+  font: inherit; color: var(--blue-700); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+  /* Measured at 390: 120 x 21. The hit area is grown by a transparent
+     pseudo-element rather than by padding, so a link inside a sentence gets a
+     33 px thumb target without forcing the sentence's lines apart. */
+  position: relative;
+}
+.ex-jumplink::after {
+  content: ''; position: absolute; left: -4px; right: -4px; top: -6px; bottom: -6px;
+}
+.ex-jumplink:hover { color: var(--blue-800); }
+.ex-jumplink:focus-visible { outline: 2px solid var(--blue-600); outline-offset: 2px; border-radius: var(--r-xs); }
+
+/* An anchor styled as a button. `.btn` in app.css does not clear the
+   underline — only `a.btn.pay.big` does — so every link-button on this screen
+   carried a stray rule through the middle of its label. Scoped to this
+   screen's own class rather than `a.btn`, because this stylesheet stays in
+   the document once the route has been visited and must not restyle the
+   nineteen screens it does not own. */
+a.btn.ex-linkbtn { text-decoration: none; }
+
+
+/* The day-window segmented control in the "Going off" card head. Measured at
+   390: the "7" button was 31 x 32 — one pixel short of a thumb target, because
+   its label is a single digit and the shared `.seg.sm` sizes itself off its
+   text. A floor on the button; "3 DAYS", "14" and "30" already clear it and
+   are unaffected. Scoped through `.ex-grid`, this screen's own wrapper, so no
+   other screen's segmented control is resized by it. */
+.ex-grid .seg.sm > button { min-width: 34px; }

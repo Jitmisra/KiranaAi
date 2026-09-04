@@ -1,0 +1,300 @@
+/* ===========================================================================
+   Offers — the shopkeeper's discount screen.
+
+   Imported by `routes/Offers.tsx` and by nothing else. It references the same
+   tokens as the rest of the till and defines no literal colour of its own, so
+   a re-theme in `tokens.css` reaches this screen too.
+
+   Every rule here is prefixed `off-` or scoped under `.offers-grid`. The till's
+   own stylesheet is owned by another part of the program and this file must not
+   be able to reach into it by accident: a shared bare class name is exactly how
+   one screen's tweak silently moves another screen's layout.
+
+   One rule about colour. Green, amber and red mean MONEY and RECOGNITION state
+   on this product and nothing decorative may borrow them. A discount is money,
+   so the "held back" warning is amber on purpose — it is telling the shopkeeper
+   that a price is not what the offer says it is.
+   =========================================================================== */
+
+/* The page is one column of evenly spaced blocks; the grid below splits the
+   first of them. The heading's own bottom margin is retired in favour of the
+   column gap so nothing is spaced twice. */
+.off-page { display: flex; flex-direction: column; gap: var(--s5); }
+.off-page > .page-head { margin-bottom: 0; }
+.off-page > div > .verdict { margin-top: 0; }
+
+.offers-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+
+/* One column below the point where the form and the list stop being readable
+   side by side. The form is the narrower of the two and goes first, because on
+   a phone the shopkeeper came here to make an offer, not to audit one. */
+/* `minmax(0, 1fr)`, never `1fr`: the bare keyword floors the track at
+   min-content, so the single column grew to whatever the widest cell wanted
+   instead of shrinking to the phone. At 390 the card came out 517 px wide and
+   the BODY scrolled sideways, 127 px past the viewport. With a zero floor the
+   track takes the viewport and the row content reflows: measured after,
+   scrollWidth == 390 == clientWidth, nothing past the right edge. */
+@media (max-width: 900px) {
+  .offers-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.off-form .seg { width: 100%; }
+.off-form .seg button { flex: 1; }
+
+.off-lede {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  max-width: 68ch;
+  margin-bottom: var(--s4);
+}
+
+/* Reads back what was typed, before it is sent. The point is that a wrong
+   field — 500 in the rupees box meaning five hundred rupees off a ₹35 soap —
+   is visible while the shopkeeper is still looking at their own typing. */
+.off-preview {
+  display: block;
+  font-size: var(--t-small);
+  line-height: 1.5;
+  padding: var(--s3);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  margin-bottom: var(--s4);
+}
+.off-preview.muted { color: var(--ink-4); }
+.off-preview.bad {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: var(--red-line);
+}
+
+/* Why MAKE THE OFFER cannot be pressed, beside the button rather than nowhere. */
+.off-make { align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.off-cannot {
+  font-size: var(--t-micro);
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 30ch;
+}
+
+.off-note {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro);
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------- the list -- */
+
+.off-list { display: flex; flex-direction: column; gap: var(--s3); }
+
+.off-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+/* An offer that is switched off is drawn faintly rather than hidden. Hiding it
+   would leave the shopkeeper unable to find the thing they turned off. */
+.off-dim { background: var(--surface-2); }
+.off-dim .off-says,
+.off-dim .off-now { color: var(--ink-4); }
+.off-dim .off-effect { text-decoration: line-through; }
+
+.off-main { flex: 1; min-width: 0; }
+
+.off-says {
+  font-weight: 700;
+  color: var(--navy-900);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.off-label {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-full);
+  padding: 4px var(--s2);
+}
+
+.off-effect {
+  margin-top: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+.off-was { color: var(--ink-4); text-decoration: line-through; }
+.off-arrow { color: var(--ink-4); }
+.off-now { color: var(--navy-900); font-size: var(--t-body); }
+
+/* ------------------------------------------------------------- the reach -- */
+/*
+   HOW MANY PRICES THIS OFFER IS CHANGING. The single most useful line on the
+   screen and the one that was missing: an offer switched on that reaches
+   nothing looked exactly like one that reaches everything.
+
+   Three dresses, and only one of them is a verdict colour. An offer doing its
+   job is quiet ink — it is working, and working is not news. An offer that is
+   OFF is quieter still. An offer that is ON and reaching no price is AMBER,
+   which here means what it means everywhere on this product: money the counter
+   is not taking off, and a figure the shopkeeper believes in that the gateway
+   will not honour. */
+.off-reach {
+  margin-top: 6px;
+  font-size: var(--t-micro);
+  line-height: 1.55;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.off-reach.idle { color: var(--ink-4); }
+.off-reach.none {
+  margin-top: var(--s2);
+  padding: 6px var(--s3);
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--r-sm);
+  font-weight: 600;
+}
+/* The row itself carries a left edge in the same colour, so the offer that is
+   doing nothing is findable in a list without reading every line. */
+.off-nohit { border-left: 3px solid var(--amber-line); }
+/* An offer switched off is already struck through by `.off-dim`; the reach
+   sentence must not be, because it is the explanation of the strike. */
+.off-dim .off-reach { text-decoration: none; }
+
+/* The named offers inside the "changing no price" verdict. */
+.off-dead-say { display: block; color: var(--amber); font-weight: 700; }
+
+/* The waiting states, at the shape of what replaces them. */
+.off-skel { align-items: center; }
+.off-skel .off-main { display: flex; flex-direction: column; gap: var(--s2); }
+.off-skel-tbl { display: flex; flex-direction: column; gap: var(--s2); }
+.off-skel-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 60px 78px;
+  gap: var(--s3);
+  align-items: center;
+  padding: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.off-skel-row:last-child { border-bottom: 0; }
+/* A money column's skeleton is right-aligned, like the figure that replaces it. */
+.off-skel-row .n { display: flex; justify-content: flex-end; }
+
+/* Which offer moved this row's price. Named on the row it changed. */
+.off-by {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--t-micro);
+  line-height: 1.4;
+  color: var(--blue-700);
+}
+
+/* Said once, under the table, when the table is entirely undiscounted. */
+.off-none { margin: var(--s4) 0 0; color: var(--ink-3); }
+
+/* What the confirmation dialog shows before an offer is destroyed. */
+.off-drop { display: flex; flex-direction: column; gap: var(--s3); }
+.off-drop .off-effect { margin-top: 0; }
+
+/* AMBER, and deliberately wordy. A clamped offer is a price that is not what
+   the offer says it is, and the shopkeeper has to be able to act on it. */
+.off-clamp {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border-radius: var(--r-sm);
+  font-size: var(--t-micro);
+  line-height: 1.6;
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+}
+
+/* The switch above, DELETE quietly beneath it: the state is the loud thing
+   and destruction is not. */
+.off-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s2);
+  flex: none;
+}
+
+@media (max-width: 560px) {
+  .off-row { flex-direction: column; }
+  .off-actions { flex-direction: row; align-items: center; justify-content: space-between; width: 100%; }
+}
+
+/* ------------------------------------------------------------- the table -- */
+
+.off-table { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+.off-table th {
+  text-align: left;
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.off-table td {
+  padding: var(--s3);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.off-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.off-table td.num { color: var(--navy-900); }
+.off-table tr:last-child td { border-bottom: 0; }
+.off-table .off-hit td { background: var(--blue-050); }
+
+.off-sku {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+
+/* --------------------------------------------------- the thumb, on a phone --
+   Measured at 390: the on/off switch that decides whether an offer is actually
+   coming off the price was 46 x 26 — six pixels short of a target a thumb can
+   hit, on the one control that changes what a customer is charged. The SWITCH
+   keeps its drawn size, because 46 x 26 is what a switch looks like and the
+   green fill is a money-state signal that must stay recognisable across the
+   room; the HIT AREA is grown around it instead, to 46 x 38.
+
+   Scoped to this screen's own `.off-actions` and not to `.mg-switch` in
+   manage.css, which is shared with Categories and Shop items and belongs to
+   another screen's measurements. */
+.off-actions .mg-switch { position: relative; }
+.off-actions .mg-switch::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px;
+}
