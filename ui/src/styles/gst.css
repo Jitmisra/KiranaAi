@@ -1,0 +1,310 @@
+/* ===========================================================================
+   GST — HSN and rate per product, the tax inside a bill, a month for the return
+   ---------------------------------------------------------------------------
+   Three views of one screen: the products and their rates, the month laid out
+   the way GSTR-1's B2C table wants it, and the split of one bill.
+
+   THE COLOUR RULE. Green, amber and red belong to money and recognition state.
+   A tax figure is not settled money, so no total on this screen is green; the
+   only green is the pill on a bill a signature-verified webhook turned PAID.
+   Amber is used for exactly one thing here, and it is the same thing it means
+   on the till: a line the counter would NOT put a number on — a product with
+   no rate set, whose tax was not guessed. A broken chain is red, as it is on
+   every Books screen.
+
+   Every colour is a token. No literal hex appears below.
+   =========================================================================== */
+
+.gst-page { display: flex; flex-direction: column; gap: var(--s5); }
+.gst-page > .page-head { margin-bottom: 0; }
+
+/* The one sentence the whole screen exists to say, under the heading and not
+   in a tooltip: it is a limit, and a limit belongs where the reader is. */
+.gst-page .page-head .gst-not {
+  margin-top: var(--s3);
+  font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-body);
+  max-width: 68ch;
+}
+.gst-page .page-head .gst-not b { color: var(--navy-900); font-weight: 700; }
+
+.gst-skels { display: flex; flex-direction: column; gap: var(--s4); }
+.gst-inline-refusal { display: block; margin-top: var(--s3); }
+
+/* The waiting states are drawn at the SHAPE of what is coming, so nothing
+   moves when it lands. The money bar sits right in its tile, because the
+   figure that replaces it is right-aligned by `.stat` — a left-aligned bar
+   that becomes a right-aligned number is a jump the eye reads as a reload. */
+.gst-skel-lede { display: flex; flex-direction: column; gap: var(--s3); }
+.gst-skel-fig { display: block; }
+.gst-skel-rows { margin-top: var(--s4); }
+.gst-skel-head .skel { margin-top: 4px; }
+
+/* ------------------------------------------------- the limits, at the top -- */
+/*
+   THREE FACTS THAT USED TO BE FOOTNOTES. The slabs this screen records, the
+   slab it cannot (aerated drinks and tobacco went to 40 per cent in September
+   2025), and the chain it does not read from. They qualify every figure below
+   them, so they are drawn ABOVE every figure below them, at reading size, on
+   every tab. Nothing here is a verdict colour: a limit is not a warning, it is
+   the shape of the instrument. */
+.gst-knows {
+  display: grid; gap: var(--s4) var(--s5);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  padding: var(--s4) var(--s5);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+.gst-know { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gst-know .k {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--ink-4);
+}
+.gst-know .v {
+  font-size: var(--t-small); line-height: var(--lh-body); color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.gst-slabs { display: flex; gap: 6px; flex-wrap: wrap; }
+/* The set, drawn as a set. Blue is the machine's own mark and these are the
+   only rates it will accept — not a judgement about any of them. */
+.gst-slab {
+  font: 700 var(--t-micro)/1 var(--font);
+  font-variant-numeric: tabular-nums;
+  padding: 6px var(--s3);
+  color: var(--blue-700); background: var(--blue-050);
+  border: 1px solid var(--blue-200); border-radius: var(--r-full);
+}
+
+/* ----------------------------------------------------------- the toolbar -- */
+
+.gst-bar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+}
+.gst-bar .spacer { flex: 1; min-width: 0; }
+.gst-monthpick { display: flex; align-items: center; gap: var(--s2); flex: none; }
+.gst-monthname {
+  min-width: 11ch; text-align: center;
+  font-size: var(--t-small); font-weight: 700; color: var(--navy-900);
+}
+/* A file link drawn as a button. It is an <a> because the browser follows
+   it: nothing is built here, the server writes the file. */
+.gst-bar a.btn { text-decoration: none; }
+
+@media (max-width: 560px) {
+  .gst-monthpick { order: -1; flex-basis: 100%; justify-content: space-between; }
+  .gst-bar .spacer { display: none; }
+}
+
+/* ---------------------------------------------------------- the products -- */
+
+.gst-prod { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gst-prod .name { font-weight: 700; color: var(--navy-900); overflow-wrap: anywhere; }
+.gst-prod .sku { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-4); }
+.gst-prod .price { font-size: var(--t-small); color: var(--ink-3); }
+
+.gst-hsn { font-family: var(--mono); font-weight: 600; color: var(--ink); letter-spacing: .02em; }
+
+/* "not set" is a state, set in ink-4 so it reads as an absence and not as a
+   value. It is never a dash: a dash in a tax column looks like zero. */
+.gst-unset { color: var(--ink-4); font-size: var(--t-small); }
+
+/* The split at the shelf price. Two small figures on one line; the reader
+   compares them down the column, so they are tabular. */
+.gst-split { font-size: var(--t-small); color: var(--ink-2); white-space: nowrap; }
+.gst-split b { color: var(--ink); font-weight: 600; }
+.gst-split .sep { color: var(--ink-4); margin: 0 4px; }
+
+/* A proposal is plain text with the matched word in bold, so a shopkeeper
+   can see WHY before he presses ACCEPT. Never an accent colour: it is not a
+   decision anyone has made yet. */
+.gst-propose { font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+.gst-propose b { color: var(--navy-900); font-weight: 700; }
+.gst-propose .norate { color: var(--amber); font-weight: 600; }
+
+.gst-actions { display: flex; gap: var(--s2); justify-content: flex-end; flex-wrap: wrap; }
+
+/* The row being edited is the one the editor above describes. */
+.tbl tr.gst-editing td { background: var(--blue-050); }
+
+/* ------------------------------------------------------------ the editor -- */
+
+.gst-editor {
+  display: grid; gap: var(--s4); align-items: end;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) auto;
+}
+.gst-editor .field { margin-bottom: 0; }
+.gst-editor .gst-editor-act { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.gst-editor-from {
+  grid-column: 1 / -1;
+  font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-body);
+}
+.gst-editor-from b { color: var(--navy-900); }
+@media (max-width: 720px) {
+  .gst-editor { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Not green. Recording a rate settles nothing and moves no money. */
+.gst-saved { font-size: var(--t-small); color: var(--ink-3); align-self: center; }
+
+/* ----------------------------------------------------------- the month -- */
+
+/* The five figures of the B2C table across the top. The gross is set larger
+   than the tax figures because it is the one the shopkeeper already knows
+   and checks the rest against.
+
+   THE TYPE IS CAPPED HERE AND THAT IS THE POINT. `.stat .stat-v` is 42px with
+   `overflow-wrap: anywhere`, which is right for the ONE total a screen usually
+   carries. Five of them in a `minmax(190px, 1fr)` grid is not that screen:
+   "₹2,068.50" broke after the "5" and rendered as two lines with a stray "0"
+   under it, at 1440 and at 390 alike. So the figures are clamped to what fits
+   and told not to break mid-number; the lead keeps its lead by staying larger
+   than the other four rather than by being 42px. */
+.gst-figs .statgrid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.gst-figs .stat .stat-v {
+  font-size: clamp(21px, 2.05vw, 29px);
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+.gst-figs .stat.lead .stat-v { font-size: clamp(25px, 2.6vw, 36px); }
+/* The skeleton's bar sits where the figure will: same row, same height. */
+.gst-figs .stat .gst-skel-fig { margin: 2px 0; }
+
+/* Why a control cannot be pressed, beside the control. */
+.gst-cannot {
+  font-size: var(--t-micro); line-height: 1.5; color: var(--ink-3);
+  max-width: 34ch;
+}
+
+/* What is actually in the file the button downloads. */
+.gst-csvnote {
+  margin: calc(var(--s3) * -1) 0 0;
+  font-size: var(--t-micro); line-height: 1.6; color: var(--ink-3);
+  max-width: 92ch;
+}
+.gst-csvnote b { color: var(--amber); font-weight: 700; font-variant-numeric: tabular-nums; }
+.gst-csvnote .mono { font-family: var(--mono); color: var(--ink-2); }
+
+.gst-complete { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+
+/* Months that have bills, as chips under the toolbar, so a shopkeeper does not
+   step back through empty months looking for the one with figures in it. */
+.gst-chips { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; }
+.gst-chips .lbl { font-size: var(--t-micro); color: var(--ink-4); text-transform: uppercase; letter-spacing: var(--tr-caps); font-weight: 700; }
+.gst-chips button {
+  font: 600 var(--t-micro)/1 var(--font); color: var(--ink-2);
+  padding: 6px var(--s3); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.gst-chips button:hover { border-color: var(--blue-400); background: var(--blue-050); color: var(--ink); }
+.gst-chips button[aria-pressed='true'] {
+  background: var(--blue-600); border-color: var(--blue-600); color: var(--on-dark);
+}
+
+.gst-two {
+  display: grid; gap: var(--s5); align-items: start;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, .9fr);
+}
+@media (max-width: 1080px) { .gst-two { grid-template-columns: minmax(0, 1fr); } }
+
+/* The unrated lines: amber, because they are the same thing amber means on
+   the till — the counter would not put a number on them. */
+.gst-unrated { margin-top: var(--s4); }
+.gst-unrated .tbl-wrap { margin-top: var(--s3); }
+
+.gst-exc-lines { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-small); }
+.gst-exc-lines span { color: var(--ink-2); }
+.gst-exc-lines .sku { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-4); }
+
+/* -------------------------------------------------------------- the bill -- */
+
+.gst-lookup { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.gst-lookup .inp { flex: 1; min-width: 200px; font-family: var(--mono); }
+
+.gst-billhead {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin-bottom: var(--s4);
+}
+.gst-billhead .k { display: block; font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--ink-4); }
+.gst-billhead .v { display: block; margin-top: 2px; font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); }
+.gst-billhead .v.sm { font-size: var(--t-body); font-weight: 600; color: var(--ink); }
+
+.gst-excluded { margin-top: var(--s4); }
+.gst-excluded li { font-size: var(--t-small); color: var(--ink-2); }
+.gst-excluded li .why { font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-4); }
+
+/* ------------------------------------------------------- where it came from -- */
+
+.gst-rules .kv > b { min-width: 9ch; }
+/* A sentence, not a figure: ranged left, and at reading weight rather than the
+   semibold the shared `.kv` gives a value it expects to be a number. */
+.gst-rules .kv > span { text-align: left; font-variant-numeric: normal; color: var(--ink-2); font-size: var(--t-small); line-height: var(--lh-body); font-weight: 500; }
+.gst-source .hint { margin-top: var(--s2); }
+
+/* ------------------------------------------------- the grid, on a phone --
+   A GSTR-1 table is a FILING DOCUMENT: taxable value, CGST and SGST are read
+   DOWN their columns and against each other across a row, so this screen keeps
+   its grid and scrolls it rather than restacking each row into a card the way
+   Stock and Expiry do.
+
+   WHAT WAS WRONG. The shared `Column.drop` flag hides a column outright under
+   720px (`table.tbl th.drop/td.drop { display: none }` in app.css), and seven
+   of this screen's columns carried it — "Tax at shelf price", "Tax", "Bill
+   total", "Lines", "Bills", "HSN" and "When". Measured at 390 before this
+   change: the rate table drew 5 of its 6 columns and the whole CGST/SGST/
+   taxable split was not on the screen at all, at any scroll position. The
+   table fitted because the figure had been deleted. The `drop` flags are gone
+   from Gst.tsx; the columns come back and the table scrolls instead.
+
+   SO IT HAS TO LOOK SCROLLABLE. A grid cut off flush at the right edge of a
+   phone reads as broken, not as scrollable. These four gradients are the
+   scroll-shadow trick: the two `local` layers scroll WITH the rows and park
+   over the two `scroll` layers, which are pinned to the container. At the far
+   left the left cover hides the left shadow, so the fade appears only on a
+   side that actually has more table beyond it, and disappears when you reach
+   the end. No JavaScript, and it cannot fall out of step with the scroll.
+
+   Measured at 390 after: the rate table is 700 px inside a 356 px wrapper and
+   scrolls; the page itself does not (documentElement.scrollWidth 390 == 390). */
+.gst-page .tbl-wrap {
+  background-image:
+    linear-gradient(to right, var(--surface), rgba(var(--navy-rgb), 0)),
+    linear-gradient(to left,  var(--surface), rgba(var(--navy-rgb), 0)),
+    linear-gradient(to right, rgba(var(--navy-rgb), .13), rgba(var(--navy-rgb), 0)),
+    linear-gradient(to left,  rgba(var(--navy-rgb), .13), rgba(var(--navy-rgb), 0));
+  background-position: 0 0, 100% 0, 0 0, 100% 0;
+  background-repeat: no-repeat;
+  background-size: 28px 100%, 28px 100%, 18px 100%, 18px 100%;
+  /* The order matters: covers travel with the content, shadows stay put. */
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* The sticky header would otherwise let the shadow show through its own
+   translucent background and smear a grey bar across the column names. */
+.gst-page .tbl-wrap table.tbl thead th { background: var(--surface-2); }
+
+/* COLUMN WIDTHS, AND WHY THEY ARE SET AT ALL.
+   A first pass here put `white-space: nowrap` on the three-part CGST/SGST/
+   taxable split so it would read as one figure. It backfired, and the numbers
+   say how: the split's column claimed 304 px of an 860 px table, which starved
+   the "Proposal" sentence down to 109 px, wrapped it to ten lines, and made
+   the rows 201 px tall — a screen and a half of mostly blank table per
+   product, with the figures floating at the top of it.
+
+   So the split wraps again, and instead the two PROSE columns are given a
+   floor. A sentence needs a measure; a figure needs no more room than itself.
+   Measured at 390 after: rows drop from a 123 px median (201 px worst) to
+   about 96, and the table is no wider for it. */
+.gst-page table.tbl th:first-child, .gst-page table.tbl td:first-child { min-width: 190px; }
+/* The proposal is the sentence explaining what the counter would set and why —
+   the one thing on the row a shopkeeper reads rather than compares. */
+.gst-page table.tbl td:nth-child(5) { min-width: 230px; }
+
+/* Each figure inside the split stays whole; the split as a whole may wrap
+   between its parts. `₹1,234.00` broken across two lines is not a number. */
+.gst-page table.tbl td .gst-split > b { white-space: nowrap; }
