@@ -1,0 +1,426 @@
+{
+ "format": 1,
+ "invoices": [
+  {
+   "n": 1,
+   "file": "invoice_1.png",
+   "supplier": {
+    "name": "Sharma Distributors",
+    "phone": "98200 44711"
+   },
+   "rotate_deg": 0.0,
+   "noise": false,
+   "misprint": null,
+   "answer": {
+    "supplier": {
+     "name": "Sharma Distributors",
+     "phone": "98200 44711"
+    },
+    "invoice_no": "SD/2026/0917",
+    "date": "2026-09-03",
+    "lines": [
+     {
+      "name": "PARLE-G BISCUIT 100G",
+      "qty": 48,
+      "rate": "8.20",
+      "amount": "393.60"
+     },
+     {
+      "name": "MAGGI 2-MIN NOODLES 70G",
+      "qty": 24,
+      "rate": "11.75",
+      "amount": "282.00"
+     },
+     {
+      "name": "TATA SALT IODISED 1KG",
+      "qty": 12,
+      "rate": "25.50",
+      "amount": "306.00"
+     },
+     {
+      "name": "AMUL BUTTER 100G",
+      "qty": 10,
+      "rate": "54.00",
+      "amount": "540.00"
+     },
+     {
+      "name": "LIFEBUOY TOTAL SOAP 125G",
+      "qty": 20,
+      "rate": "31.25",
+      "amount": "625.00"
+     },
+     {
+      "name": "SURF EXCEL EASY WASH 1KG",
+      "qty": 6,
+      "rate": "118.00",
+      "amount": "708.00"
+     }
+    ],
+    "subtotal": "2854.60",
+    "taxes": [
+     {
+      "label": "CGST 2.5%",
+      "amount": "71.36"
+     },
+     {
+      "label": "SGST 2.5%",
+      "amount": "71.36"
+     }
+    ],
+    "printed_total": "2997.32"
+   },
+   "expect": {
+    "gate_ok": true,
+    "failing_lines": [],
+    "skus": [
+     "parle_g_biscuit",
+     "maggi_noodles_70g",
+     "tata_salt_1kg",
+     "amul_butter_100g",
+     "lifebuoy_soap_125g",
+     "surf_excel_1kg"
+    ],
+    "in_catalogue": 6,
+    "not_in_catalogue": 0,
+    "subtotal_paise": 285460,
+    "total_paise": 299732
+   }
+  },
+  {
+   "n": 2,
+   "file": "invoice_2.png",
+   "supplier": {
+    "name": "Gupta Agencies",
+    "phone": "022 2345 8890"
+   },
+   "rotate_deg": 0.0,
+   "noise": false,
+   "misprint": null,
+   "answer": {
+    "supplier": {
+     "name": "Gupta Agencies",
+     "phone": "022 2345 8890"
+    },
+    "invoice_no": "GA-4471",
+    "date": "2026-09-01",
+    "lines": [
+     {
+      "name": "AASHIRVAAD ATTA 5KG",
+      "qty": 8,
+      "rate": "238.00",
+      "amount": "1904.00"
+     },
+     {
+      "name": "BASMATI RICE 5KG",
+      "qty": 4,
+      "rate": "465.00",
+      "amount": "1860.00"
+     },
+     {
+      "name": "TOOR DAL 1KG",
+      "qty": 10,
+      "rate": "152.00",
+      "amount": "1520.00"
+     },
+     {
+      "name": "CHEENI SUGAR 1KG",
+      "qty": 20,
+      "rate": "46.50",
+      "amount": "930.00"
+     },
+     {
+      "name": "FORTUNE SUNFLOWER OIL 1L",
+      "qty": 12,
+      "rate": "148.00",
+      "amount": "1776.00"
+     },
+     {
+      "name": "TATA TEA GOLD 250G",
+      "qty": 6,
+      "rate": "158.00",
+      "amount": "948.00"
+     },
+     {
+      "name": "BOURNVITA 500G",
+      "qty": 6,
+      "rate": "195.00",
+      "amount": "1170.00"
+     }
+    ],
+    "subtotal": "10108.00",
+    "taxes": [
+     {
+      "label": "CGST 2.5%",
+      "amount": "252.70"
+     },
+     {
+      "label": "SGST 2.5%",
+      "amount": "252.70"
+     }
+    ],
+    "printed_total": "10613.40"
+   },
+   "expect": {
+    "gate_ok": true,
+    "failing_lines": [],
+    "skus": [
+     "aashirvaad_atta_5kg",
+     "basmati_rice_5kg",
+     "toor_dal_1kg",
+     "cheeni_sugar_1kg",
+     "fortune_sunflower_1l",
+     "tata_tea_gold_250g",
+     null
+    ],
+    "in_catalogue": 6,
+    "not_in_catalogue": 1,
+    "subtotal_paise": 1010800,
+    "total_paise": 1061340
+   }
+  },
+  {
+   "n": 3,
+   "file": "invoice_3.png",
+   "supplier": {
+    "name": "Sharma Distributors",
+    "phone": "98200 44711"
+   },
+   "rotate_deg": 0.0,
+   "noise": false,
+   "misprint": {
+    "line": 1,
+    "off_by_paise": 1
+   },
+   "answer": {
+    "supplier": {
+     "name": "Sharma Distributors",
+     "phone": "98200 44711"
+    },
+    "invoice_no": "SD/2026/0931",
+    "date": "2026-09-04",
+    "lines": [
+     {
+      "name": "PARLE-G BISCUIT 100G",
+      "qty": 24,
+      "rate": "8.20",
+      "amount": "196.80"
+     },
+     {
+      "name": "MAGGI 2-MIN NOODLES 70G",
+      "qty": 36,
+      "rate": "11.75",
+      "amount": "423.01"
+     },
+     {
+      "name": "RED LABEL TEA 250G",
+      "qty": 6,
+      "rate": "132.50",
+      "amount": "795.00"
+     },
+     {
+      "name": "VIM BAR 200G",
+      "qty": 30,
+      "rate": "17.60",
+      "amount": "528.00"
+     }
+    ],
+    "subtotal": "1942.81",
+    "taxes": [
+     {
+      "label": "CGST 2.5%",
+      "amount": "48.57"
+     },
+     {
+      "label": "SGST 2.5%",
+      "amount": "48.57"
+     }
+    ],
+    "printed_total": "2039.95"
+   },
+   "expect": {
+    "gate_ok": false,
+    "failing_lines": [
+     1
+    ],
+    "skus": [
+     "parle_g_biscuit",
+     "maggi_noodles_70g",
+     "red_label_250g",
+     "vim_bar_200g"
+    ],
+    "in_catalogue": 4,
+    "not_in_catalogue": 0,
+    "subtotal_paise": 194281,
+    "total_paise": 203995
+   }
+  },
+  {
+   "n": 4,
+   "file": "invoice_4.jpg",
+   "supplier": {
+    "name": "Verma Traders",
+    "phone": "98337 10422"
+   },
+   "rotate_deg": 1.4,
+   "noise": true,
+   "misprint": null,
+   "answer": {
+    "supplier": {
+     "name": "Verma Traders",
+     "phone": "98337 10422"
+    },
+    "invoice_no": "VT/1188",
+    "date": "2026-09-02",
+    "lines": [
+     {
+      "name": "COLGATE STRONG TEETH 100G",
+      "qty": 12,
+      "rate": "49.00",
+      "amount": "588.00"
+     },
+     {
+      "name": "DETTOL ORIGINAL SOAP 125G",
+      "qty": 24,
+      "rate": "38.50",
+      "amount": "924.00"
+     },
+     {
+      "name": "CLINIC PLUS SHAMPOO SACHET 5ML X16",
+      "qty": 10,
+      "rate": "25.60",
+      "amount": "256.00"
+     },
+     {
+      "name": "PARACHUTE COCONUT OIL 100ML",
+      "qty": 12,
+      "rate": "41.00",
+      "amount": "492.00"
+     },
+     {
+      "name": "HARPIC 500ML",
+      "qty": 6,
+      "rate": "74.00",
+      "amount": "444.00"
+     },
+     {
+      "name": "VIM DISHWASH BAR 200G",
+      "qty": 24,
+      "rate": "17.60",
+      "amount": "422.40"
+     }
+    ],
+    "subtotal": "3126.40",
+    "taxes": [
+     {
+      "label": "CGST 9%",
+      "amount": "281.37"
+     },
+     {
+      "label": "SGST 9%",
+      "amount": "281.37"
+     }
+    ],
+    "printed_total": "3689.14"
+   },
+   "expect": {
+    "gate_ok": true,
+    "failing_lines": [],
+    "skus": [
+     "colgate_strong_100g",
+     "dettol_soap_125g",
+     "clinic_plus_sachet",
+     "parachute_oil_100ml",
+     "harpic_500ml",
+     "vim_bar_200g"
+    ],
+    "in_catalogue": 6,
+    "not_in_catalogue": 0,
+    "subtotal_paise": 312640,
+    "total_paise": 368914
+   }
+  },
+  {
+   "n": 5,
+   "file": "invoice_5.jpg",
+   "supplier": {
+    "name": "Raj Snacks & Beverages",
+    "phone": "99870 61255"
+   },
+   "rotate_deg": -1.2,
+   "noise": true,
+   "misprint": null,
+   "answer": {
+    "supplier": {
+     "name": "Raj Snacks & Beverages",
+     "phone": "99870 61255"
+    },
+    "invoice_no": "RSB-2209",
+    "date": "2026-08-30",
+    "lines": [
+     {
+      "name": "KURKURE MASALA MUNCH 70G",
+      "qty": 30,
+      "rate": "16.00",
+      "amount": "480.00"
+     },
+     {
+      "name": "HALDIRAM ALOO BHUJIA 200G",
+      "qty": 12,
+      "rate": "44.00",
+      "amount": "528.00"
+     },
+     {
+      "name": "FROOTI 150ML",
+      "qty": 48,
+      "rate": "8.10",
+      "amount": "388.80"
+     },
+     {
+      "name": "THUMS UP 750ML",
+      "qty": 24,
+      "rate": "32.00",
+      "amount": "768.00"
+     },
+     {
+      "name": "DAIRY MILK 50G",
+      "qty": 30,
+      "rate": "36.00",
+      "amount": "1080.00"
+     },
+     {
+      "name": "GOOD DAY CASHEW 100G",
+      "qty": 24,
+      "rate": "24.00",
+      "amount": "576.00"
+     },
+     {
+      "name": "MARIE GOLD 250G",
+      "qty": 12,
+      "rate": "36.50",
+      "amount": "438.00"
+     }
+    ],
+    "subtotal": "4258.80",
+    "taxes": [],
+    "printed_total": "4258.80"
+   },
+   "expect": {
+    "gate_ok": true,
+    "failing_lines": [],
+    "skus": [
+     "kurkure_masala_70g",
+     "haldirams_bhujia_200g",
+     "frooti_150ml",
+     "thums_up_750ml",
+     "dairy_milk_50g",
+     "good_day_cashew_100g",
+     "marie_gold_250g"
+    ],
+    "in_catalogue": 7,
+    "not_in_catalogue": 0,
+    "subtotal_paise": 425880,
+    "total_paise": 425880
+   }
+  }
+ ]
+}

@@ -1,0 +1,177 @@
+/* ===========================================================================
+   PARCHI — the photographed bill, on the Purchases screen.
+
+   Imported by `routes/PurchasesPhoto.tsx` and nothing else. Every rule is
+   prefixed `pr-`; every value is a token. The layout is the photograph BESIDE
+   the parsed table, because the whole point of the screen is that a person
+   checks the machine's reading against the paper — a table alone would be
+   asking them to trust it.
+
+   THE COLOUR RULE. Green is a settled payment and does not appear here: a
+   booked cost is a fact about a bill, not settled money, and it is written in
+   ink. What does earn colour:
+
+     RED    a line whose arithmetic fails, and the verdict that refuses the
+            bill for it. The counter refused; that is what red means.
+     AMBER  a "confirm?" row — the machine abstained from deciding and asks a
+            person — and a bill waiting on a confirmation.
+     BLUE   what the machine proposed, and what it is doing. The machine's
+            colour.
+   A line with no match wears neutral ink and a link; it is not a fault.
+   =========================================================================== */
+
+.pr { display: flex; flex-direction: column; gap: var(--s5); }
+
+/* The disclosure, before anything is chosen: what leaves, what stays. */
+.pr-leaves {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4);
+  font-size: var(--t-small); color: var(--ink-3); line-height: 1.6;
+}
+@media (max-width: 640px) { .pr-leaves { grid-template-columns: 1fr; } }
+.pr-leaves b { display: block; color: var(--ink-2); font-size: var(--t-micro);
+  letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
+.pr-leaves ul { margin: 0; padding-left: 1.1em; }
+
+/* ------------------------------------------------------------- capture -- */
+
+.pr-capture { display: flex; flex-direction: column; gap: var(--s3); }
+.pr-capture-head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.pr-filepick { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
+.pr-gate { font-size: var(--t-small); color: var(--ink-3); line-height: 1.5; max-width: 52ch; }
+.pr-stage { max-width: 420px; }
+.pr-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--navy-900); }
+.pr-onstage { margin-left: auto; }
+.pr-camerr { color: var(--amber-on-dark); font-size: var(--t-small); margin-top: var(--s3); }
+
+/* ---------------------------------------------------------- the reading -- */
+
+/* The photograph beside the table. On a wide screen the photograph keeps a
+   third; under 1000 px it goes above the table at a height a thumb can scroll
+   past, so the table — the thing being checked — is never crushed. */
+.pr-read {
+  display: grid; grid-template-columns: minmax(260px, 34%) minmax(0, 1fr);
+  gap: var(--s5); align-items: start;
+}
+@media (max-width: 1000px) { .pr-read { grid-template-columns: 1fr; } }
+
+.pr-photo {
+  position: sticky; top: calc(var(--topbar-h, 64px) + var(--s4));
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface-2); overflow: hidden;
+  box-shadow: var(--shadow-1);
+}
+@media (max-width: 1000px) { .pr-photo { position: static; } }
+.pr-photo img { display: block; width: 100%; max-height: 72vh; object-fit: contain; background: #fff; }
+@media (max-width: 1000px) { .pr-photo img { max-height: 42vh; } }
+.pr-photo-cap {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4); font-size: var(--t-micro); color: var(--ink-3);
+  border-top: 1px solid var(--line);
+}
+.pr-photo-cap .mono { overflow-wrap: anywhere; }
+
+/* The header facts: supplier, invoice, date — read off the bill, editable. */
+.pr-head {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+@media (max-width: 760px) { .pr-head { grid-template-columns: 1fr; } }
+.pr-head input {
+  width: 100%; font: inherit; padding: 8px var(--s3);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink); min-width: 0;
+}
+.pr-head input:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.pr-onfile { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+/* ----------------------------------------------------------- the table -- */
+
+.pr-table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: var(--t-small); }
+.pr-table th {
+  text-align: left; font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.pr-table td { padding: var(--s3); border-bottom: 1px solid var(--line); vertical-align: top; }
+.pr-table tr:last-child td { border-bottom: 0; }
+.pr-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-table td.num { color: var(--navy-900); }
+/* The printed line is read against the paper beside it, so it stays on ONE
+   line the way it is printed — the table scrolls sideways inside `.scroll-x`
+   rather than folding "PARLE-G BISCUIT 100G" into three rows. */
+.pr-printed { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--t-small); color: var(--navy-900); white-space: nowrap; }
+.pr-table th:nth-child(3), .pr-table td:nth-child(3) { min-width: 210px; }
+.pr-tick { width: 32px; }
+.pr-tick input { width: 18px; height: 18px; accent-color: var(--blue-500); }
+
+/* The product cell: what the machine matched, why, and the control. */
+.pr-match { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.pr-match .pr-why { font-size: var(--t-micro); color: var(--ink-4); line-height: 1.4; }
+.pr-match select {
+  font: inherit; font-size: var(--t-small); padding: 6px var(--s2);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink); max-width: 100%;
+}
+.pr-match select:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.pr-match .btn-row { gap: var(--s2); }
+.pr-nm { font-weight: 600; color: var(--navy-900); }
+
+/* Row tones. Red only where the counter refused. */
+.pr-table tr.pr-fails td { background: var(--red-bg); }
+.pr-table tr.pr-fails td.num { color: var(--red); }
+.pr-table tr.pr-confirm td { background: var(--amber-bg); }
+.pr-table tr.pr-none td { background: var(--surface-2); }
+.pr-table tr.pr-out td { opacity: .6; }
+.pr-table tr.pr-out td.pr-tick, .pr-table tr.pr-out td:nth-child(2) { opacity: 1; }
+.pr-lerr { display: block; font-size: var(--t-micro); color: var(--red); line-height: 1.5; margin-top: 4px; }
+.pr-sub { display: block; font-size: var(--t-micro); color: var(--ink-4); margin-top: 2px; }
+
+.pr-scrollhint { display: none; }
+@media (max-width: 760px) {
+  .pr-scrollhint { display: block; margin-top: var(--s2); font-size: var(--t-micro); color: var(--ink-4); }
+}
+
+/* The figures the gate checked, under the table: lines, subtotal, taxes, total. */
+.pr-figs {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-end;
+  margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line);
+  font-size: var(--t-small); color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
+.pr-figs > span { display: flex; gap: var(--s5); }
+.pr-figs b { color: var(--navy-900); min-width: 110px; text-align: right; }
+.pr-figs .pr-total { font-size: var(--t-body); }
+.pr-figs .pr-total b { font-size: var(--t-h2); }
+
+/* ------------------------------------------------------------- the foot -- */
+
+.pr-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s4); flex-wrap: wrap;
+  margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--line);
+}
+.pr-counts { display: flex; gap: var(--s2); flex-wrap: wrap; }
+
+/* The "cost known for A -> B" figure after a booking. Ink, not green. */
+.pr-value {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4);
+  margin-top: var(--s4);
+}
+@media (max-width: 760px) { .pr-value { grid-template-columns: 1fr; } }
+.pr-value > div {
+  padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); box-shadow: var(--shadow-1);
+}
+.pr-value .lbl { display: block; font: 600 11px/1.2 var(--font); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+/* Wraps rather than clips: "partial → complete" is two words and an arrow,
+   and at 1380 px it was cut to "partial → compl" in a three-column row. */
+.pr-value .val { display: block; font: 700 clamp(17px, 1.6vw, 22px)/1.2 var(--font); color: var(--navy-900); font-variant-numeric: tabular-nums; margin-top: 4px; overflow-wrap: anywhere; }
+.pr-value .val .pr-arrow { color: var(--blue-600); margin: 0 6px; }
+.pr-value .sub { display: block; font-size: var(--t-micro); color: var(--ink-3); margin-top: 4px; line-height: 1.5; }
+.pr-value .pr-partial { color: var(--amber); }
+
+/* Blue skeleton while the model reads: the machine working, in the machine's colour. */
+.pr-reading { display: flex; align-items: center; gap: var(--s3); font-size: var(--t-small); color: var(--ink-3); }
+.pr-note {
+  margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--line);
+  font-size: var(--t-micro); line-height: 1.7; color: var(--ink-3); max-width: 80ch;
+}
+.pr-note b { color: var(--ink-2); }
