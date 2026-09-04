@@ -14,7 +14,9 @@ shopkeeper taught this counter" are kept together and kept CONSISTENT:
     name            what a human calls it
     price_paise     INTEGER PAISE, always (invariant 1)
     vectors         what the embedder saw, so identity survives a restart
-    footprint_mm    the measured long edge, so the metric tiebreak survives too
+    footprint_mm    the measured long edge, so the metric tiebreak survives too,
+                    or None for a SKU taught from a photo with no mat in it
+    taught_by       which of those two it was, so nobody has to infer it
 
 Keeping them together is the entire point. Two files drift; one file cannot.
 ``to_gallery()`` and ``price_book()`` are projections of the SAME dict, so the
@@ -46,6 +48,29 @@ THE TWO REFUSALS THIS FILE OWNS
    The guard is never widened to make a demo look better. The gates are
    persisted INTO the catalog file, and reopening a store with different gates
    raises rather than silently re-admitting entries under looser thresholds.
+
+TWO WAYS TO TEACH, AND THE WEAKER ONE IS LABELLED
+=================================================
+``footprint_mm`` may be None. That means the shopkeeper taught this product
+from an ordinary photo — a packet on a table, no TAKHTI in frame — so there are
+no millimetres to store and the metric tiebreak can never run for it. Every
+record therefore carries ``taught_by``:
+
+    TAUGHT_ON_MAT       mat_measured      a lock gave a real long edge
+    TAUGHT_FROM_PHOTO   appearance_only   no scale; judged on looks alone
+
+It is derived from ``footprint_mm`` rather than stored beside it, so the two
+cannot drift into disagreeing; it is nonetheless WRITTEN OUT to the catalog, so
+a UI, an audit line or a human reading the JSON sees the word rather than
+having to know that null means weak. A file whose ``taught_by`` contradicts its
+``footprint_mm`` is a hand-edit and is refused on load.
+
+Appearance-only is a first-class mode and a measurably weaker one: it loses a
+discriminator, so ``gawaah.identity`` judges it at the higher
+``PHI_APPEARANCE_ONLY`` bar and this store admits it under a STRICTER collision
+guard (size cannot rescue a pair when one side has no size). ``taught_by``
+exists so a shopkeeper can find the weak ones later and re-teach them on the
+mat, which is the only thing that actually fixes them.
 
 WHAT IS ON DISK
 ===============
@@ -125,6 +150,8 @@ from gawaah.identity import (
     DEFAULT_PHI,
     DEFAULT_TAU_MM,
     DEFAULT_THETA,
+    MODE_APPEARANCE_ONLY,
+    PHI_APPEARANCE_ONLY,
     Collision,
     Gallery,
     Identifier,
@@ -162,6 +189,16 @@ REASON_COLLISION = "collision"
 PHOTO_STORED = "stored"
 PHOTO_RETAINED = "retained"
 PHOTO_NONE = "none"
+
+#: How a SKU came to be in this catalog. Exactly two ways, and the difference
+#: is not cosmetic: one of them has millimetres and one of them never will.
+TAUGHT_ON_MAT = "mat_measured"
+#: Deliberately the same string as gawaah.identity.MODE_APPEARANCE_ONLY, so a
+#: UI has ONE word for "weak" whether it is looking at a stored record or at a
+#: live identification.
+TAUGHT_FROM_PHOTO = MODE_APPEARANCE_ONLY
+
+TAUGHT_BY: tuple[str, ...] = (TAUGHT_ON_MAT, TAUGHT_FROM_PHOTO)
 
 
 class ShopError(ValueError):
@@ -235,7 +272,7 @@ class SkuRecord:
     name: str
     price_paise: int
     vectors: np.ndarray
-    footprint_mm: float
+    footprint_mm: Optional[float]
     photo: str | None = None
     photo_bytes: int = 0
 
@@ -247,11 +284,25 @@ class SkuRecord:
     def dim(self) -> int:
         return int(self.vectors.shape[1])
 
+    @property
+    def is_appearance_only(self) -> bool:
+        """No footprint means no size check, ever, for this product."""
+        return self.footprint_mm is None
+
+    @property
+    def taught_by(self) -> str:
+        """DERIVED, not stored: one source of truth cannot disagree with
+        itself. It is written to the catalog anyway so that a reader does not
+        have to know that ``"footprint_mm": null`` is the weak case."""
+        return TAUGHT_FROM_PHOTO if self.footprint_mm is None else TAUGHT_ON_MAT
+
     def to_json(self) -> dict:
         return {
             "name": self.name,
             "price_paise": int(self.price_paise),
-            "footprint_mm": float(self.footprint_mm),
+            "footprint_mm": (None if self.footprint_mm is None
+                             else float(self.footprint_mm)),
+            "taught_by": self.taught_by,
             "vectors": self.vectors.tolist(),
             "photo": self.photo,
             "photo_bytes": int(self.photo_bytes),
@@ -282,6 +333,14 @@ class Result:
     footprint_delta_mm: Optional[float] = None
     photo_action: str = PHOTO_NONE
     photo_bytes: int = 0
+    #: TAUGHT_ON_MAT or TAUGHT_FROM_PHOTO — what the surface should SAY it just
+    #: did. An enrolment that quietly produced a weaker SKU than the shopkeeper
+    #: thought is the failure this field exists to prevent.
+    taught_by: str = TAUGHT_ON_MAT
+
+    @property
+    def is_appearance_only(self) -> bool:
+        return self.taught_by == TAUGHT_FROM_PHOTO
 
     def __bool__(self) -> bool:
         return self.ok
@@ -304,6 +363,7 @@ class Result:
             ),
             "photo_action": self.photo_action,
             "photo_bytes": int(self.photo_bytes),
+            "taught_by": self.taught_by,
         }
 
 
@@ -341,6 +401,7 @@ class ShopStore:
         theta: float = DEFAULT_THETA,
         phi: float = DEFAULT_PHI,
         tau_mm: float = DEFAULT_TAU_MM,
+        phi_appearance_only: float = PHI_APPEARANCE_ONLY,
         write_sidecar: bool = True,
         photo_edge_px: int = PHOTO_EDGE_PX,
         photo_cap_bytes: int = PHOTO_CAP_BYTES,
@@ -349,11 +410,18 @@ class ShopStore:
         self.theta = float(theta)
         self.phi = float(phi)
         self.tau_mm = float(tau_mm)
+        self.phi_appearance_only = float(phi_appearance_only)
         self.write_sidecar = bool(write_sidecar)
         self.photo_edge_px = int(photo_edge_px)
         self.photo_cap_bytes = int(photo_cap_bytes)
         if self.theta < 0.0 or self.tau_mm < 0.0:
             raise ShopError("theta and tau_mm must be >= 0")
+        if self.phi_appearance_only < self.phi:
+            raise ShopError(
+                f"phi_appearance_only={self.phi_appearance_only} is below "
+                f"phi={self.phi}: a SKU with no size check must not be the "
+                f"easier one to match (invariant 7)"
+            )
         self._skus: dict[str, SkuRecord] = {}
         self._sidecar_is_ours = True
         self.reload()
@@ -374,7 +442,9 @@ class ShopStore:
         return (
             f"ShopStore(dir={str(self.dir)!r}, n={len(self._skus)}, "
             f"dim={self.dim}, theta={self.theta}, phi={self.phi}, "
-            f"tau_mm={self.tau_mm})"
+            f"phi_appearance_only={self.phi_appearance_only}, "
+            f"tau_mm={self.tau_mm}, "
+            f"appearance_only={len(self.appearance_only_skus())})"
         )
 
     # -- reading ------------------------------------------------------------
@@ -394,6 +464,20 @@ class ShopStore:
 
     def all(self) -> tuple[SkuRecord, ...]:
         return tuple(self._skus[s] for s in self.skus())
+
+    def appearance_only_skus(self) -> tuple[str, ...]:
+        """The SKUs taught from a photo with no mat, sorted.
+
+        The list a surface needs in order to say "these N products have no size
+        check", and the worklist a shopkeeper works through with the mat when
+        he wants them fixed.
+        """
+        return tuple(s for s in self.skus() if self._skus[s].is_appearance_only)
+
+    def taught_by(self, sku_id: str) -> Optional[str]:
+        """TAUGHT_ON_MAT / TAUGHT_FROM_PHOTO, or None for an unknown sku."""
+        rec = self._skus.get(sku_id)
+        return None if rec is None else rec.taught_by
 
     def price_paise(self, item_id: str) -> Optional[int]:
         """``paisa.PriceBook`` protocol: an unknown item is None, never a guess
@@ -421,6 +505,10 @@ class ShopStore:
         """
         g = Gallery()
         for rec in self.all():
+            # None goes through UNCHANGED. A 0.0 or a "best guess" here would
+            # be a size the metric tiebreak then compares against, and the
+            # counter would silently gate an appearance-only SKU on a
+            # measurement nobody ever took.
             g.enroll(rec.sku_id, rec.vectors, rec.footprint_mm)
         return g
 
@@ -446,10 +534,18 @@ class ShopStore:
         name: str,
         price_paise: int,
         vectors: Iterable[Any],
-        footprint_mm: float,
+        footprint_mm: Optional[float],
         photo_png: Any = None,
     ) -> Result:
         """Teach the counter one product. Returns a Result; raises on bad money.
+
+        ``footprint_mm=None`` teaches it APPEARANCE-ONLY: from a photo with no
+        mat, so there is no long edge to store and no size check will ever run
+        for this product. It is deliberately spelled as an explicit None rather
+        than given a default, because a caller that forgot to measure and a
+        caller that could not measure must not produce the same record by
+        accident. The Result says which happened, in words, in
+        ``taught_by`` and in ``message``.
 
         Order of checks is deliberate and is the order of increasing cost:
 
@@ -475,8 +571,9 @@ class ShopStore:
         self._assert_writable()
         sku = _require_sku_id(sku_id)
         clean_name = _require_name(name)
-        fp = _require_mm(footprint_mm)
+        fp = _optional_mm(footprint_mm)
         price = _require_positive_paise(price_paise)   # MoneyError flies free
+        taught = TAUGHT_FROM_PHOTO if fp is None else TAUGHT_ON_MAT
 
         rows = _require_vectors(vectors)
         block = np.vstack(rows)
@@ -490,6 +587,21 @@ class ShopStore:
         previous = self._skus.get(sku)
         collision = self._check_collision(sku, rows, fp)
         if collision.collides:
+            if collision.footprint_delta_mm is None:
+                why = (
+                    f"cosine {collision.similarity:.4f} >= "
+                    f"{1.0 - self.theta:.4f}, and one of the two has no "
+                    f"footprint, so no size check can ever tell them apart. "
+                    f"Teaching this one on the mat would not help either "
+                    f"unless the OTHER one has a footprint too."
+                )
+            else:
+                why = (
+                    f"cosine {collision.similarity:.4f} >= "
+                    f"{1.0 - self.theta:.4f} and footprint delta "
+                    f"{collision.footprint_delta_mm:.2f} mm <= "
+                    f"{self.tau_mm:.2f} mm."
+                )
             return Result(
                 ok=False,
                 sku_id=sku,
@@ -497,16 +609,15 @@ class ShopStore:
                 reason=REASON_COLLISION,
                 message=(
                     f"refused: {sku!r} is indistinguishable from "
-                    f"{collision.sku_id!r} — cosine {collision.similarity:.4f} "
-                    f">= {1.0 - self.theta:.4f} and footprint delta "
-                    f"{collision.footprint_delta_mm:.2f} mm <= {self.tau_mm:.2f} "
-                    f"mm. Both would be permanently amber at the till. Take a "
-                    f"disambiguation capture, or enrol them as one sku."
+                    f"{collision.sku_id!r} — {why} Both would be permanently "
+                    f"amber at the till. Take a disambiguation capture, or "
+                    f"enrol them as one sku."
                 ),
                 collides_with=collision.sku_id,
                 colliding=collision.colliding,
                 similarity=collision.similarity,
                 footprint_delta_mm=collision.footprint_delta_mm,
+                taught_by=taught,
             )
 
         photo_rel: str | None = None
@@ -540,22 +651,33 @@ class ShopStore:
         self._skus[sku] = record
         self._save()
 
+        # Said in words, on every single enrolment, because a shopkeeper who
+        # does not know he taught the weak kind cannot choose to fix it.
+        how = (
+            f" MAT-MEASURED at {fp:.1f} mm: the size check protects it."
+            if fp is not None else
+            " APPEARANCE-ONLY: taught from a photo with no mat, so there is no "
+            "size check and it is easier to confuse with something that looks "
+            "like it. Re-teach it on the TAKHTI to get one."
+        )
         if previous is None:
             return Result(
                 ok=True, sku_id=sku, action=ACTION_ADDED, reason=REASON_ADDED,
-                message=f"added {sku!r} at {price} paise",
+                message=f"added {sku!r} at {price} paise.{how}",
                 photo_action=photo_action, photo_bytes=photo_size,
+                taught_by=taught,
             )
         return Result(
             ok=True, sku_id=sku, action=ACTION_REPLACED, reason=REASON_REPLACED,
             message=(
                 f"replaced {sku!r}: {previous.price_paise} -> {price} paise, "
                 f"{previous.n_views} -> {record.n_views} view(s). The previous "
-                f"entry is gone, not duplicated."
+                f"entry is gone, not duplicated.{how}"
             ),
             replaced=True,
             previous_price_paise=int(previous.price_paise),
             photo_action=photo_action, photo_bytes=photo_size,
+            taught_by=taught,
         )
 
     def remove(self, sku_id: str) -> bool:
@@ -603,7 +725,7 @@ class ShopStore:
 
     # -- the collision guard ------------------------------------------------
     def _check_collision(
-        self, sku: str, rows: list[np.ndarray], footprint: float
+        self, sku: str, rows: list[np.ndarray], footprint: Optional[float]
     ) -> Collision:
         """Run ``Identifier.check_collision`` against everything BUT ``sku``.
 
@@ -620,66 +742,25 @@ class ShopStore:
         ident = Identifier(
             probe, _never_embeds,
             theta=self.theta, phi=self.phi, tau_mm=self.tau_mm,
+            phi_appearance_only=self.phi_appearance_only,
         )
         return ident.check_collision(rows, footprint)
 
     # -- photos -------------------------------------------------------------
     def _encode_photo(self, photo: Any) -> bytes:
-        """Decode whatever we were handed, downscale, re-encode PNG, cap it.
+        """This store's own photo budget, applied by `encode_photo_png`.
 
-        Accepts encoded bytes (what a browser upload is) or an ndarray (what the
-        rectified crop is), because both callers exist and forcing one to encode
-        just so we can decode it again is waste.
+        The policy — decode, downscale down a ladder, re-encode PNG, refuse
+        rather than store unbounded — is one function at module level now,
+        because a SECOND caller appeared that has no store record to hang it
+        off: `gawaah/shopadmin.py` validates the photograph a shopkeeper
+        uploads for a product that lives only in the till's appearance-only
+        sidecar. Re-implementing the ladder there would have been a second
+        photo policy, and the two would have drifted the first time either
+        number moved.
         """
-        import cv2  # local: a catalog with no photos should not pay for cv2
-
-        if isinstance(photo, (bytes, bytearray, memoryview)):
-            data = bytes(photo)
-            if len(data) > PHOTO_INPUT_CAP_BYTES:
-                raise ShopError(
-                    f"enrolment photo is {len(data)} bytes, over the "
-                    f"{PHOTO_INPUT_CAP_BYTES} byte input cap — refused before "
-                    f"decode so a decompression bomb never allocates"
-                )
-            img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
-            if img is None:
-                raise ShopError("enrolment photo did not decode as an image")
-        elif isinstance(photo, np.ndarray):
-            img = photo
-        else:
-            raise ShopError(
-                f"enrolment photo must be encoded bytes or an ndarray, got "
-                f"{type(photo).__name__}"
-            )
-
-        img = np.asarray(img)
-        if img.dtype != np.uint8:
-            raise ShopError(
-                f"enrolment photo must be uint8, got {img.dtype} — a float image "
-                f"has no agreed range and would be silently clipped"
-            )
-        if img.ndim not in (2, 3) or img.size == 0:
-            raise ShopError(f"enrolment photo has unusable shape {img.shape}")
-
-        ladder = tuple(
-            e for e in PHOTO_EDGE_LADDER if e <= self.photo_edge_px
-        ) or (self.photo_edge_px,)
-        last = b""
-        for edge in ladder:
-            small = _downscale(cv2, img, edge)
-            ok, buf = cv2.imencode(
-                ".png", small, [int(cv2.IMWRITE_PNG_COMPRESSION), 9]
-            )
-            if not ok:
-                raise ShopError("enrolment photo failed to encode as PNG")
-            last = buf.tobytes()
-            if len(last) <= self.photo_cap_bytes:
-                return last
-        raise ShopError(
-            f"enrolment photo is {len(last)} bytes even at "
-            f"{ladder[-1]} px long edge, over the {self.photo_cap_bytes} byte "
-            f"cap — refused rather than stored unbounded"
-        )
+        return encode_photo_png(photo, edge_px=self.photo_edge_px,
+                                cap_bytes=self.photo_cap_bytes)
 
     def _write_photo(self, sku: str, data: bytes) -> None:
         p = self.photo_path(sku)
@@ -694,6 +775,7 @@ class ShopStore:
                 "theta": self.theta,
                 "phi": self.phi,
                 "tau_mm": self.tau_mm,
+                "phi_appearance_only": self.phi_appearance_only,
             },
             "dim": self.dim,
             "skus": {rec.sku_id: rec.to_json() for rec in self.all()},
@@ -815,17 +897,47 @@ class ShopStore:
             if not isinstance(rec, dict):
                 raise ShopError(f"{path}: {sku_id!r} is not an object")
             sku = _require_sku_id(sku_id)
+            if "footprint_mm" not in rec:
+                # A MISSING key is not the same claim as an explicit null. The
+                # first is a truncated or foreign file; the second is a product
+                # taught with no mat. Defaulting the first to the second would
+                # quietly DOWNGRADE a mat-measured SKU to the weaker mode — it
+                # would lose its size check and nobody would be told — so it is
+                # refused instead.
+                raise ShopError(
+                    f"{path}: {sku_id!r}: no 'footprint_mm' key. Write null to "
+                    f"mean 'taught from a photo with no mat'; omitting it means "
+                    f"nothing at all."
+                )
             try:
                 name = _require_name(rec.get("name"))
                 # MoneyError, not ShopError: a float on disk is a MONEY bug and
                 # must be diagnosed as one, not blurred into 'bad file'.
                 price = _require_positive_paise(rec.get("price_paise"))
-                fp = _require_mm(rec.get("footprint_mm"))
+                fp = _optional_mm(rec.get("footprint_mm"))
                 rows = _require_vectors(rec.get("vectors"))
             except MoneyError:
                 raise
             except (ShopError, IdentityError) as e:
                 raise ShopError(f"{path}: {sku_id!r}: {e}") from e
+
+            # ``taught_by`` is DERIVED from footprint_mm when we write, so on
+            # read the only thing it can tell us is whether somebody edited one
+            # of the two by hand. A file claiming a product was mat-measured
+            # while carrying no millimetres is a file whose audit trail lies
+            # about how carefully the counter was taught, so it is refused
+            # rather than silently corrected to whichever field we happened to
+            # trust.
+            claimed = rec.get("taught_by")
+            derived = TAUGHT_FROM_PHOTO if fp is None else TAUGHT_ON_MAT
+            if claimed is not None and claimed != derived:
+                raise ShopError(
+                    f"{path}: {sku_id!r}: 'taught_by' says {claimed!r} but "
+                    f"'footprint_mm' is {rec.get('footprint_mm')!r}, which means "
+                    f"{derived!r}. One of the two was hand-edited; a record that "
+                    f"disagrees with itself about whether it was size-checked "
+                    f"cannot be trusted to say so in the UI."
+                )
             block = np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
             block.setflags(write=False)
             photo = rec.get("photo")
@@ -837,6 +949,40 @@ class ShopStore:
                 raise ShopError(f"{path}: {sku_id!r}: 'photo_bytes' must be an "
                                 f"integer")
             out[sku] = SkuRecord(sku, name, price, block, fp, photo, photo_size)
+
+        # The appearance-only gate is checked LAST, because unlike the other
+        # three it is allowed to be absent — and whether that is acceptable
+        # depends on what the file turned out to contain.
+        #
+        # A catalog written before this mode existed has no such key, and it
+        # cannot contain an appearance-only SKU either: a null footprint was
+        # unrepresentable then. So for those files the gate governs nothing that
+        # was ever admitted, and re-admitting them under any value invents no
+        # safety they did not have. That is a real argument, not a convenience,
+        # and it stops holding the moment the file contains a footprint-less
+        # entry — which is exactly the case this refuses.
+        weak = sorted(s for s, r in out.items() if r.is_appearance_only)
+        theirs = gates.get("phi_appearance_only")
+        if theirs is None:
+            if weak:
+                raise ShopError(
+                    f"{path}: contains appearance-only sku(s) {weak} but its "
+                    f"gates block has no 'phi_appearance_only'. Those entries "
+                    f"have no size check, so the bar they are matched at is the "
+                    f"only thing protecting them, and a catalog that does not "
+                    f"record which bar it was admitted under cannot be reopened "
+                    f"under a different one."
+                )
+        elif not isinstance(theirs, (int, float)) or isinstance(theirs, bool):
+            raise ShopError(f"{path}: gate 'phi_appearance_only' is {theirs!r}")
+        elif float(theirs) != float(self.phi_appearance_only):
+            raise ShopError(
+                f"{path}: this catalog was admitted under "
+                f"phi_appearance_only={theirs}, you opened it with "
+                f"{self.phi_appearance_only}. Every entry in it passed a "
+                f"different collision guard, so re-admitting them under a "
+                f"looser one would be inventing safety it never had."
+            )
 
         dims = {r.dim for r in out.values()}
         if len(dims) > 1:
@@ -928,16 +1074,39 @@ def _require_name(name: Any) -> str:
 
 
 def _require_mm(value: Any) -> float:
+    """A real, positive measurement in millimetres, or raise.
+
+    None is refused HERE. Only ``_optional_mm`` lets it through, so every call
+    site has to state in one word whether "no footprint" is a legal answer for
+    it. The two are never the same question.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float, np.floating,
                                                          np.integer)):
         raise ShopError(
             f"footprint_mm must be a measured long edge in mm, got {value!r} — "
-            f"the metric tiebreak runs before appearance and cannot be skipped"
+            f"pass None only to mean 'taught from a photo with no mat in it', "
+            f"never to stand in for a measurement that failed"
         )
     v = float(value)
     if not np.isfinite(v) or v <= 0.0:
         raise ShopError(f"footprint_mm must be a positive real, got {value!r}")
     return v
+
+
+def _optional_mm(value: Any) -> Optional[float]:
+    """``_require_mm``, except that None passes through as None.
+
+    ABSENT AND INVALID ARE DIFFERENT THINGS, and this helper is the only place
+    that distinction is drawn. ``None`` means "this product was taught from an
+    ordinary photo, there is no scale and there never will be one" — a
+    supported, deliberately weaker mode. ``0``, ``-1``, ``NaN``, ``inf``,
+    ``True`` and ``"118"`` are each still refused BY NAME, because every one of
+    those is a bug that would otherwise be laundered into the weak mode and
+    never seen again. A 0 mm packet in particular would not merely be wrong, it
+    would be COMPARED against: the metric tiebreak would gate a real query on a
+    measurement nobody ever took.
+    """
+    return None if value is None else _require_mm(value)
 
 
 def _require_vectors(vectors: Any) -> list[np.ndarray]:
@@ -963,6 +1132,74 @@ def _require_vectors(vectors: Any) -> list[np.ndarray]:
 
 def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical(dict(payload))).hexdigest()
+
+
+def encode_photo_png(photo: Any, *, edge_px: int = PHOTO_EDGE_PX,
+                     cap_bytes: int = PHOTO_CAP_BYTES) -> bytes:
+    """Whatever a caller was handed -> a downscaled, size-capped PNG, or refuse.
+
+    THE ONE PHOTO POLICY IN THIS PROGRAM, and public so it can be the one
+    everywhere. `ShopStore._encode_photo` is this function with the store's own
+    two numbers; `gawaah/shopadmin.py` calls it with SMALLER ones for a picture
+    that has to live inside a JSON file rather than beside it. Both budgets are
+    stated by their caller; neither is invented here.
+
+    Accepts encoded bytes (what a browser upload is) or an ndarray (what the
+    rectified crop is), because both callers exist and forcing one to encode
+    just so we can decode it again is waste.
+
+    THREE THINGS ARE REFUSED RATHER THAN REPAIRED, and each is a place a photo
+    path normally guesses: input past the byte cap (before decode, so a
+    decompression bomb never allocates), an image that is not uint8 (a float
+    image has no agreed range and would be silently clipped), and a picture
+    still over `cap_bytes` at the smallest rung of the ladder.
+    """
+    import cv2  # local: a catalog with no photos should not pay for cv2
+
+    if isinstance(photo, (bytes, bytearray, memoryview)):
+        data = bytes(photo)
+        if len(data) > PHOTO_INPUT_CAP_BYTES:
+            raise ShopError(
+                f"enrolment photo is {len(data)} bytes, over the "
+                f"{PHOTO_INPUT_CAP_BYTES} byte input cap — refused before "
+                f"decode so a decompression bomb never allocates"
+            )
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ShopError("enrolment photo did not decode as an image")
+    elif isinstance(photo, np.ndarray):
+        img = photo
+    else:
+        raise ShopError(
+            f"enrolment photo must be encoded bytes or an ndarray, got "
+            f"{type(photo).__name__}"
+        )
+
+    img = np.asarray(img)
+    if img.dtype != np.uint8:
+        raise ShopError(
+            f"enrolment photo must be uint8, got {img.dtype} — a float image "
+            f"has no agreed range and would be silently clipped"
+        )
+    if img.ndim not in (2, 3) or img.size == 0:
+        raise ShopError(f"enrolment photo has unusable shape {img.shape}")
+
+    ladder = tuple(e for e in PHOTO_EDGE_LADDER if e <= edge_px) or (edge_px,)
+    last = b""
+    for edge in ladder:
+        small = _downscale(cv2, img, edge)
+        ok, buf = cv2.imencode(".png", small,
+                               [int(cv2.IMWRITE_PNG_COMPRESSION), 9])
+        if not ok:
+            raise ShopError("enrolment photo failed to encode as PNG")
+        last = buf.tobytes()
+        if len(last) <= cap_bytes:
+            return last
+    raise ShopError(
+        f"enrolment photo is {len(last)} bytes even at "
+        f"{ladder[-1]} px long edge, over the {cap_bytes} byte "
+        f"cap — refused rather than stored unbounded"
+    )
 
 
 def _downscale(cv2: Any, img: np.ndarray, edge: int) -> np.ndarray:
@@ -1016,5 +1253,8 @@ __all__ = [
     "ShopStore",
     "SIDECAR_NAME",
     "SkuRecord",
+    "TAUGHT_BY",
+    "TAUGHT_FROM_PHOTO",
+    "TAUGHT_ON_MAT",
     "price_from_rupees",
 ]
