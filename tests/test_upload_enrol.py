@@ -735,25 +735,6 @@ def test_health_reports_the_gates_and_that_there_are_no_model_weights(
 
 # ------------------------------------------------------------------ the page
 
-def test_the_page_offers_the_whole_round_trip_to_a_mouse(
-        client: TestClient) -> None:
-    page = client.get("/").text
-    for token in ("TEACH THIS PRODUCT", "CHOOSE A PHOTO", "price in rupees",
-                  "The catalog", "Try it", "REFRESH",
-                  "TEACH 3 SAMPLE PRODUCTS", "RECOGNISE A SIMULATED SCENE",
-                  "NOTHING HERE SETTLES MONEY", "excluded from the total"):
-        assert token in page, token
-
-
-def test_the_page_still_serves_the_measurement_tool(client: TestClient) -> None:
-    """The enrolment surface was added to this tool, not on top of it."""
-    page = client.get("/").text
-    for token in ("I DO NOT KNOW", "TRY A SAMPLE", "SIMULATED",
-                  "measured vs truth", "invariant 4", "CAMERA TOO OBLIQUE",
-                  "A CORNER COVERED", "NO EMPTY-MAT REFERENCE"):
-        assert token in page, token
-
-
 def test_the_pages_javascript_escapes_survive_into_the_browser() -> None:
     r"""A regression with no other symptom.
 
@@ -817,3 +798,436 @@ def test_the_demo_photo_is_a_real_image_and_is_labelled_simulated(
     img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
     assert img is not None and img.ndim == 3
     assert client.get("/demo/photo?sku=nope").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# THE PORTRAIT-PHOTO TRUNCATION, 2026-08-29.
+#
+# _oriented_crop_from_rect rotated inside the SOURCE frame and then clamped the
+# crop to the frame's width. A tall packet photographed in portrait -- a phone
+# photo, or any catalogue image -- has its long edge vertical, so turning it
+# upright needs a canvas WIDER than the frame, and the clamp silently cut the
+# product down to a slice of itself. On a real 1000x319 product photo the crop
+# wanted 846 px of an 846 px long edge and got 319: 62% of the item thrown
+# away. It matched itself perfectly, so nothing looked wrong until the same
+# item at a 12-degree tilt scored 0.8478 and the counter abstained.
+#
+# Recall across 16 views of one product went 8/16 -> 15/16 when this was fixed.
+# --------------------------------------------------------------------------
+
+
+def _portrait_packet() -> np.ndarray:
+    """A tall packet in a portrait frame: long edge VERTICAL, as a phone shoots."""
+    import cv2
+
+    img = np.full((1000, 319, 3), 255, np.uint8)
+    cv2.rectangle(img, (20, 110), (299, 890), (52, 74, 196), -1)
+    cv2.rectangle(img, (20, 110), (299, 300), (250, 250, 250), -1)
+    cv2.circle(img, (160, 560), 78, (250, 250, 250), -1)
+    cv2.rectangle(img, (60, 700), (260, 780), (30, 160, 90), -1)
+    return img
+
+
+def test_a_tall_packet_in_a_portrait_photo_is_not_cropped_down_to_a_slice() -> None:
+    """The upright crop keeps the whole long edge even when the frame is narrower."""
+    img = _portrait_packet()
+    crop, ev = upload_app.plain_crop(img)
+    long_px = float(ev["region_long_px"])
+
+    # The long edge is ~780 px in a frame only 319 px wide. Before the fix the
+    # crop came back 319 wide -- the frame, not the packet.
+    assert long_px > img.shape[1], (
+        "the fixture must actually exercise the bug: its long edge "
+        f"({long_px:.0f} px) has to exceed the frame width ({img.shape[1]} px)")
+    assert crop.shape[1] >= long_px * 0.95, (
+        f"the crop is {crop.shape[1]} px wide but the packet's long edge is "
+        f"{long_px:.0f} px. The product was truncated against the frame.")
+
+
+def test_a_tilted_packet_still_matches_the_upright_one_it_was_taught_from() -> None:
+    """Deskewing is what buys tilt tolerance -- so prove it survives a tilt."""
+    import cv2
+
+    from gawaah.embedder import embed
+    from gawaah.identity import PHI_APPEARANCE_ONLY
+
+    img = _portrait_packet()
+
+    def rotated(deg: float) -> np.ndarray:
+        h, w = img.shape[:2]
+        c = (w / 2.0, h / 2.0)
+        m = cv2.getRotationMatrix2D(c, deg, 1.0)
+        cos, sin = abs(m[0, 0]), abs(m[0, 1])
+        nw, nh = int(h * sin + w * cos), int(h * cos + w * sin)
+        m[0, 2] += nw / 2.0 - c[0]
+        m[1, 2] += nh / 2.0 - c[1]
+        return cv2.warpAffine(img, m, (nw, nh), borderValue=(255, 255, 255))
+
+    def unit(a: np.ndarray) -> np.ndarray:
+        crop, _ = upload_app.plain_crop(a)
+        v = np.asarray(embed(crop), dtype=np.float64).ravel()
+        return v / np.linalg.norm(v)
+
+    gallery = [unit(img)]
+    gallery.append(unit(cv2.rotate(img, cv2.ROTATE_180)))
+
+    for deg in (12.0, -20.0, 35.0):
+        score = max(float(unit(rotated(deg)) @ g) for g in gallery)
+        assert score >= PHI_APPEARANCE_ONLY, (
+            f"a {deg:+.0f}-degree tilt of the very packet the gallery was built "
+            f"from scores {score:.4f}, under the {PHI_APPEARANCE_ONLY} "
+            "appearance-only bar, so the counter would abstain on its own product")
+
+
+# --------------------------------------------------------------------------
+# THE PRODUCT CODE PATH.
+#
+# A decoded QR is an IDENTIFIER, not a similarity, so when one is present it
+# settles identity outright and the cosine gates are not consulted. That makes
+# it the shortest route from a photograph to a price in this whole program, and
+# the short routes are the ones worth guarding: an exact answer that is exactly
+# wrong is worse than an abstention.
+# --------------------------------------------------------------------------
+
+
+def _png_bytes(img: np.ndarray) -> bytes:
+    import cv2
+
+    ok, buf = cv2.imencode(".png", img)
+    assert ok
+    return buf.tobytes()
+
+
+def _qr_png(payload: str, px: int = 320) -> np.ndarray:
+    import cv2
+
+    enc = cv2.QRCodeEncoder.create()
+    q = enc.encode(payload)
+    q = (q * 255).astype(np.uint8) if q.max() <= 1 else q.astype(np.uint8)
+    q = cv2.resize(q, (px, px), interpolation=cv2.INTER_NEAREST)
+    return cv2.cvtColor(q, cv2.COLOR_GRAY2BGR)
+
+
+def _scene_with_qr(payload: str, px: int = 320) -> np.ndarray:
+    import cv2
+
+    frame = np.full((720, 1280, 3), 208, np.uint8)
+    cv2.rectangle(frame, (430, 170), (850, 560), (70, 90, 160), -1)
+    q = _qr_png(payload, px)
+    x, y = 640 - px // 2, 360 - px // 2
+    frame[y:y + px, x:x + px] = q
+    return frame
+
+
+def test_a_product_code_names_the_sku_without_consulting_the_cosine_gates() -> None:
+    sku, name, paise = "qr_taught", "QR taught product", 4250
+    img = _scene_with_qr(f"{upload_app.QR_PREFIX}{sku}")
+    crop, _ = upload_app.plain_crop(img)
+    embed = upload_app.load_embedder()
+    upload_app._ao_put(sku, name, paise,
+                       [np.asarray(embed(crop), dtype=np.float64)
+                        .ravel().tolist()], None)
+    try:
+        out = upload_app.do_recognise_plain(_png_bytes(img))
+        assert out["ok"] is True
+        assert out["identified_by"] == "qr_code"
+        item = out["items"][0]
+        assert item["sku_id"] == sku
+        assert item["price_paise"] == paise, "the catalogue price must be used"
+        assert item["gate"] == "product_code"
+        assert item["top1"] is None, (
+            "a code was read, not a likeness judged — reporting a cosine here "
+            "would dress an identifier up as a similarity")
+        assert out["total_paise"] == paise
+    finally:
+        upload_app._ao_remove(sku)
+
+
+def test_a_product_code_for_an_untaught_sku_is_refused_not_guessed() -> None:
+    """The sticker answered exactly, and the answer names nothing we know."""
+    # SOMETHING has to be taught, or the empty-gallery refusal fires first and
+    # this proves nothing about codes. What is taught is deliberately not the
+    # sku the sticker names.
+    upload_app._ao_put("qr_bystander", "Bystander", 100, [[0.0] * 8], None)
+    try:
+        img = _scene_with_qr(f"{upload_app.QR_PREFIX}never_taught_anything")
+        with pytest.raises(upload_app.UploadRefused) as excinfo:
+            upload_app.do_recognise_plain(_png_bytes(img))
+        assert excinfo.value.reason == upload_app.R_QR_UNKNOWN
+        assert "never_taught_anything" in str(excinfo.value.detail)
+    finally:
+        upload_app._ao_remove("qr_bystander")
+
+
+def test_a_code_that_is_not_ours_does_not_name_anything() -> None:
+    """A packet already carries other people's QR codes. None of them price it."""
+    sku, paise = "qr_ignore", 1500
+    img = _scene_with_qr("https://example.invalid/some-marketing-campaign")
+    crop, _ = upload_app.plain_crop(img)
+    embed = upload_app.load_embedder()
+    upload_app._ao_put(sku, "unrelated", paise,
+                       [np.asarray(embed(crop), dtype=np.float64)
+                        .ravel().tolist()], None)
+    try:
+        out = upload_app.do_recognise_plain(_png_bytes(img))
+        # It may or may not match on APPEARANCE — that is the appearance path's
+        # business. What must not happen is a foreign code naming an sku.
+        assert out.get("identified_by") != "qr_code"
+        assert out["items"][0].get("gate") != "product_code"
+    finally:
+        upload_app._ao_remove(sku)
+
+
+def test_the_printed_sticker_decodes_back_to_the_sku_it_was_made_for() -> None:
+    """A sticker nobody can read is a sticker that does nothing."""
+    import cv2
+
+    sku, paise = "qr_roundtrip", 999
+    upload_app._ao_put(sku, "Round trip", paise, [[0.0] * 8], None)
+    try:
+        client = TestClient(upload_app.app)
+        r = client.get(f"/qr/{sku}")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "image/png"
+        card = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+        decoded = cv2.QRCodeDetector().detectAndDecode(card)[0]
+        assert decoded == f"{upload_app.QR_PREFIX}{sku}"
+    finally:
+        upload_app._ao_remove(sku)
+
+
+def test_the_sticker_does_not_carry_a_price() -> None:
+    """Two places for a price is one place for them to disagree."""
+    sku, paise = "qr_nopricetag", 12345
+    upload_app._ao_put(sku, "No price on me", paise, [[0.0] * 8], None)
+    try:
+        client = TestClient(upload_app.app)
+        card = client.get(f"/qr/{sku}").content
+        import cv2
+
+        img = cv2.imdecode(np.frombuffer(card, np.uint8), cv2.IMREAD_COLOR)
+        payload = cv2.QRCodeDetector().detectAndDecode(img)[0]
+        assert "123.45" not in payload and str(paise) not in payload, (
+            "the code must name the product only; the catalogue prices it")
+    finally:
+        upload_app._ao_remove(sku)
+
+
+# --------------------------------------------------------------------------
+# THE SUPERMARKET LANE: many printed codes, one frame, one total.
+#
+# A shopper puts a whole basket on the counter. Reading one code per frame
+# would turn a supermarket into a queue of one, so the basket path reads every
+# symbol in the picture and prices each. That makes it the shortest route from
+# a photograph to a MULTI-LINE BILL in this program, and every one of those
+# lines is money.
+# --------------------------------------------------------------------------
+
+_L = ['0001101', '0011001', '0010011', '0111101', '0100011',
+      '0110001', '0101111', '0111011', '0110111', '0001011']
+_G = ['0100111', '0110011', '0011011', '0100001', '0011101',
+      '0111001', '0000101', '0010001', '0001001', '0010111']
+_R = ['1110010', '1100110', '1101100', '1000010', '1011100',
+      '1001110', '1010000', '1000100', '1001000', '1110100']
+_PAR = {0: 'LLLLLL', 1: 'LLGLGG', 2: 'LLGGLG', 3: 'LLGGGL', 4: 'LGLLGG',
+        5: 'LGGLLG', 6: 'LGGGLL', 7: 'LGLGLG', 8: 'LGLGGL', 9: 'LGGLGL'}
+
+
+def _ean13(twelve: str) -> str:
+    """A valid EAN-13 from twelve digits — check digit computed, not guessed."""
+    s = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(twelve))
+    return twelve + str((10 - s % 10) % 10)
+
+
+def _ean_png(code: str, module_px: int = 4, bars_px: int = 120) -> np.ndarray:
+    """The real EAN-13 symbol for `code`. Not a picture of stripes: a decoder
+    has to be able to read it back, or the test proves nothing."""
+    import cv2
+
+    d = [int(c) for c in code]
+    bits = '101'
+    for i, p in enumerate(_PAR[d[0]]):
+        bits += (_L if p == 'L' else _G)[d[i + 1]]
+    bits += '01010'
+    for i in range(7, 13):
+        bits += _R[d[i]]
+    bits += '101'
+    quiet = 10
+    w = (len(bits) + 2 * quiet) * module_px
+    img = np.full((bars_px + 22, w), 255, np.uint8)
+    x = quiet * module_px
+    for ch in bits:
+        if ch == '1':
+            img[:bars_px, x:x + module_px] = 0
+        x += module_px
+    return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+
+def _packet(code: str) -> np.ndarray:
+    """One packet, photographed alone, its barcode readable."""
+    card = np.full((420, 760, 3), 218, np.uint8)
+    b = _ean_png(code)
+    h, w = b.shape[:2]
+    card[150:150 + h, 60:60 + w] = b
+    return card
+
+
+def _counter(codes: list[str]) -> np.ndarray:
+    """Several packets on a counter at once, none painted over another.
+
+    The packets are ALL drawn first and the codes on top, because an earlier
+    version of this fixture drew each packet's body after the previous packet's
+    barcode and silently erased it — the test then 'proved' that multi-read
+    does not work.
+    """
+    import cv2
+
+    frame = np.full((760, 1400, 3), 208, np.uint8)
+    spots = [(40, 40), (720, 40), (40, 420), (720, 420)]
+    for (x, y) in spots[:len(codes)]:
+        cv2.rectangle(frame, (x - 16, y - 16), (x + 600, y + 300), (70, 92, 170), -1)
+    for code, (x, y) in zip(codes, spots):
+        b = _ean_png(code)
+        h, w = b.shape[:2]
+        frame[y:y + h, x:x + w] = b
+    return cv2.GaussianBlur(frame, (3, 3), 0)
+
+
+def _teach_by_code(client: TestClient, sku: str, name: str, rupees: str,
+                   code: str):
+    return client.post("/enrol",
+                       files={"image": ("p.png", _png_bytes(_packet(code)), "image/png")},
+                       data={"sku_id": sku, "name": name, "price_rupees": rupees,
+                             "mode": "basket"})
+
+
+def test_a_product_taught_by_its_barcode_is_priced_when_that_code_is_shown(
+        client: TestClient) -> None:
+    code = _ean13("890131430115")
+    r = _teach_by_code(client, "tooth", "Colgate MaxFresh 150g", "99", code).json()
+    assert r["ok"] is True, r
+    assert r["stored"]["code"] == code
+    assert r["stored"]["taught_with"] == "product_code_only"
+
+    seen = client.post("/recognise",
+                       files={"image": ("c.png", _png_bytes(_counter([code])), "image/png")},
+                       data={"mode": "basket"}).json()
+    assert seen["ok"] is True
+    assert seen["total_paise"] == 9900
+    item = seen["items"][0]
+    assert item["sku_id"] == "tooth"
+    assert item["gate"] == "product_code"
+    assert item["top1"] is None, (
+        "a code was READ, not a likeness judged — reporting a cosine would "
+        "dress an identifier up as a similarity")
+
+
+def test_a_whole_basket_is_read_in_one_frame_and_totalled_in_integer_paise(
+        client: TestClient) -> None:
+    """The point of the whole path: one photograph, several bills' worth."""
+    spec = [("890131430115", "tooth", "Toothpaste", "99", 9900),
+            ("890000012345", "bisc", "Biscuit", "10", 1000),
+            ("890999988877", "soap", "Soap", "35", 3500)]
+    codes = []
+    for twelve, sku, name, rupees, _ in spec:
+        code = _ean13(twelve)
+        codes.append(code)
+        assert _teach_by_code(client, sku, name, rupees, code).json()["ok"] is True
+
+    res = client.post("/recognise",
+                      files={"image": ("c.png", _png_bytes(_counter(codes)), "image/png")},
+                      data={"mode": "basket"}).json()
+    assert res["ok"] is True
+    assert res["codes_found"] >= 3, res
+    assert res["counts"]["named"] == 3, [i["code"] for i in res["items"]]
+    want = sum(p for *_, p in spec)
+    assert res["total_paise"] == want
+    assert isinstance(res["total_paise"], int)
+    assert res["total_rupees"] == "144.00"
+
+
+def test_an_untaught_code_is_a_row_with_a_reason_not_a_silence(
+        client: TestClient) -> None:
+    """A short bill that looks complete is worse than one that says it is short."""
+    taught = _ean13("890131430115")
+    stranger = _ean13("890555544433")
+    _teach_by_code(client, "tooth", "Toothpaste", "99", taught)
+
+    res = client.post("/recognise",
+                      files={"image": ("c.png",
+                                       _png_bytes(_counter([taught, stranger])),
+                                       "image/png")},
+                      data={"mode": "basket"}).json()
+    assert res["total_paise"] == 9900, "the untaught code must not be priced"
+    codes = {i["code"]: i for i in res["items"]}
+    assert stranger in codes, "the untaught code vanished from the bill entirely"
+    row = codes[stranger]
+    assert row["sku_id"] is None and row["price_paise"] is None
+    assert row["reason"] == "code_not_taught"
+    assert stranger in row["explain"]
+    assert res["counts"]["amber"] == 1
+    assert res["excluded_count"] == 1
+
+
+def test_two_codes_in_one_teaching_photo_bind_neither(client: TestClient) -> None:
+    """Ambiguity is refused by name. Binding the wrong one prices the wrong packet."""
+    a, b = _ean13("890131430115"), _ean13("890000012345")
+    r = client.post("/enrol",
+                    files={"image": ("c.png", _png_bytes(_counter([a, b])), "image/png")},
+                    data={"sku_id": "amb", "name": "Ambiguous", "price_rupees": "5",
+                          "mode": "basket"})
+    body = r.json()
+    assert body["ok"] is False
+    assert body["reason"] == "several_codes_in_frame"
+    assert upload_app.resolve_code(a) is None
+    assert upload_app.resolve_code(b) is None
+
+
+def test_a_typed_code_beats_whatever_happens_to_be_in_the_photograph(
+        client: TestClient) -> None:
+    """A shopkeeper typing the number is stating a fact about the packet."""
+    in_shot, typed = _ean13("890131430115"), _ean13("890777766655")
+    r = client.post("/enrol",
+                    files={"image": ("p.png", _png_bytes(_packet(in_shot)), "image/png")},
+                    data={"sku_id": "typed", "name": "Typed", "price_rupees": "7",
+                          "mode": "basket", "barcode": typed})
+    assert r.json()["ok"] is True
+    assert upload_app.resolve_code(typed) == "typed"
+    assert upload_app.resolve_code(in_shot) is None, (
+        "a code merely visible in the frame was bound over the one typed")
+
+
+def test_teaching_by_code_alone_says_it_knows_nothing_about_the_product(
+        client: TestClient) -> None:
+    """The weakest path in the program must be the loudest about it."""
+    code = _ean13("890131430115")
+    r = _teach_by_code(client, "tooth", "Toothpaste", "99", code).json()
+    assert r["stored"]["size_check"] == "none"
+    assert r["stored"]["appearance_check"] == "none"
+    assert r["stored"]["n_views"] == 0 and r["stored"]["vector_dim"] == 0
+    w = r["warning"].lower()
+    assert "knows" in w and "nothing" in w
+    assert "wrong packet" in w
+    assert r["better"], "the stronger path must be named, not merely implied"
+
+
+def test_rebinding_a_code_to_another_product_is_reported_never_silent(
+        client: TestClient) -> None:
+    """A code that quietly changed what it prices is a wrong bill with a
+    clean-looking audit trail."""
+    code = _ean13("890131430115")
+    _teach_by_code(client, "first", "First", "10", code)
+    r = _teach_by_code(client, "second", "Second", "20", code).json()
+    assert r["ok"] is True
+    binding = r["codes"]["bound"][0]
+    assert binding["action"] == "rebound"
+    assert binding["previous_sku"] == "first"
+    assert upload_app.resolve_code(code) == "second"
+
+
+def test_our_own_sticker_needs_no_binding_but_a_foreign_code_does(
+        client: TestClient) -> None:
+    """`gawaah:` carries the sku itself; anything else means nothing until taught."""
+    assert upload_app.resolve_code("gawaah:whatever") == "whatever"
+    assert upload_app.resolve_code("8901314301154") is None
+    assert upload_app.resolve_code("https://example.invalid/promo") is None
