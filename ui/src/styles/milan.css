@@ -1,0 +1,207 @@
+/* ===========================================================================
+   GAWAAH — MILAN, the settlement match on the day-close screen.
+   ---------------------------------------------------------------------------
+   Imported by routes/DayClose.tsx for the MATCH section. Every class is
+   prefixed `mi-` so nothing else can come to depend on a rule written for it.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css.
+
+   COLOUR DISCIPLINE. Green is money a signature-verified webhook stands
+   behind, and here it appears on exactly one thing: the WEBHOOK pill on a
+   matched row. A row settled through the kernel's reconcile path is
+   RECONCILED in neutral ink — real money, but not a webhook's word. Amber is
+   an abstention: a mismatch parked for a person, a settled bill the report
+   should carry and does not. Red is a refusal and nothing else. The found
+   money is neutral: it is a fact from the gateway's own report, not a
+   verdict, and the button that acts on it is blue, the action colour.
+   =========================================================================== */
+
+.mi-head {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+}
+.mi-head .mi-day {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-left: auto;
+}
+.mi-day label {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.mi-day input[type='date'] {
+  font: 600 var(--t-small)/1 var(--font);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 8px var(--s3);
+  min-height: 34px;
+}
+.mi-day input[type='date']:focus-visible {
+  outline: none; border-color: var(--blue-500); box-shadow: var(--ring);
+}
+@media (max-width: 560px) {
+  .mi-head .mi-day { margin-left: 0; width: 100%; flex-wrap: wrap; }
+}
+
+/* The T+1 sentence, always visible: a judge who reads "yesterday" has to be
+   told why today is not on offer. */
+.mi-cycle {
+  font-size: var(--t-small); color: var(--ink-2); line-height: 1.6;
+  margin: var(--s3) 0 var(--s4);
+}
+.mi-cycle b { color: var(--ink); }
+
+/* ---------------------------------------------------------- the figures -- */
+
+.mi-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+@media (max-width: 1000px) { .mi-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px)  { .mi-stats { grid-template-columns: 1fr; } }
+
+.mi-stat {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.mi-stat .lbl {
+  font: 600 11px/1.2 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.mi-stat .val {
+  font: 700 clamp(19px, 2vw, 24px)/1.1 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.mi-stat .sub { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+/* The net figure is the sentence a judge hears; it is bigger, not greener. */
+.mi-stat.net { border-color: var(--blue-200); background: var(--blue-050); }
+.mi-stat.net .val { font-size: clamp(22px, 2.4vw, 30px); }
+
+/* The value line: one sentence, quoted as the server said it. */
+.mi-value {
+  font: 600 var(--t-body)/1.6 var(--font);
+  color: var(--ink);
+  padding: var(--s3) var(--s4);
+  border-left: 3px solid var(--blue-500);
+  background: var(--surface-2);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  margin-bottom: var(--s4);
+}
+
+/* -------------------------------------------------------------- the table -- */
+
+.mi-block {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.mi-block-head {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+.mi-block-head h3 {
+  margin: 0;
+  font: 700 var(--t-h3)/1.3 var(--font);
+  color: var(--navy-900);
+}
+.mi-block-head .mi-code {
+  font: 600 var(--t-micro)/1 var(--font-mono, ui-monospace, monospace);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+  background: var(--surface-3);
+  padding: 4px 8px;
+  border-radius: var(--r-full);
+}
+.mi-block-head .mi-n { font-size: var(--t-small); color: var(--ink-2); }
+.mi-block-head .mi-n b { font-variant-numeric: tabular-nums; }
+.mi-why { font-size: var(--t-small); color: var(--ink-2); line-height: 1.6; margin: 0 0 var(--s3); }
+
+.mi-rows {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.mi-row, .mi-rows-head {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1.6fr) minmax(7rem, 1.2fr) repeat(3, minmax(5rem, 1fr)) auto;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  align-items: center;
+}
+.mi-rows-head {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.mi-row { border-bottom: 1px dashed var(--line); font-size: var(--t-small); }
+.mi-row:last-child { border-bottom: 0; }
+.mi-row .id {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.mi-row .id .mono, .mi-row .mono {
+  font: 500 12px/1.4 var(--font-mono, ui-monospace, monospace);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.mi-row .id .t { font-size: 12px; color: var(--ink-3); }
+.mi-row .amt { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+.mi-row .amt.quiet { color: var(--ink-4); font-weight: 500; }
+.mi-rows-head span.r { text-align: right; }
+.mi-row .act { display: flex; justify-content: flex-end; }
+
+/* Settled BY WHOM. Only the webhook earns the colour. */
+.mi-by {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 700 10px/1 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: var(--r-full);
+  border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface);
+  white-space: nowrap;
+}
+.mi-by.webhook { color: var(--green); border-color: var(--green-line); background: var(--green-bg); }
+.mi-by.human { color: var(--amber); border-color: var(--amber-line); background: var(--amber-bg); }
+
+/* A settled row this section just produced: said in words, not painted. */
+.mi-settled-note {
+  margin-top: var(--s3);
+  font-size: var(--t-small); color: var(--ink-2); line-height: 1.6;
+}
+.mi-settled-note .mono {
+  font: 500 12px/1.4 var(--font-mono, ui-monospace, monospace);
+}
+
+/* An empty class is still drawn, so the list of what was checked is the
+   list of what could be wrong. */
+.mi-none {
+  font-size: var(--t-small); color: var(--ink-4);
+  padding: var(--s2) 0;
+}
+
+.mi-foot {
+  margin-top: var(--s4);
+  display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center;
+  font-size: 12px; color: var(--ink-3);
+}
+.mi-foot .pill { text-transform: uppercase; letter-spacing: .06em; }
+
+@media (max-width: 720px) {
+  .mi-rows-head { display: none; }
+  .mi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 6px;
+  }
+  .mi-row .id { grid-column: 1 / -1; }
+  .mi-row .act { grid-column: 1 / -1; justify-content: flex-start; }
+}
