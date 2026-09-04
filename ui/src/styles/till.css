@@ -1,0 +1,941 @@
+/* ===========================================================================
+   GAWAAH — the Till, dressed for the counter it actually runs on.
+   ---------------------------------------------------------------------------
+   Scope discipline: everything in this file hangs off `.till`, or off a
+   `till-*` class the route itself renders. VoiceBar reuses `.bill-line` and
+   `.readout` for its own proposals, so the receipt styling below binds to
+   `.till-receipt` / `.till-readout` — never to the bare shared class — or the
+   voice card would silently inherit a look designed for a different job.
+
+   Colour discipline is the house rule restated: blue is the machine's own
+   mark and the action colour; green/amber/red appear ONLY where money or
+   recognition state is being asserted. Every colour here is a token or a
+   `--till-*` derivation of one.
+   =========================================================================== */
+
+.till {
+  /* Derived locals. The alpha ramps are the only thing tokens.css does not
+     carry: a camera stage needs translucent layers of the same navy and blue
+     the rest of the product uses opaquely. */
+  --till-navy-rgb: 2, 4, 43;        /* --navy-900 */
+  --till-blue-rgb: 51, 149, 255;    /* --blue-500 */
+  --till-scrim: rgba(var(--till-navy-rgb), .28);
+  --till-bar-ink: #a9bde3;          /* --on-dark-2 nudged toward blue for the instrument bar */
+  --till-scan-faint: rgba(var(--till-blue-rgb), .10);
+  --till-scan-soft:  rgba(var(--till-blue-rgb), .30);
+  --till-scan-edge:  rgba(160, 210, 255, .70);
+}
+
+/* ------------------------------------------------------------ the stage --
+   The camera is the hero. The card that holds it gets real elevation, and the
+   stage inside is a dark instrument: vignette backdrop, viewfinder corners,
+   and — while the loop is looking — a slow scan sweep plus a breathing inner
+   ring, so "it is LOOKING" is legible from across a room without a word. */
+
+.till .till-stage-card {
+  overflow: hidden;                  /* the stage bleeds to the card edge */
+  box-shadow: var(--shadow-2);
+}
+
+/* SPECIFICITY NOTE, learned by screenshot: main.tsx imports App BEFORE
+   app.css, so this component-level stylesheet lands FIRST in the built bundle
+   and loses every equal-specificity tie against app.css. Every selector here
+   that shares a property with an app.css rule of the same weight is therefore
+   prefixed with `.till` — the recognised names once rendered navy-on-navy
+   because `.readout .names` (later in the bundle) tied and won. */
+.till .till-stage {
+  /* Radius matches the card's clip so the inner ring and the video corners
+     agree with the border the card actually draws. */
+  border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
+  /* A vignette rather than flat navy: when the camera is off this is the
+     backdrop of the gate copy, and flat #02042B reads as a dead <div>. */
+  background:
+    radial-gradient(120% 90% at 50% 0%, #0a1b3f 0%, var(--navy-900) 62%);
+}
+
+/* Viewfinder corner brackets — the machine saying "this is what I see".
+   TOP corners only: the instrument bar owns the bottom edge, and a bracket
+   poking through its translucent gradient read as a paint glitch. */
+.till-viewfinder {
+  position: absolute; inset: 10px;
+  pointer-events: none;
+  border-radius: var(--r-sm);
+  opacity: .55;
+  --leg-h: linear-gradient(#fff, #fff);
+  background-image:
+    var(--leg-h), var(--leg-h), var(--leg-h), var(--leg-h);
+  background-repeat: no-repeat;
+  background-size: 20px 2px, 2px 20px, 20px 2px, 2px 20px;
+  background-position:
+    left top,  left top,
+    right top, right top;
+}
+
+/* The sweep. The child spans the stage; its ::before is the same height and
+   starts fully above, so translateY in percentages of ITS OWN size (the only
+   thing translateY percentages can mean) still traverses exactly one stage
+   height and exits — no JS measuring, any aspect ratio. The gradient tail
+   lives in the bottom third, so the visible pass takes roughly the first half
+   of each cycle and the rest is a quiet gap, which is what keeps this an
+   instrument and not a screensaver. */
+.till-sweep {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+/* PAINT BUDGET: this runs eight hours over live video, on whatever laptop the
+   shop owns. Only `transform` and `opacity` are ever animated in this file —
+   both composite without repainting the video underneath. An earlier draft
+   used mix-blend-mode and an animated box-shadow, and headless Chromium's
+   software rasteriser dropped the scan loop from ~4 looks/s to ~0.5. */
+.till-sweep::before {
+  content: '';
+  position: absolute; left: 0; right: 0; top: -100%; height: 100%;
+  will-change: transform;
+  background: linear-gradient(
+    to bottom,
+    transparent 78%,
+    var(--till-scan-faint) 92%,
+    var(--till-scan-soft) 98%,
+    var(--till-scan-edge) 99.5%,
+    rgba(255, 255, 255, .75) 100%
+  );
+  animation: till-sweep 3.4s ease-in-out infinite;
+}
+@keyframes till-sweep { to { transform: translateY(200%); } }
+
+/* The breathing ring: inset, because the card clips anything outside the
+   stage, and an inner ring reads as the lens being live rather than the page
+   being decorated. Sits under the stage-bar (z 3) on purpose. The shadow is
+   static; only opacity breathes — see the paint-budget note above. */
+.till-stage.looking::after {
+  content: '';
+  position: absolute; inset: 0; z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  will-change: opacity;
+  box-shadow: inset 0 0 0 1px rgba(var(--till-blue-rgb), .60),
+              inset 0 0 42px rgba(var(--till-blue-rgb), .16);
+  animation: till-breathe 2.8s ease-in-out infinite;
+}
+@keyframes till-breathe {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
+
+/* A frozen sweep line under reduced motion is not "less motion", it is a
+   mysterious blue stripe. Remove the element; the ring keeps its resting
+   frame, which the tokens.css global rule has already made static. */
+@media (prefers-reduced-motion: reduce) {
+  .till-sweep { display: none; }
+}
+
+/* The operator's rectangle. Colour moved out of the TSX so it obeys tokens. */
+.till-roi {
+  position: absolute;
+  pointer-events: none;
+  border: 2px dashed var(--blue-500);
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px var(--till-scrim);
+  transition: all 160ms var(--ease);
+}
+.till-roi.drag { border-style: solid; }
+/* Covering the whole frame, nothing is being excluded — so no scrim, and the
+   border fades to a whisper rather than shouting about a non-choice. */
+.till-roi.whole { border-color: rgba(var(--till-blue-rgb), .35); box-shadow: none; }
+
+/* ------------------------------------------------- the instrument bar --
+   The strip over the bottom of the stage. Same facts as before — pixels
+   uploaded, server time, attempts, crop state — set like cockpit figures
+   instead of a debug printf. */
+.till-stage .stage-bar {
+  padding: 26px 14px 10px;
+  background: linear-gradient(to top,
+    rgba(var(--till-navy-rgb), .92) 0%,
+    rgba(var(--till-navy-rgb), .55) 60%,
+    rgba(var(--till-navy-rgb), 0) 100%);
+  column-gap: var(--s4);
+}
+.till-stage .stage-bar .sb-item {
+  color: var(--till-bar-ink);
+  letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+/* WHOLE FRAME / CROPPED is the one word on the bar that changes what is
+   uploaded, so it is the one word set in the action colour. */
+.till-stage .stage-bar .sb-frame {
+  color: var(--blue-400);
+  font-weight: 700;
+  letter-spacing: .14em;
+}
+
+/* The camera-off gate: same copy, better room. On a phone the 16/10 stage is
+   ~220px tall and the gate copy is taller than that — `overflow: hidden` was
+   swallowing the START CAMERA button whole. While the gate is up the stage
+   sizes to its content instead (min-height: max-content is a no-op in the
+   block axis in Chrome — measured, the stage stayed 222px over a 318px gate),
+   with a viewport-scaled floor so a laptop still gets a cinematic expanse. */
+.till .till-stage:has(.camgate) {
+  aspect-ratio: auto;
+  min-height: clamp(280px, 30vw, 448px);
+}
+.till-stage .camgate { padding: var(--s7) var(--s6); }
+@media (max-width: 560px) {
+  .till-stage .camgate { padding: var(--s6) var(--s4); }
+}
+.till-stage .camgate .till-lens {
+  display: block; margin: 0 auto var(--s4);
+  color: var(--blue-400); opacity: .9;
+}
+.till-stage .camgate .btn.primary { min-height: 44px; padding-inline: var(--s7); }
+
+/* --------------------------------------------------------- the readout --
+   What the counter concluded from the last frame, on the same dark metal as
+   the stage above it, so stage and verdict read as one instrument. The pills
+   keep their own light chips — legible on navy without new colour rules. */
+.till .till-readout {
+  background: var(--navy-900);
+  border-radius: var(--r-md);
+  padding: 9px 14px;
+  min-height: 46px;
+  margin-bottom: var(--s4);
+}
+.till .till-readout .muted { color: var(--on-dark-3); }
+.till .till-readout .names {
+  color: var(--on-dark);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ---------------------------------------------------------- the receipt --
+   The bill reads like the paper it replaces: dashed rules between lines,
+   tabular numerals down the column, a double rule over the total. The
+   quantity controls keep their app.css behaviour (hidden until hover,
+   always focusable) — nothing here touches opacity or reachability. */
+
+.till-receipt .bill-line {
+  padding: 11px 2px;
+  border-bottom: 1px dashed var(--line-2);
+  /* THE LANDING. One-shot on insert: a short slide+fade so a product
+     appearing on the bill is visible from across the room, then a blue wash
+     that decays — blue because this is the machine's mark, and green on this
+     product means settled money and nothing else. */
+  animation: till-land var(--med) var(--ease) both,
+             till-wash 1.1s var(--ease);
+}
+@keyframes till-land {
+  from { opacity: 0; transform: translateX(-14px); }
+}
+@keyframes till-wash {
+  0%   { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+  100% { background: transparent;     box-shadow: inset 3px 0 0 transparent; }
+}
+.till-receipt .bill-line .nm { letter-spacing: -.005em; }
+.till-receipt .bill-line .amt { font-variant-numeric: tabular-nums; }
+
+/* A line under offer: the shelf-edge price struck through beside what is
+   actually charged, because a cheaper line the shopkeeper cannot explain is
+   worse than no offer at all. */
+.till-receipt .amt .was {
+  color: var(--ink-4);
+  font-weight: 400;
+  font-size: var(--t-small);
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-4);
+  margin-right: 8px;
+}
+
+/* The total: a double rule, which is how a printed receipt says "stop adding". */
+.till-receipt .bill-total {
+  border-top: 3px double var(--navy-900);
+  margin-top: var(--s3);
+}
+.till-receipt .bill-total .amt { font-size: 38px; }
+
+/* The empty bill: an admitted placeholder, not a blank panel. */
+.till-receipt .empty { padding: var(--s7) var(--s4); }
+.till-receipt .till-empty-art {
+  display: block; margin: 0 auto var(--s4);
+  color: var(--ink-4); opacity: .8;
+}
+
+/* ------------------------------------------------------ the working states --
+   The mesh panel carries no margin of its own — it is a background, not a
+   container — so the two places this screen uses one set their own room. Both
+   sit exactly where the thing they are waiting for will land, so nothing on
+   the screen moves when it does.
+
+   The mesh is BLUE, and that is the whole point: this counter is working, and
+   nothing has settled. The green in this file belongs to `.till-paid` alone,
+   which renders only behind a signature-verified webhook. */
+
+.till .thinking { margin-top: var(--s4); }
+/* Under CHARGE: the button already carries the bottom margin of the receipt,
+   so this one only needs to clear it. */
+.till .btn.pay + .till-working { margin-top: var(--s4); }
+
+/* The refusal after a whole-counter read lands in the same slot as the verdict
+   that would have replaced it, so the instrument row below never jumps. */
+.till .card-body .verdict + .till-tools { margin-top: var(--s4); }
+.till .thinking + .till-tools { margin-top: var(--s4); }
+
+/* CHARGE is the hero action; give it the height of one. Its colours stay in
+   app.css — green when armed because pressing it moves money, neutral when
+   it cannot. */
+.till .btn.pay {
+  margin-top: var(--s4);
+  min-height: 54px;
+  letter-spacing: .05em;
+  border-radius: var(--r-md);
+}
+
+/* ------------------------------------------------------- the pay screen --
+   The climax: bill left, QR right, the amount HUGE above the code. Nothing
+   here asserts payment — the amber pill and the pulse say "awaiting", and
+   only the webhook-fed PAID block below ever wears green. */
+
+.till-pay .pay-amount {
+  margin: 0;
+  font-size: 46px;
+  line-height: 1.1;
+}
+.till-qr { text-align: center; padding: var(--s4) 0 0; }
+.till-qr .till-qr-sub {
+  margin-top: var(--s2);
+  color: var(--ink-3);
+  font-size: var(--t-small);
+}
+
+/* The frame is reserved before the image arrives — a shimmer, never a blank
+   hole under the words "Scan to pay". The loaded <img> simply covers it. */
+.till-qr .qr-wrap.big {
+  position: relative;
+  display: grid; place-items: center;
+  min-height: 300px;
+  padding: var(--s4) 0 var(--s2);
+}
+.till-qr .qr-wrap.big::before {
+  content: '';
+  /* inset+margin:auto centres an absolutely positioned box of fixed size —
+     `place-items` does not reach absolutely positioned children. aspect-ratio,
+     not a fixed height: a fixed 288px stayed 288 tall when the phone media
+     block narrowed only the width, and the stale half poked out over the
+     caption above the frame. */
+  position: absolute; inset: 0; margin: auto;
+  width: 288px; aspect-ratio: 1; max-width: 90%;
+  border-radius: var(--r-lg);
+  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 50%, var(--surface-3) 75%);
+  background-size: 200% 100%;
+  animation: sh 1.4s linear infinite;   /* the app-wide skeleton shimmer */
+}
+.till-qr .qr-wrap.big img {
+  position: relative;                    /* over the shimmer */
+  width: 288px;
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: #fff;
+  box-shadow: var(--shadow-2);
+}
+/* The quiet pulse of AWAITING_SETTLEMENT: a soft blue ring breathing around
+   the frame. Blue — the machine is working; nothing has settled. A separate
+   pseudo-element whose OPACITY animates, so the pulse composites instead of
+   repainting the card (same paint budget as the stage). The grid centres it
+   over the img; aspect-ratio matches the square the QR render is. */
+.till-qr .qr-wrap.big::after {
+  content: '';
+  position: absolute; inset: 0; margin: auto;
+  width: 288px; max-width: 90%;
+  aspect-ratio: 1;
+  border-radius: var(--r-lg);
+  pointer-events: none;
+  will-change: opacity;
+  box-shadow: 0 0 0 9px rgba(var(--till-blue-rgb), .16);
+  opacity: 0;
+  animation: till-await 3s ease-in-out infinite;
+}
+@keyframes till-await { 50% { opacity: 1; } }
+
+/* The state pill can carry a whole sentence ("the money service has no record
+   of this session…"). Let it wrap instead of shoving the card wider. */
+.till-pay .card-head .pill { white-space: normal; text-align: left; line-height: 1.5; }
+/* An amber dot on the pay screen is money state mid-flight; let it breathe. */
+.till-pay .card-head .pill.amb .dot { animation: pulse 2s var(--ease) infinite; }
+
+.till-pay .till-link-facts { margin-top: var(--s4); border-top: 1px solid var(--line); }
+
+/* ------------------------------------------------------------- the moment --
+   PAID. The one place on the till where decorative-looking green is not
+   decorative: this block renders only after a signature-verified webhook
+   matched the session, so the colour is the fact. CSS only — a check that
+   draws itself, a ring that blooms once, and done. */
+
+.till-paid {
+  margin-top: var(--s4);
+  padding: var(--s6) var(--s5);
+  text-align: center;
+  background: var(--green-bg);
+  border: 1px solid var(--green-line);
+  border-radius: var(--r-md);
+  animation: till-land var(--med) var(--ease) both;
+}
+.till-paid .till-paid-check {
+  width: 64px; height: 64px;
+  display: block; margin: 0 auto var(--s3);
+  color: var(--green);
+}
+.till-paid .till-paid-check circle {
+  fill: none; stroke: currentColor; stroke-width: 3;
+  opacity: .45;
+}
+.till-paid .till-paid-check path {
+  fill: none; stroke: currentColor; stroke-width: 4;
+  stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 36; stroke-dashoffset: 36;
+  animation: till-draw .5s var(--ease) .18s forwards;
+}
+/* One bloom, then still. `both` holds the faded end state so the ring never
+   sits on screen as a stale artefact. */
+.till-paid .till-paid-check {
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(14, 138, 79, .35);
+  animation: till-pop var(--slow) var(--ease) both, till-bloom .9s ease-out .15s both;
+}
+@keyframes till-pop   { from { transform: scale(.55); opacity: 0; } 70% { transform: scale(1.06); } }
+@keyframes till-draw  { to { stroke-dashoffset: 0; } }
+@keyframes till-bloom { to { box-shadow: 0 0 0 26px rgba(14, 138, 79, 0); } }
+
+.till-paid .till-paid-word {
+  font-size: var(--t-micro); font-weight: 800;
+  letter-spacing: .22em; text-transform: uppercase;
+  color: var(--green);
+}
+.till-paid .till-paid-amt {
+  font-size: 42px; font-weight: 800; letter-spacing: -.03em;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0 var(--s2);
+}
+.till-paid p {
+  max-width: 44ch; margin: 0 auto;
+  color: var(--ink-2); font-size: var(--t-small); line-height: 1.6;
+}
+
+/* ----------------------------------------------------------- small rooms -- */
+
+@media (max-width: 560px) {
+  .till-pay .pay-amount { font-size: 36px; }
+  .till-receipt .bill-total .amt { font-size: 32px; }
+  .till-qr .qr-wrap.big::before,
+  .till-qr .qr-wrap.big::after,
+  .till-qr .qr-wrap.big img { width: 240px; }
+  .till-qr .qr-wrap.big { min-height: 252px; }
+}
+
+/* -------------------------------------------------------- the instrument row --
+   Two clusters. Left: how it reads, and the area. Right: the sound, and the
+   one action that is not a setting. On a phone the right cluster takes its
+   own line and the primary fills it, so the thumb has one big target instead
+   of five small ones wrapped across three lines. */
+.till-tools {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  min-width: 0;
+}
+.till-tools-l, .till-tools-r {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; min-width: 0;
+}
+.till-tools-r { margin-left: auto; }
+.till-tools-r .btn.primary { min-height: var(--ctl-h); border-radius: var(--r-md); }
+@media (max-width: 720px) {
+  .till-tools-r { margin-left: 0; width: 100%; }
+  /* The primary takes a whole line of its own, FIRST, and the two quiet sound
+     controls share the line under it. `flex: 1` alone left it squeezed beside
+     them and its label wrapped to three lines — measured at 390 px. */
+  .till-tools-r .btn.primary { flex: 1 1 100%; order: -1; min-height: var(--ctl-h-lg); }
+}
+
+/* ==========================================================================
+   THE STAGE AS AN INSTRUMENT PANEL
+   --------------------------------------------------------------------------
+   This is the screen the counter is judged on. It is open all day in front of
+   a shopkeeper and it is the one page a demo actually lingers on, so it earns
+   more than a flat rectangle.
+
+   It was `background: var(--navy-900)` — one dead navy fill, 590 px tall, with
+   a small lens and three sentences floating in the middle of it. Every other
+   surface in this product had been given the aurora and the flutes; the one
+   surface a person looks at for eight hours had not.
+
+   Four layers, painted bottom-up in one `background` so nothing new enters the
+   DOM and the video still covers all of it the moment the camera starts:
+   two blue blooms for depth, a third rising from below the START button so the
+   eye is pulled to it, and a vignette that darkens the corners so the copy in
+   the middle reads without a scrim behind it. The flutes and the machine grid
+   go on ::before / ::after, both `pointer-events: none` — the drag layer that
+   draws the counter area sits above them and must never lose a pointer.
+   ========================================================================== */
+
+.till .till-stage {
+  background:
+    radial-gradient(58% 76% at 16% 14%, rgba(var(--till-blue-rgb), .30), transparent 62%),
+    radial-gradient(52% 66% at 88% 24%, rgba(96, 165, 250, .19), transparent 60%),
+    radial-gradient(86% 62% at 50% 112%, rgba(var(--till-blue-rgb), .26), transparent 66%),
+    radial-gradient(130% 96% at 50% 44%, transparent 38%, rgba(0, 0, 0, .50) 100%),
+    var(--navy-900);
+}
+
+/* The flute motif, at the same skew as the page titles and the sidebar's open
+   row. Wide, faint, and only over the top-left third, so it reads as light
+   falling across metal rather than as stripes. */
+.till .till-stage::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(
+    var(--flute-skew),
+    rgba(var(--till-blue-rgb), .085) 0px,
+    rgba(var(--till-blue-rgb), .085) 2px,
+    transparent 2px,
+    transparent 22px);
+  -webkit-mask-image: radial-gradient(72% 80% at 8% 0%, #000 0%, transparent 72%);
+          mask-image: radial-gradient(72% 80% at 8% 0%, #000 0%, transparent 72%);
+}
+
+/* A 28 px machine grid, barely there. It gives the empty stage a sense of
+   scale — without it a large dark rectangle has no size — and it is the thing
+   that makes this read as an instrument rather than as a photograph that has
+   not loaded. */
+.till .till-stage::after {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(var(--till-blue-rgb), .06) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(0deg,  rgba(var(--till-blue-rgb), .06) 0 1px, transparent 1px 28px);
+  -webkit-mask-image: radial-gradient(96% 84% at 50% 50%, #000 22%, transparent 78%);
+          mask-image: radial-gradient(96% 84% at 50% 50%, #000 22%, transparent 78%);
+}
+
+/* Both decorations are OFF the moment the camera is live. A grid over a live
+   video feed is noise on the one image the operator needs to read, and the
+   sweep already carries the "it is looking" signal. */
+.till .till-stage.looking::before,
+.till .till-stage.looking::after { opacity: 0; }
+
+/* ------------------------------------------------------------- the lens -- */
+
+.till-stage .camgate .till-lens {
+  width: 76px; height: 76px;
+  margin-bottom: var(--s5);
+  opacity: 1;
+  filter: drop-shadow(0 0 22px rgba(var(--till-blue-rgb), .55));
+}
+/* The aperture breathes. Slowly — this is a resting state, not a spinner, and
+   a fast animation on an idle screen reads as something being wrong. */
+.till-stage .camgate .till-lens .lens-iris { animation: till-breathe 4.2s var(--ease) infinite; transform-origin: 23px 23px; }
+.till-stage .camgate .till-lens .lens-ring { animation: till-orbit 9s linear infinite;    transform-origin: 23px 23px; }
+@keyframes till-breathe { 0%, 100% { transform: scale(1); opacity: .95; } 50% { transform: scale(1.09); opacity: .7; } }
+@keyframes till-orbit   { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .till-stage .camgate .till-lens .lens-iris,
+  .till-stage .camgate .till-lens .lens-ring { animation: none; }
+}
+
+/* ------------------------------------------------------------- the gate -- */
+
+.till-stage .camgate { max-width: 46ch; }
+.till-stage .camgate h3 {
+  font-size: clamp(20px, 2.5vw, 30px);
+  letter-spacing: -0.015em;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, .45);
+}
+.till-stage .camgate .gate-lead {
+  color: var(--on-dark-2);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  margin-bottom: var(--s6);
+  max-width: 34ch; margin-inline: auto;
+}
+.till-stage .camgate .btn.primary {
+  min-height: 50px;
+  padding-inline: var(--s8);
+  font-size: 15px;
+  box-shadow: 0 10px 30px rgba(var(--till-blue-rgb), .42), 0 0 0 1px rgba(255, 255, 255, .10) inset;
+}
+
+/* THE DISCLOSURE, PROMOTED RATHER THAN BURIED.
+   What leaves this machine used to be sentences two and three of a paragraph
+   nobody finishes, set in the same grey as everything else. On a product whose
+   entire argument is that it says what it does, that is the wrong place for it.
+   It is now its own strip along the foot of the stage with a shield beside it:
+   still every word, no longer competing with the invitation to start. */
+.till-stage .till-disclose {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 14px 18px 15px;
+  text-align: left;
+  background: linear-gradient(to top, rgba(var(--till-navy-rgb), .92), rgba(var(--till-navy-rgb), 0));
+  color: var(--till-bar-ink);
+  font-size: var(--t-micro);
+  line-height: 1.55;
+}
+.till-stage .till-disclose svg { flex: none; margin-top: 1px; color: var(--blue-400); opacity: .85; }
+.till-stage .till-disclose b { color: var(--on-dark); font-weight: 650; }
+@media (max-width: 560px) {
+  .till-stage .till-disclose { position: static; background: none; padding: var(--s4) var(--s2) 0; }
+}
+
+/* ---------------------------------------------------------- the readout --
+   With the camera off this was a flat black bar reading "camera off  —",
+   which looks like a component that failed rather than one at rest. Same
+   metal, but lit from the left so it belongs to the stage above it. */
+.till .till-readout {
+  background:
+    radial-gradient(70% 200% at 0% 50%, rgba(var(--till-blue-rgb), .16), transparent 70%),
+    var(--navy-900);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+
+/* ------------------------------------------------------ the instrument row -
+   Two clusters that were floating on the page background now sit on one glass
+   panel with a hairline between them, so the row reads as the console of the
+   thing above it rather than as five buttons that happen to be adjacent. */
+.till .till-tools {
+  padding: 10px;
+  border-radius: var(--r-md);
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+}
+
+/* The console, made visible. `--glass` over a white card is very nearly white,
+   so the panel it was meant to draw was invisible and the row still read as
+   five loose buttons. A faint blue wash and a real edge give it a body; the
+   inner highlight is what stops it looking like a disabled area. */
+.till .till-tools {
+  padding: 9px 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .72), rgba(255, 255, 255, .38)),
+    linear-gradient(100deg, rgba(var(--till-blue-rgb), .10), rgba(var(--till-blue-rgb), .03));
+  border: 1px solid rgba(var(--till-blue-rgb), .16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), 0 1px 2px rgba(var(--till-navy-rgb), .04);
+  row-gap: var(--s2);
+}
+/* IT WRAPS ONTO TWO ROWS AND THAT IS CORRECT. A `flex-wrap: nowrap` above
+   900 px was tried here first, with a comment claiming the widths had been
+   measured. They had not. The stage card's inner width at 1440 is 651 px, not
+   the ~930 that was assumed — the till sits beside the bill, it does not have
+   the page. The two clusters need about 640 px at their natural size, so
+   nowrap did not fit them: it shrank the flex children below their content and
+   clipped "BY LOOK" and the right-hand primary mid-word, while a naive
+   measurement of the shrunken boxes still reported "fits".
+
+   So it wraps, and the row-gap above makes two rows look deliberate. */
+.till .till-tools-l, .till .till-tools-r { gap: 6px; }
+.till .till-tools-r .btn.primary { white-space: nowrap; }
+
+/* The recogniser's BCP-47 tag was set as bare grey monospace, which reads as
+   something a developer left behind. It is genuinely useful — it says which
+   language the browser will send audio as — so it is a chip now, not debris. */
+.vb-langid {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: var(--t-micro);
+  letter-spacing: .03em;
+  color: var(--blue-700);
+  background: rgba(var(--till-blue-rgb), .09);
+  border: 1px solid rgba(var(--till-blue-rgb), .18);
+}
+
+/* ==========================================================================
+   SALAAHKAAR AT THE COUNTER — the "Say the order" card with a face in it
+   --------------------------------------------------------------------------
+   The advisor's presenter, small, beside the microphone and a text field. The
+   tile chrome mirrors `.adv-tile` in advisor.css at a third of the size; it is
+   restated here rather than imported because advisor.css travels with the
+   lazily-loaded Advisor route and the till is the eager bundle. The palette
+   samples under `.sk-tile .pp` are the SAME numbers as advisor.css's `.pp`
+   block — they are sampled from the plate, and if the plate is ever replaced
+   both copies are wrong together.
+   ========================================================================== */
+
+/* NOT `.sk .sk-deva`. The name is rendered into the Card's TITLE, and the card
+   header is outside the `.sk` body — so the descendant selector never matched
+   and the two scripts ran together as "Salaahkaarसलाहकार" with no gap. */
+.sk-deva { font-family: var(--font-deva); font-weight: 600; margin-left: 8px; color: var(--ink-3); font-size: .85em; }
+
+/* Tile beside the readout on the first row; the input and the language chips
+   take the full width under them. MEASURED, not assumed: the bill column is
+   ~365 px at 1440, and with the input in the side column beside a 148 px
+   tile the text field was a 6 px sliver between two buttons. */
+.sk-body {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  grid-template-areas: 'tile readout' 'input input' 'langs langs';
+  gap: var(--s3) var(--s4);
+  align-items: stretch;
+}
+.sk-body > .sk-tile { grid-area: tile; }
+.sk-body > .sk-readout { grid-area: readout; }
+.sk-body > .sk-input { grid-area: input; }
+.sk-body > .vb-langs { grid-area: langs; }
+@media (max-width: 560px) {
+  .sk-body { grid-template-columns: 112px minmax(0, 1fr); gap: var(--s3); }
+}
+
+/* The tile: a small call window, 4:3, the plate's own navy behind it. */
+.sk-tile {
+  --amp: 0;
+  position: relative;
+  aspect-ratio: 4 / 3;
+  align-self: start;
+  border-radius: var(--r-md);
+  background: #0C1B3A;
+  overflow: hidden;
+  box-shadow: var(--shadow-1);
+  display: grid; place-items: stretch;
+  transition: box-shadow 160ms var(--ease);
+}
+.sk-tile > *:not(.pp) { z-index: 2; }
+.sk-tile-wait { position: absolute; inset: 0; }
+/* Blue while listening — the machine's own colour, the microphone is open. */
+.sk-tile[data-state="listening"] {
+  box-shadow: 0 0 0 2px rgba(var(--till-blue-rgb), .55), 0 0 22px rgba(var(--till-blue-rgb), .30);
+  animation: sk-listen 2.6s ease-in-out infinite;
+}
+@keyframes sk-listen {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--till-blue-rgb), .45), 0 0 14px rgba(var(--till-blue-rgb), .22); }
+  50%      { box-shadow: 0 0 0 2px rgba(var(--till-blue-rgb), .75), 0 0 28px rgba(var(--till-blue-rgb), .42); }
+}
+/* Speaking: the ring's alpha IS the voice's level. Marigold, as on the call —
+   not green, not amber: it is neither money nor an abstention, it is a voice. */
+.sk-tile[data-state="speaking"] {
+  box-shadow:
+    0 0 0 2px rgba(228, 163, 64, calc(.35 + var(--amp) * .55)),
+    0 0 calc(12px + var(--amp) * 26px) rgba(228, 163, 64, calc(.18 + var(--amp) * .40));
+}
+.sk-tile[data-state="thinking"]::before {
+  content: '';
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .10) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: sk-think 2.1s ease-in-out infinite;
+}
+@keyframes sk-think { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .sk-tile[data-state="listening"] { animation: none; }
+  .sk-tile[data-state="thinking"]::before { animation: none; }
+}
+
+/* The presenter's own rig, scoped to this tile. Same values as advisor.css. */
+.sk-tile .pp {
+  --pp-lip:     #AF5745;
+  --pp-lip-hi:  #BE6653;
+  --pp-lip-lo:  #90463A;
+  --pp-gap:     #34140F;
+  --pp-tongue:  #A8474A;
+  --pp-lid:     #A96A44;
+  --pp-lash:    #110D0C;
+  --pp-shade:   #6E3A22;
+  --pp-halo:    #E4A340;
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0;
+}
+.sk-tile .pp-plate { image-rendering: auto; }
+.sk-tile .pp[data-state="off"] { opacity: .72; }
+.sk-tile .pp-lips { fill: url(#pp-lip); }
+.sk-tile .pp-gap { fill: var(--pp-gap); }
+.sk-tile .pp-teeth-u, .sk-tile .pp-teeth-l { fill: url(#pp-teeth); }
+.sk-tile .pp-tongue { fill: var(--pp-tongue); }
+.sk-tile .pp-jaw { fill: url(#pp-jaw); }
+.sk-tile .pp-seam { fill: none; stroke: var(--pp-lip-lo); stroke-width: 1.4; stroke-linecap: round; }
+.sk-tile .pp-lid { fill: var(--pp-lid); }
+.sk-tile .pp-lash { fill: none; stroke: var(--pp-lash); stroke-width: 5; stroke-linecap: round; }
+
+/* The wave, bottom-right of the tile: nine bars off `--amp`. */
+.sk-wave {
+  position: absolute; right: 8px; bottom: 8px;
+  display: flex; align-items: flex-end; gap: 2px; height: 18px;
+  pointer-events: none;
+}
+.sk-wave i {
+  display: block; width: 2px; border-radius: 1px;
+  background: rgba(228, 163, 64, .92);
+  box-shadow: 0 0 6px rgba(228, 163, 64, .55);
+  height: calc(2px + var(--amp) * (6px + 12px * (0.5 + 0.5 * sin(var(--k) * 1.9))));
+  transition: height 60ms linear;
+}
+.sk-wave.listening i {
+  background: rgba(var(--till-blue-rgb), .85);
+  box-shadow: 0 0 6px rgba(var(--till-blue-rgb), .45);
+  height: 3px;
+  animation: sk-wave-idle 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--k) * -110ms);
+}
+@keyframes sk-wave-idle { 0%, 100% { height: 3px; } 50% { height: 9px; } }
+@media (prefers-reduced-motion: reduce) { .sk-wave.listening i { animation: none; height: 5px; } }
+
+/* --------------------------------------------------------- the readout -- */
+
+/* Same dark metal as the camera readout, so the two instruments read as one
+   panel. The caption inside it follows the voice: said, saying, not yet. */
+.sk-readout {
+  background:
+    radial-gradient(70% 200% at 0% 50%, rgba(var(--till-blue-rgb), .16), transparent 70%),
+    var(--navy-900);
+  border-radius: var(--r-md);
+  padding: 9px 14px;
+  min-height: 58px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+  display: flex; align-items: center;
+  min-width: 0;
+}
+.sk-cap {
+  margin: 0;
+  color: var(--on-dark);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  max-height: calc(3 * 1.5em + 1.2em);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.sk-cap::-webkit-scrollbar { display: none; }
+.sk-cap > b {
+  display: block;
+  font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--on-dark-3);
+  margin-bottom: 1px;
+}
+.sk-cap.muted { color: var(--on-dark-3); font-size: var(--t-small); }
+.sk-cap.said .was { color: var(--on-dark-3); }
+.sk-cap.said .now {
+  color: var(--on-dark);
+  background: rgba(var(--accent-rgb), .62);
+  border-radius: 4px; padding: 0 3px; margin: 0 -3px;
+}
+
+/* The text field on its own line, full width; LISTEN and TELL HER under it.
+   A field a shopkeeper can read a whole order back in beats three things
+   squeezed onto one line. */
+.sk-input { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; min-width: 0; }
+.sk-input .btn { white-space: nowrap; }
+.sk-input .sk-text { flex: 1 1 100%; min-width: 0; }
+.sk-input .btn.primary, .sk-input .btn.danger { flex: 1 1 auto; }
+.sk .vb-langs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------- what she made of it -- */
+
+.sk-told { margin-top: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }
+.sk-route { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; font-size: var(--t-small); }
+.sk-put { margin: 0 0 var(--s2); }
+/* Not `.sk-lines`: salaahkaar.css owns that name for the call's line list, and
+   this rule was reaching it from the main bundle while its `margin-top` reached
+   back into this list once the call's chunk had loaded. */
+.sk-put-lines { margin: 0; padding-left: 1.1em; font-size: var(--t-small); line-height: 1.6; }
+.sk-caution { margin: var(--s2) 0 0; font-size: var(--t-small); }
+.sk-reread { margin: 0 0 var(--s2); font-weight: 600; }
+.sk-voiced { margin-top: 0; }
+.sk-never { color: var(--ink-2); }
+
+/* ==========================================================================
+   PROPOSED LINES ON THE BILL — amber, because nobody has agreed yet
+   --------------------------------------------------------------------------
+   The colour rule restated: amber is the counter abstaining. These rows are on
+   the receipt to be looked at and are outside the total; the double rule under
+   the real lines makes that visible before the words do. No landing animation
+   wash in blue here — the wash means "the machine committed this", and here
+   it has not.
+   ========================================================================== */
+
+.till-proposed {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s3) var(--s2);
+  border-radius: var(--r-md);
+  background: var(--amber-bg);
+  border: 1px dashed var(--amber-line);
+}
+.till-proposed-head {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  font-size: var(--t-small);
+  margin-bottom: var(--s2);
+}
+.till-proposed-head .spacer { flex: 1; }
+.till-proposed .bill-lines { max-height: none; }
+.till-receipt .bill-line.proposed {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center; gap: var(--s2);
+  padding: 9px 2px;
+  border-bottom: 1px dashed var(--amber-line);
+  animation: till-land var(--med) var(--ease) both;   /* the slide, not the blue wash */
+}
+.till-receipt .bill-line.proposed:last-child { border-bottom: 0; }
+.till-receipt .bill-line.proposed .nm { color: var(--ink); }
+.till-receipt .bill-line.proposed .qty { background: rgba(var(--amber-rgb), .14); color: var(--amber); }
+.till-receipt .bill-line.proposed .amt { color: var(--amber); min-width: 5.5rem; text-align: right; }
+.till-receipt .bill-line.proposed .qbtn { opacity: 1; }
+.till-proposed-blocked { color: var(--amber); font-size: var(--t-small); }
+.till-proposed .hint { margin-top: var(--s2); }
+.till-proposed-sum {
+  margin: calc(-1 * var(--s3)) 0 var(--s3);
+  text-align: right;
+  color: var(--amber);
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 560px) {
+  .till-receipt .bill-line.proposed { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .till-receipt .bill-line.proposed .btn { grid-column: 1 / -1; justify-self: start; }
+}
+
+/* ------------------------------------------------------------ ON THE BOOK --
+   KHATA. The bill closes onto a household's udhaar book instead of onto a
+   payment link. NO COLOUR, by rule: not `.till-paid`'s green (nothing
+   settled), not amber (nothing abstained), not red (nothing refused). Ink on
+   paper, with the flute on its edge so it still reads as this product. */
+
+.till-book-btn { width: 100%; margin-top: var(--s2); }
+
+.till-book-proposed {
+  margin: var(--s3) 0;
+  padding: var(--s3) var(--s4);
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--t-small);
+  line-height: var(--lh-loose);
+}
+.till-book-proposed p { margin: 0 0 var(--s2); }
+.till-book-proposed b { color: var(--navy-900); }
+
+.till-booked {
+  position: relative;
+  margin-top: var(--s4);
+  padding: var(--s5) var(--s5) var(--s5) calc(var(--s5) + 8px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+.till-booked::before {
+  content: "";
+  position: absolute; left: -5px; top: -10%; bottom: -10%; width: 9px;
+  background: var(--navy-900);
+  opacity: .85;
+  transform: skewX(var(--flute-skew));
+}
+.till-booked-word {
+  font-size: var(--t-micro); font-weight: 800;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--ink-3);
+}
+.till-booked-line {
+  margin-top: 4px;
+  font-family: var(--font-display, var(--font));
+  font-size: var(--t-h2); font-weight: 800; line-height: 1.2;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.till-booked-new { font-size: var(--t-small); font-weight: 600; color: var(--ink-3); }
+.till-booked p { margin: var(--s3) 0; font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-loose); }
+.till-booked p b { color: var(--navy-900); }
