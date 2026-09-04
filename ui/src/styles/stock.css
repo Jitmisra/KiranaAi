@@ -1,0 +1,301 @@
+/* ===========================================================================
+   GAWAAH — the Stock screen (routes/Stock.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `st-` so it cannot collide
+   with the till's classes in app.css or with the Books screens' `bk-`/`bh-`.
+
+   WHAT IS NOT HERE. The summary figures, the buttons, the inputs, the loading
+   skeletons, the empty states and the segmented controls are all the shared
+   layer in components/ui.tsx and app.css. This sheet holds only the four things
+   that screen genuinely has of its own: the entry pad, the movement line, the
+   low row and the shelf table's small-screen behaviour.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css; the three names
+   this sheet needs that tokens.css does not define are `--stock-*` locals
+   aliased to existing tokens, so a re-theme there reaches this screen too.
+
+   COLOUR DISCIPLINE. Green, amber and red are reserved on this product for money
+   and recognition state. A shelf running low is neither: it is a fact about a
+   shop, and dressing it in amber next to a page where amber means "the counter
+   would not price this" would spend a colour that has a job. So the low list is
+   QUIET — weight, a rule down the side, and the number set large — and the only
+   amber this screen earns is a figure below zero, which means stock left without
+   anybody recording it, exactly as the Inventory screen already treats it. Red
+   is kept for a hash chain that does not verify.
+
+   ONE-HANDED. The entry controls are sized for a thumb on a phone held over a
+   crate: nothing that has to be pressed is under 44 px, the quantity keys are
+   52 px, and the product picker is the operating system's own, which is the
+   biggest and steadiest target available to a web page.
+   =========================================================================== */
+
+:root {
+  --stock-dim:   var(--ink-4);
+  --stock-quiet: var(--surface-2);
+  --stock-rule:  var(--line-2);
+}
+
+/* A block between the page head and the grid, or a full-width card below it. */
+.st-band { margin-bottom: var(--s5); }
+.st-band.top { margin-top: var(--s5); margin-bottom: 0; }
+
+/* --------------------------------------------------------------- the grid -- */
+
+/* THREE CHILDREN, TWO COLUMNS. The entry pad and the log share the left column
+   and the low list and the chosen product own the right one, which is placed
+   rather than left to flow: the entry pad is short and the right column is long,
+   so in source order the left column ended halfway up the page with a screen of
+   nothing under it. Placement is only applied above 1080 px — below it the grid
+   collapses to one column and the source order is the reading order, which is
+   already the right one for a phone: move stock, what is low, what is chosen,
+   then the log. */
+.st-grid { grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr); align-items: start; }
+@media (min-width: 1081px) {
+  .st-grid > :nth-child(1) { grid-column: 1; grid-row: 1; }
+  .st-grid > :nth-child(2) { grid-column: 2; grid-row: 1 / span 2; }
+  .st-grid > :nth-child(3) { grid-column: 1; grid-row: 2; }
+}
+@media (max-width: 1080px) { .st-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* -------------------------------------------------------------- the entry -- */
+
+.st-entry { display: flex; flex-direction: column; gap: var(--s4); }
+.st-entry .field { margin-bottom: 0; }
+
+/* The direction is the biggest decision on this form and the easiest one to get
+   wrong in a hurry, so it is a full-width pair with the consequence spelled out
+   underneath rather than a pill that has to be read twice. */
+.st-dir .seg button { min-height: 46px; font-size: var(--t-small); font-weight: 700; }
+.st-dir-note {
+  display: block; margin-top: var(--s2);
+  font-size: var(--t-micro); color: var(--stock-dim); line-height: 1.5;
+}
+
+.st-qty { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+/* Wide enough for six digits. The cap is 100,000 and a refused number has to be
+   readable in the box it was refused from, or the shopkeeper cannot see what he
+   typed. */
+.st-qty .st-qty-in {
+  width: 116px; height: 52px; text-align: center;
+  font-size: var(--t-h1); font-weight: 800; color: var(--navy-900);
+}
+.btn.qbig {
+  width: 52px; height: 52px; min-height: 52px; padding: 0;
+  font-size: 24px; font-weight: 700; line-height: 1; color: var(--blue-600);
+}
+.st-jump { display: flex; gap: var(--s2); margin-left: auto; }
+.st-jump .btn { min-width: 44px; }
+
+/* The reasons are the server's own vocabulary, one button each. The key is shown
+   as well as the sentence, because the key is what lands on the log and is what
+   a shopkeeper will group by later. */
+.st-reasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--s2); }
+.st-reason {
+  appearance: none; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 2px;
+  min-height: 52px; padding: var(--s2) var(--s3);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.st-reason:hover { border-color: var(--blue-400); background: var(--blue-050); }
+.st-reason .k {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.st-reason .d { font-size: var(--t-micro); color: var(--stock-dim); line-height: 1.4; }
+.st-reason[aria-pressed='true'] {
+  background: var(--blue-050); border-color: var(--blue-500);
+  box-shadow: inset 2px 0 0 var(--blue-500);
+}
+.st-reason[aria-pressed='true'] .k { color: var(--blue-700); }
+
+/* ---------------------------------------------------------- the log lines -- */
+
+.st-log { display: flex; flex-direction: column; }
+.st-mv {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr) auto;
+  gap: var(--s4); align-items: baseline;
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line);
+}
+.st-mv:last-child { border-bottom: 0; }
+.st-mv .tm { font-size: var(--t-micro); color: var(--stock-dim); font-variant-numeric: tabular-nums; }
+.st-mv .what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.st-mv .nm { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+.st-mv .rs { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.45; overflow-wrap: anywhere; }
+.st-mv .u { display: inline-flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
+.st-mv .u .n { font-size: var(--t-small); font-weight: 700; color: var(--ink-2); min-width: 34px; text-align: right; }
+
+/* IN and OUT are a word, not a colour and not an arrow: beside a signed number
+   an arrow makes a reader work out which way it points. */
+.st-dirlab {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  color: var(--stock-dim); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 1px 5px; background: var(--stock-quiet);
+}
+.st-dirlab.out { border-style: dashed; }
+
+@media (max-width: 560px) {
+  .st-mv { grid-template-columns: minmax(0, 1fr) auto; }
+  .st-mv .tm { grid-column: 1 / -1; }
+}
+
+/* ----------------------------------------------------- the chosen product -- */
+
+.st-detail { gap: var(--s4); }
+
+.st-hero { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.st-hero-l { font-size: var(--t-small); color: var(--ink-3); }
+
+.st-onhand { font-weight: 700; color: var(--navy-900); }
+.st-onhand.big { font-size: var(--t-display); font-weight: 800; letter-spacing: -.03em; line-height: 1; }
+/* Below zero is not a quantity, it is evidence. Amber is earned here: the same
+   fact wears the same colour on the Inventory screen. */
+.st-onhand.below { color: var(--amber); }
+
+/* An absence, never a zero. A zero is a claim about a shelf nobody has looked at. */
+.st-absent { font-size: var(--t-micro); color: var(--stock-dim); white-space: nowrap; }
+
+.st-derivation {
+  margin: 0; padding: var(--s3) var(--s4);
+  background: var(--stock-quiet); border-radius: var(--r-sm);
+  color: var(--ink-2); line-height: 1.6; overflow-wrap: anywhere;
+}
+
+.st-facts .kv { padding: var(--s2) 0; }
+
+.st-why-block {
+  font-size: var(--t-small); color: var(--ink-3); line-height: 1.6;
+  border-left: 2px solid var(--stock-rule); padding-left: var(--s3);
+  max-width: 64ch;
+}
+
+.st-form { border-top: 1px solid var(--line); padding-top: var(--s4); }
+.st-form .field { margin-bottom: var(--s2); }
+.st-inline { display: flex; gap: var(--s2); align-items: stretch; }
+.st-inline .inp { flex: 1; min-width: 0; }
+
+/* ---------------------------------------------------------- days of cover -- */
+
+.st-cover { color: var(--ink-2); }
+.st-cover b { color: var(--navy-900); font-weight: 700; }
+/* "Not enough history" is a sentence, not an error. It is set in the same ink as
+   any other fact and carries the reason under it wherever there is room. */
+.st-nohist { color: var(--ink-3); font-size: var(--t-small); }
+.st-why {
+  display: block; margin-top: 2px;
+  font-size: var(--t-micro); color: var(--stock-dim); line-height: 1.45;
+}
+.st-why-inline { font-size: var(--t-micro); color: var(--stock-dim); line-height: 1.45; }
+
+/* ------------------------------------------------------------ running low -- */
+
+.st-lowstack { gap: var(--s4); }
+.st-sub { display: flex; flex-direction: column; gap: var(--s2); }
+.st-sub .eyebrow { color: var(--stock-dim); }
+
+.st-lowrow {
+  appearance: none; cursor: pointer; text-align: left; width: 100%;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--s4);
+  padding: var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-3);
+  border-radius: var(--r-md);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.st-lowrow + .st-lowrow { margin-top: var(--s2); }
+.st-lowrow:hover { background: var(--surface-2); }
+.st-lowrow.quiet { border-left-color: var(--stock-rule); background: var(--stock-quiet); }
+.st-lowrow .nm { font-size: var(--t-small); font-weight: 700; color: var(--navy-900); }
+.st-lowrow .fig { display: inline-flex; align-items: baseline; gap: 6px; justify-self: end; }
+.st-lowrow .lvl { font-size: var(--t-micro); color: var(--stock-dim); white-space: nowrap; }
+.st-lowrow .cov { grid-column: 1 / -1; }
+
+/* Two non-verdict pills. Quiet on purpose: neither is a claim about money. */
+.pill.st-low-pill { background: var(--stock-quiet); color: var(--ink-2); border-color: var(--ink-3); }
+.pill.st-quiet-pill { background: var(--stock-quiet); color: var(--ink-2); border-color: var(--stock-rule); }
+.st-quiet { font-size: var(--t-micro); color: var(--stock-dim); }
+
+/* ------------------------------------------------------------ every shelf -- */
+
+.st-table th.r, .st-table td.r { text-align: right; }
+.st-table td { padding-top: var(--s3); padding-bottom: var(--s3); }
+.st-table tr.picked { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+.st-pick {
+  appearance: none; background: none; border: 0; padding: 0; cursor: pointer;
+  text-align: left; display: flex; flex-direction: column; gap: 1px;
+}
+.st-pick .nm { font-weight: 700; color: var(--navy-900); line-height: 1.35; }
+.st-pick .sku { color: var(--stock-dim); overflow-wrap: anywhere; }
+.st-pick:hover .nm { color: var(--blue-700); }
+
+/* On a phone the last two columns are dropped rather than crushed. They are the
+   working-out; the shelf figure, the level and the cover are the answer, and a
+   six-column table squeezed into 390 px is a table nobody reads. The four that
+   remain keep a floor width and scroll inside `.scroll-x` — the same thing the
+   Inventory table does — because a column narrow enough to break "not enough
+   history" over three lines has stopped being a column. */
+@media (max-width: 560px) {
+  .st-table { min-width: 480px; }
+  .st-table .hide-sm { display: none; }
+  .st-jump { margin-left: 0; }
+  .st-reasons { grid-template-columns: 1fr 1fr; }
+
+  /* Four figures stacked one per screen push the entry pad below the fold, and
+     the pad is what a shopkeeper opened this page to use. Two across, smaller. */
+  .st-band .statgrid { grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .st-band .stat { padding: var(--s3) var(--s4); }
+  .st-band .stat .stat-v { font-size: var(--t-h1); }
+}
+
+/* The low-stock card's header carries a count and a send button; on a phone
+   they wrap rather than squeezing the title. */
+.st-low-aside { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------- a dead control's why --
+   A disabled button on a counter is a question — "is it broken, or am I?" —
+   and RECORD STOCK IN goes dead every time this page is opened, because no
+   product is chosen yet. This is the answer, in the place the hand already is.
+
+   QUIET INK, NOT A COLOUR. A control that is not applicable yet is not a
+   refusal and not an abstention, and amber and red are spoken for on this
+   product. The link inside it is the accent, like every other action. */
+.st-whydead {
+  /* Inside `.st-entry`, a flex column whose gap already spaces it. */
+  margin-top: 0;
+  font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-loose);
+  max-width: 64ch;
+}
+.st-jumplink {
+  appearance: none; background: none; border: 0; padding: 0;
+  font: inherit; color: var(--blue-700); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+  /* A THUMB-SIZED TARGET WITHOUT A THUMB-SIZED BOX. Measured at 390: this link
+     was 120 x 21 — a line of text in the middle of a sentence, and 11 px short
+     of anything a thumb can reliably hit. Padding it to 32 would push the
+     sentence's own lines apart, so the HIT AREA grows and the ink does not:
+     the pseudo-element below is transparent, sits behind nothing, and reaches
+     the 6 px above and below that make the target 33 px tall. */
+  position: relative;
+}
+.st-jumplink::after {
+  content: ''; position: absolute; left: -4px; right: -4px; top: -6px; bottom: -6px;
+}
+.st-jumplink:hover { color: var(--blue-800); }
+.st-jumplink:focus-visible { outline: 2px solid var(--blue-600); outline-offset: 2px; border-radius: var(--r-xs); }
+
+/* A skeleton bar in a right-aligned cell has to be pushed right itself: the
+   `<span class="skel">` is a block at the width it was given, and text-align
+   does not move a block. Without this the four numeric columns loaded
+   left-aligned and every figure jumped across when the rows landed. */
+.st-table td.r .st-skelcell { display: flex; justify-content: flex-end; }
+
+/* An anchor styled as a button. `.btn` in app.css does not clear the
+   underline — only `a.btn.pay.big` does — so every link-button on this screen
+   carried a stray rule through the middle of its label. Scoped to this
+   screen's own class rather than `a.btn`, because this stylesheet stays in
+   the document once the route has been visited and must not restyle the
+   nineteen screens it does not own. */
+a.btn.st-linkbtn { text-decoration: none; }
