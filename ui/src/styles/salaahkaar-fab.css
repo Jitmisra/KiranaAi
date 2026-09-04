@@ -1,0 +1,104 @@
+/* ===========================================================================
+   THE ROUND BUTTON — Salaahkaar's face at the foot of every shopkeeper screen.
+
+   Eager, and only this: the button is in the main bundle on every page, so its
+   stylesheet carries the face, the ring and nothing else. The modal it opens
+   brings `salaahkaar.css` with it.
+
+   THE RING IS THE STATE, in the colours the call already uses on its tile:
+   the machine's blue for listening and thinking, the marigold for speaking,
+   a quiet line when nothing is happening. No green, no amber, no red — those
+   mean money, abstention and refusal on this product and a button that pulsed
+   green would be a face claiming a payment settled.
+   =========================================================================== */
+
+.sk-fab {
+  /* Above the page and the drawer's scrim (50/55), under the bar (60) and
+     every dialog (100+): a control that must never sit on a sheet. */
+  --z-fab: 58;
+  --sk-lift: 0px;
+  --sk-marigold-rgb: 228, 163, 64;
+  position: fixed; right: 18px; bottom: 18px; z-index: var(--z-fab);
+  width: 58px; height: 58px; padding: 0; border: 0; cursor: pointer;
+  border-radius: 50%; background: transparent;
+  /* The lift is what the dodge sets — measured against CHARGE on the till.
+     NOT transitioned: a button that glides up over CHARGE for 200 ms is a
+     button covering CHARGE for 200 ms. It steps aside, and it steps at once. */
+  transform: translateY(calc(-1 * var(--sk-lift)));
+  -webkit-tap-highlight-color: transparent;
+}
+.sk-fab:hover { transform: translateY(calc(-1 * var(--sk-lift))) scale(1.05); }
+.sk-fab:active { transform: translateY(calc(-1 * var(--sk-lift))) scale(.98); }
+.sk-fab:focus-visible { outline: none; }
+.sk-fab:focus-visible .sk-fab-ring { box-shadow: var(--ring), 0 0 0 1px #fff inset; }
+
+/* The face: the plate cropped to the head, in a circle the colour of its own
+   background so the instant before the image decodes is not a white disc. */
+.sk-fab-face {
+  position: absolute; inset: 4px; border-radius: 50%; overflow: hidden;
+  background: #0C1B3A;
+  box-shadow: 0 2px 6px rgba(2, 4, 43, .18), 0 10px 26px rgba(2, 4, 43, .22), inset 0 0 0 1px rgba(255, 255, 255, .18);
+}
+.sk-fab-face img {
+  position: absolute; left: 50%; top: 50%;
+  /* 912x684 plate; the head sits in the middle third. Wide enough that the
+     circle holds the face from brow to chin and nothing of the room. */
+  width: 176%; height: auto;
+  transform: translate(-50%, -49%);
+  pointer-events: none; user-select: none;
+}
+
+/* The ring. Drawn OUTSIDE the face, so the face never changes size. */
+.sk-fab-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid rgba(2, 4, 43, .16);
+  background: rgba(255, 255, 255, .55);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.sk-fab[data-state="idle"] .sk-fab-ring { border-color: rgba(var(--accent-rgb), .7); }
+.sk-fab[data-state="listening"] .sk-fab-ring {
+  border-color: var(--accent-500);
+  animation: sk-fab-listen 2.2s ease-in-out infinite;
+}
+.sk-fab[data-state="thinking"] .sk-fab-ring {
+  border-color: transparent;
+  background: conic-gradient(from 0deg, rgba(var(--accent-rgb), 0) 0deg, var(--accent-500) 90deg, rgba(var(--accent-rgb), 0) 200deg), rgba(255, 255, 255, .55);
+  animation: sk-fab-think 1.6s linear infinite;
+}
+.sk-fab[data-state="speaking"] .sk-fab-ring {
+  border-color: rgba(var(--sk-marigold-rgb), .95);
+  box-shadow: 0 0 0 3px rgba(var(--sk-marigold-rgb), .22), 0 0 22px rgba(var(--sk-marigold-rgb), .45);
+  animation: sk-fab-speak 1.1s ease-in-out infinite;
+}
+@keyframes sk-fab-listen {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .45); }
+  60%      { box-shadow: 0 0 0 10px rgba(var(--accent-rgb), 0); }
+}
+@keyframes sk-fab-think { to { transform: rotate(360deg); } }
+@keyframes sk-fab-speak {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(var(--sk-marigold-rgb), .18), 0 0 14px rgba(var(--sk-marigold-rgb), .30); }
+  50%      { box-shadow: 0 0 0 5px rgba(var(--sk-marigold-rgb), .30), 0 0 28px rgba(var(--sk-marigold-rgb), .55); }
+}
+
+/* How many answers are waiting in the transcript, so a shopkeeper who asked
+   something from the till and walked to Stock knows the call kept it. */
+.sk-fab-n {
+  position: absolute; top: -4px; left: -4px;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  border-radius: 999px;
+  font: 700 11px/20px var(--font);
+  color: #fff; background: var(--accent-grad);
+  box-shadow: 0 1px 3px rgba(2, 4, 43, .25), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+
+@media (max-width: 560px) {
+  .sk-fab { width: 52px; height: 52px; right: 14px; bottom: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sk-fab, .sk-fab-ring { transition: none; }
+  .sk-fab[data-state="listening"] .sk-fab-ring,
+  .sk-fab[data-state="thinking"] .sk-fab-ring,
+  .sk-fab[data-state="speaking"] .sk-fab-ring { animation: none; }
+  .sk-fab[data-state="thinking"] .sk-fab-ring { border-color: var(--accent-500); background: rgba(255, 255, 255, .55); }
+}

@@ -1,0 +1,431 @@
+/* ===========================================================================
+   SALAAHKAAR — what the merge added.
+
+   `advisor.css` still owns the call's shape: the tile, the presenter's
+   colours, the pulse tiles, the transcript's turns. This file adds what the
+   merged screen brought with it and the modal needs: the ONE composer with
+   the microphone inside it, the action card with its press and its UNDO, the
+   fact cards that grew (sellers as bars, margin rows, low stock with thumbs),
+   and the modal itself. Prefixed `sk-` throughout; `.dock` variants are the
+   same objects at the modal's size.
+
+   COLOUR, as everywhere: blue is the machine and the action it proposes. A
+   change that HAPPENED is blue, not green — green is a settled payment and
+   nothing here is one. A change taken back is plain ink. A refusal on a card
+   is the shared amber `Refusal`.
+   =========================================================================== */
+
+/* --------------------------------------------------------- the composer -- */
+/* One bar: language · words · microphone · send. The field and its controls
+   sit in one rounded card, which is what makes the send and the mic reachable
+   with a thumb rather than parked in a corner. */
+.sk-composer {
+  display: flex; align-items: flex-end; gap: 6px;
+  margin: var(--s3);
+  padding: 6px 6px 6px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-1), var(--glass-edge);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.sk-composer:focus-within { border-color: var(--accent-400); box-shadow: var(--ring), var(--glass-edge); }
+.sk-box { flex: 1; min-width: 0; padding: 0 4px; }
+.sk-box textarea {
+  width: 100%; border: 0; outline: none; resize: none; background: transparent;
+  /* 16px so iOS does not zoom the whole page when it is focused. */
+  font: 400 16px/1.45 var(--font);
+  color: var(--ink);
+  padding: 9px 0; max-height: 120px; overflow-y: auto;
+}
+.sk-composer.full .sk-box textarea { font-size: var(--t-h3); }
+.sk-box textarea::placeholder { color: var(--ink-5); }
+.sk-box textarea:focus-visible { outline: none; box-shadow: none; }
+
+/* THE THREE LANGUAGES, one control. Small round chips: the raw tag is in the
+   title, because a shopkeeper reporting a mishearing needs to say which
+   recogniser produced it. */
+.sk-lang { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); flex: none; align-self: center; }
+.sk-lang button {
+  appearance: none; border: 0; cursor: pointer;
+  /* THE PILL STAYS SMALL; THE TARGET DOES NOT. Three language buttons sit
+     inside the composer beside the text box, and at 390 they measured 26x26 —
+     the smallest targets on the screen. Growing the pill would push the text
+     box out of the composer, so the paint keeps its size and `::before`
+     carries a 40 px target above it. Verified at 390: the row still fits. */
+  position: relative;
+  min-width: 30px; height: 26px; padding: 0 7px; border-radius: 999px;
+  font: 700 11px/1 var(--font); color: var(--ink-3); background: transparent;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.sk-lang button[lang="hi"], .sk-lang button[lang="bn"] { font-family: var(--font-deva), var(--font); font-size: 12px; }
+.sk-lang button::before {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: max(100%, 40px); height: 40px;
+  transform: translate(-50%, -50%);
+}
+.sk-lang button:hover { color: var(--accent-700); }
+.sk-lang button[aria-pressed="true"] { color: #fff; background: var(--accent-grad); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25); }
+
+/* THE MICROPHONE, inside the bar. Accent while it listens, never red. */
+.sk-mic {
+  flex: none; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2);
+  display: grid; place-items: center; cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.sk-mic:hover:not(:disabled) { border-color: var(--accent-400); color: var(--accent-600); }
+.sk-mic:disabled { opacity: .4; cursor: not-allowed; }
+.sk-mic.on {
+  background: var(--accent-500); border-color: var(--accent-500); color: #fff;
+  animation: sk-live 1.8s var(--ease) infinite;
+}
+@keyframes sk-live {
+  0%   { box-shadow: 0 0 0 0 var(--accent-200); }
+  70%  { box-shadow: 0 0 0 10px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.sk-composer.full .sk-mic { width: 44px; height: 44px; }
+
+/* A circle with an arrow, not a rectangle with a word in it. */
+.sk-send.btn {
+  flex: none; width: 40px; min-height: 40px; padding: 0; border-radius: 999px; font-size: 0;
+}
+.sk-send.btn::after {
+  content: ''; width: 9px; height: 9px;
+  border-top: 2px solid currentColor; border-right: 2px solid currentColor;
+  transform: rotate(45deg) translate(-1px, 1px);
+}
+.sk-composer.full .sk-send.btn { width: 44px; min-height: 44px; }
+
+@media (max-width: 560px) {
+  .sk-composer { margin: var(--s2); gap: 4px; padding: 5px; }
+  .sk-lang button { min-width: 26px; padding: 0 5px; }
+  .sk-composer.full .sk-box textarea { font-size: 16px; }
+}
+
+/* --------------------------------------------------------- the chips ----- */
+/* A chip that would DO something is marked, so a judge reading the row sees
+   which press proposes and which asks. */
+.adv-chip.does { border-color: var(--accent-300); color: var(--accent-700); background: var(--accent-050); }
+.adv-chip.does::before { content: '▸ '; opacity: .7; }
+.adv-quick .adv-chips { flex-wrap: nowrap; justify-content: flex-start; }
+
+/* --------------------------------------------------------- the tags ------ */
+.adv-tag.route { border-color: var(--accent-200); color: var(--accent-700); background: var(--surface); letter-spacing: .06em; }
+/* THE LINE THAT SAYS WHAT HAPPENED. `proposed:` in outline; `did:` filled in
+   the machine's blue — the one place a change that happened wears colour, and
+   it is not green because nothing here settled. `undone:` in plain ink. */
+.adv-tag.did { white-space: normal; text-transform: none; letter-spacing: 0; font-weight: 600; }
+.adv-tag.did.proposed { border-style: dashed; }
+.adv-tag.did.applied { color: #fff; background: var(--accent-grad); border-color: transparent; }
+.adv-tag.did.undone { color: var(--ink-4); text-decoration: line-through; }
+
+/* ------------------------------------------------------- the action card -- */
+/* THE CARD A JUDGE SHOULD READ TWICE: what would change, in this shop's own
+   names and prices; a button a person has to press; what happened, with the
+   time; an UNDO. It is blue-edged because it is the machine proposing. */
+.sk-action {
+  margin-top: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--accent-200);
+  border-radius: var(--r-md);
+  padding: var(--s3) var(--s4);
+  box-shadow: var(--glass-edge);
+}
+.sk-action.applied { border-color: var(--accent-400); background: linear-gradient(180deg, var(--accent-050), var(--surface) 60%); }
+.sk-action.undone { border-style: dashed; border-color: var(--line-2); }
+.sk-action > header { display: flex; align-items: center; gap: var(--s2); }
+.sk-action .eyebrow { color: var(--accent-700); }
+
+.sk-lines { margin-top: var(--s3); }
+.sk-line {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto auto auto;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) 0; border-bottom: 1px solid var(--line);
+  font-size: var(--t-small);
+}
+.sk-line:last-child { border-bottom: 0; }
+.sk-line .nm { min-width: 0; font-weight: 600; color: var(--navy-900); }
+.sk-line .nm .mono { display: block; font-size: var(--t-micro); font-weight: 400; color: var(--ink-4); word-break: break-all; }
+.sk-line .qty { color: var(--ink-2); font-weight: 600; }
+.sk-line .each { font-size: var(--t-micro); color: var(--ink-3); white-space: nowrap; }
+.sk-line .each s { color: var(--ink-4); margin-right: 6px; }
+.sk-line .amt { font-weight: 700; color: var(--navy-900); white-space: nowrap; }
+.sk-total {
+  display: flex; align-items: baseline; gap: var(--s3); justify-content: flex-end;
+  margin-top: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--line-2);
+}
+.sk-total .lbl { font-size: var(--t-micro); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.sk-total .amt { font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); letter-spacing: -.01em; }
+
+/* A movement or an expense: one row, the thing, what changes. */
+.sk-change { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: var(--s3); align-items: center; margin-top: var(--s3); }
+.sk-change .sk-thumb { width: 36px; height: 36px; border-radius: 10px; }
+.sk-change-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sk-change-main b { color: var(--navy-900); font-size: var(--t-h3); }
+.sk-change-main span { font-size: var(--t-small); color: var(--ink-3); }
+.sk-change-main .mono { font-size: var(--t-micro); color: var(--ink-4); }
+.sk-delta { font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); white-space: nowrap; letter-spacing: -.01em; }
+.sk-delta.in { color: var(--accent-700); }
+
+.sk-act { margin-top: var(--s4); }
+.sk-done {
+  margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--accent-100);
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.sk-done p { font-size: var(--t-small); line-height: 1.6; color: var(--ink-2); margin: 0; }
+.sk-done b { color: var(--accent-700); }
+.sk-done .btn-row { align-items: center; }
+.sk-done .hint { margin: 0; }
+.sk-undo { margin-left: auto; }
+.sk-undone { margin-top: var(--s3); font-size: var(--t-small); color: var(--ink-3); }
+.sk-undone b { color: var(--ink-2); }
+.sk-foot { margin-top: var(--s3); font-size: var(--t-micro); color: var(--ink-4); line-height: 1.6; overflow-wrap: anywhere; }
+.sk-left { margin-top: var(--s3); font-size: var(--t-small); color: var(--ink-3); }
+.sk-action .verdict { margin-top: var(--s3); }
+
+/* -------------------------------------------------------------- thumbs --- */
+.sk-thumb {
+  flex: none; width: 30px; height: 30px; border-radius: 8px; overflow: hidden;
+  background: var(--surface-3); border: 1px solid var(--line);
+  display: grid; place-items: center;
+  font: 700 13px/1 var(--font); color: var(--accent-700);
+}
+.sk-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ------------------------------------------------------- the fact cards -- */
+/* Sellers as bars: units decide the length, revenue rides beside. The fill is
+   the machine's blue; the track is its faintest tint. */
+.sk-sellers { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s3); }
+.sk-sellers-h { font-size: var(--t-micro); font-weight: 800; letter-spacing: .10em; text-transform: uppercase; color: var(--ink-4); }
+.sk-seller {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) minmax(60px, 1.2fr) auto;
+  align-items: center; gap: var(--s2); font-size: var(--t-small);
+}
+.sk-seller .sk-thumb { width: 26px; height: 26px; border-radius: 7px; }
+.sk-seller .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
+.sk-seller .bar, .sk-margin-row .bar { display: block; height: 8px; border-radius: 4px; background: var(--accent-050); overflow: hidden; position: relative; }
+.sk-seller .bar i, .sk-margin-row .bar i { position: absolute; left: 0; top: 0; height: 100%; border-radius: 4px; display: block; background: var(--accent-grad); transition: width 600ms var(--ease); }
+.sk-seller .tnum { color: var(--navy-900); font-weight: 700; white-space: nowrap; }
+.sk-seller small, .sk-margin-row small { font-weight: 500; color: var(--ink-4); }
+
+/* Margin rows: what a product took (faint), and what it KEPT (blue) drawn
+   over it. A product with no cost on file has no second bar and says so —
+   the counter abstained, and the word is there rather than a zero. */
+.sk-margin-rows { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }
+.sk-margin-row {
+  display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(60px, 1fr) auto;
+  align-items: center; gap: var(--s2); font-size: var(--t-small);
+}
+.sk-margin-row .sk-thumb { width: 26px; height: 26px; border-radius: 7px; }
+.sk-margin-row .nm { min-width: 0; font-weight: 600; color: var(--ink); display: flex; flex-direction: column; gap: 1px; }
+.sk-margin-row .nm .st { font-size: var(--t-micro); font-weight: 400; color: var(--ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sk-margin-row .bar i.took { background: var(--accent-100); }
+.sk-margin-row .bar i.kept { background: var(--accent-grad); }
+.sk-margin-row .bar i.below { background: var(--ink-4); }
+.sk-margin-row .tnum { color: var(--navy-900); font-weight: 700; white-space: nowrap; }
+.sk-margin-row .tnum.unknown { color: var(--ink-4); font-weight: 500; font-size: var(--t-micro); }
+
+/* Low stock as a list with the product's own photograph beside it. Plain ink
+   throughout: "none left" is a fact, and amber means the counter abstained. */
+.sk-low { display: flex; flex-direction: column; }
+.sk-low-row {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) 0; border-bottom: 1px solid var(--line); font-size: var(--t-small);
+}
+.sk-low-row:last-child { border-bottom: 0; }
+.sk-low-row .nm { min-width: 0; font-weight: 600; color: var(--ink); display: flex; flex-direction: column; gap: 1px; }
+.sk-low-row .nm .st { font-size: var(--t-micro); font-weight: 400; color: var(--ink-4); }
+.sk-left-n { font-weight: 700; color: var(--navy-900); white-space: nowrap; }
+.sk-left-n.none { color: var(--ink); }
+
+/* The pulse's top-sellers tile, as bars with thumbs.
+
+   TWO LINES PER PRODUCT, NOT ONE. The single-line version put the name in a
+   `minmax(0, 1fr)` track between a 22px thumb and a 56px bar; in this tile —
+   one of four columns inside a 628px panel, so 133px wide — the fixed tracks
+   and the gaps came to more than the content box, the 1fr collapsed to 0px,
+   and every product rendered as its first letter under an ellipsis. Measured
+   at 1440 before the fix: name track 0px and 1px wide, `scrollWidth`
+   108/153/180px. After: 169px and 176px, `scrollWidth` equal to it.
+
+   Now the name owns the first line with the units beside it, and the bar
+   spans the whole second line. The name WRAPS instead of clipping: a
+   shopkeeper reading "Aashirvaad Whole Wheat…" has to guess which pack, and
+   guessing is the thing this product refuses. */
+.q-bars { display: flex; flex-direction: column; gap: 8px; margin-top: 5px; }
+.q-bar-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px; row-gap: 4px;
+  font-size: var(--t-micro);
+}
+.q-bar-row .sk-thumb { grid-column: 1; grid-row: 1 / 3; width: 26px; height: 26px; border-radius: 7px; font-size: 11px; }
+.q-bar-nm {
+  grid-column: 2; grid-row: 1;
+  color: var(--ink-2); font-weight: 600; font-size: var(--t-small); line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.q-bar-n { grid-column: 3; grid-row: 1; color: var(--ink-4); font-weight: 600; white-space: nowrap; }
+.q-bar-n b { color: var(--navy-900); font-weight: 800; }
+.q-bar-track { grid-column: 2 / -1; grid-row: 2; display: block; height: 6px; border-radius: 3px; background: var(--accent-050); overflow: hidden; }
+.q-bar-track i { display: block; height: 100%; border-radius: 3px; background: var(--accent-grad); }
+
+/* ------------------------------------------------ the call, and its fold -- */
+/* ONE start/hang-up control on the page, against the tile, because the tile
+   is where she is. It replaced two: this one and a second in the pulse's
+   header. The line beside it says where the microphone went — into the
+   composer, with the language, where a person acts. */
+.sk-callbar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+}
+.sk-callbtn { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.sk-callbtn svg { width: 16px; height: 16px; }
+.sk-callbar-l { font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5; min-width: 0; flex: 1 1 12ch; }
+
+/* The folded settings. `.adv-how` gives the frame; these two rules put the
+   switch and the word that says what it costs on one line each, and left-align
+   the voice sentence that used to be centred under the presenter. */
+.sk-settings { display: flex; flex-wrap: wrap; gap: var(--s4) var(--s5); }
+/* The word under the control, not beside it: "a sentence leaves, once" is
+   four words and it wrapped into a column next to the segmented control at
+   every width the fold is drawn at. */
+.sk-setting { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.sk-setting > .l {
+  font-size: var(--t-micro); color: var(--ink-4);
+  letter-spacing: var(--tr-caps); text-transform: uppercase; font-weight: 700;
+}
+.adv-voice.sk-note { text-align: left; padding: 0; margin-top: var(--s3); }
+
+/* One card left in the rail, so it must not stretch to the full page. */
+.sk-page .adv-rail.one { display: block; max-width: 640px; }
+
+@media (max-width: 560px) {
+  /* The line reads as a caption under the button rather than a column of two
+     words beside it. */
+  .sk-callbar { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .sk-callbtn { justify-content: center; }
+  .sk-callbar-l { flex: none; }
+}
+
+/* THE PULSE IS NOT A SCROLLER. The thread is capped so a long TRANSCRIPT
+   scrolls inside the card instead of running the page away; but the empty
+   state is the shop's own figures, a fixed and finite thing, and the cap was
+   hiding it. Measured at 390 before this rule: the whole top-sellers tile and
+   the whole expiring tile were below a 58vh fold inside the card, on a page
+   that scrolls anyway — the shop's best screen, invisible. At 1440 it clipped
+   the suggestion chips in half. The cap still applies the moment there is a
+   transcript, which is the case it was written for. */
+.sk-page .adv-thread.empty { max-height: none; }
+
+/* ------------------------------------------------------------ the modal -- */
+/* Glass, at the bottom-right where the button was, so it reads as the button
+   opening rather than a dialog arriving from nowhere. A sheet on a phone. */
+.sk-scrim {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: flex; align-items: flex-end; justify-content: flex-end;
+  padding: 18px;
+  background: rgba(var(--navy-rgb), .30);
+  -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
+  animation: sk-scrim-in var(--fast) var(--ease) both;
+}
+@keyframes sk-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+.sk-panel {
+  display: flex; flex-direction: column; min-height: 0;
+  width: min(470px, 100%);
+  max-height: min(calc(100vh - 36px), 780px);
+  background: var(--glass-thick);
+  border: 1px solid var(--glass-line); border-radius: var(--r-xl);
+  box-shadow: var(--shadow-4), var(--glass-edge), 0 0 0 1px var(--line);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  animation: sk-panel-in var(--med) var(--ease-out) both;
+  transform-origin: 92% 100%;
+  overflow: hidden;
+  outline: none;
+}
+@keyframes sk-panel-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+
+.sk-panel-head {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s3) var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.sk-panel-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sk-panel-title b { font-size: var(--t-body); color: var(--navy-900); letter-spacing: -.01em; }
+.sk-panel-title span { font-size: var(--t-micro); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sk-panel-full { flex: none; font: 700 var(--t-micro)/1 var(--font); letter-spacing: .06em; text-transform: uppercase; color: var(--accent-700); text-decoration: none; padding: 6px 8px; border-radius: 999px; }
+.sk-panel-full:hover { background: var(--accent-050); }
+
+/* THE TILE AT MODAL SIZE. A letterbox rather than 4:3, so the transcript has
+   the height; the face sits in the middle third of the plate and a 16:7 crop
+   holds it from brow to chin. */
+/* 16:9, not 16:7 — measured at 16:7 the crop took the brow off and put the
+   name on the hair. */
+.adv-tile.dock { aspect-ratio: 16 / 9; min-height: 170px; border-radius: 0; box-shadow: none; flex: none; }
+.adv-tile.dock .adv-tile-top { top: var(--s3); left: var(--s3); right: var(--s3); }
+.adv-tile.dock .adv-tile-name b { font-size: var(--t-body); }
+.adv-tile.dock .adv-tile-name span { display: none; }
+.adv-tile.dock .adv-state { padding: 3px 8px; font-size: 10px; }
+.adv-tile.dock .adv-wave { top: 40px; right: 12px; height: 20px; gap: 2px; }
+.adv-tile.dock .adv-synth { font-size: 9px; padding: 2px 7px; }
+.adv-tile.dock .adv-ornament { -webkit-mask-size: 100% 2px, 0 0; mask-size: 100% 2px, 0 0; }
+.adv-tile.dock .adv-timer { font-size: var(--t-micro); }
+.adv-tile.dock .adv-cap { font-size: var(--t-small); bottom: calc(var(--s3) + 22px); max-height: calc(1.4em + 2 * 1.55em); }
+.adv-tile.dock[data-state="speaking"] { box-shadow: inset 0 -2px 0 rgba(228, 163, 64, calc(.35 + var(--amp) * .55)); }
+.adv-tile.dock[data-state="listening"] { box-shadow: inset 0 -2px 0 rgba(43, 132, 234, .7); animation: none; }
+
+/* THE TRANSCRIPT AT MODAL SIZE. It takes the height the panel has left and
+   scrolls inside itself, so the composer never leaves the bottom edge. */
+.adv-thread.dock { flex: 1 1 auto; min-height: 180px; max-height: none; padding: var(--s3); gap: var(--s3); background: var(--surface-2); }
+.adv-thread.dock .adv-said { max-width: 92%; }
+.adv-thread.dock .adv-said p { font-size: var(--t-body); }
+.adv-thread.dock .adv-reply { padding: var(--s3); }
+.adv-thread.dock .adv-spoken { font-size: var(--t-body); }
+.adv-thread.dock .adv-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.adv-thread.dock .adv-mark { width: 24px; height: 24px; }
+.adv-thread.dock .adv-mark::before { width: 10px; height: 10px; }
+.adv-thread.dock .adv-foot { gap: 4px; }
+.adv-thread.dock .sk-line { grid-template-columns: 30px minmax(0, 1fr) auto auto; }
+.adv-thread.dock .sk-line .each { display: none; }
+
+.sk-cold { padding: var(--s4) var(--s2); text-align: center; }
+.sk-cold-p { font-size: var(--t-small); color: var(--ink-3); line-height: 1.6; margin: 0 auto var(--s3); max-width: 42ch; }
+.sk-cold-p b { color: var(--navy-900); }
+.sk-cold .adv-chips { justify-content: center; }
+
+.sk-mic-err { margin: 0 var(--s3); padding: var(--s2) var(--s3); font-size: var(--t-micro); color: var(--ink-2); background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: var(--r-sm); }
+
+.sk-panel-foot {
+  flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0; padding: 0 var(--s4) var(--s3);
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5;
+}
+.sk-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-3); flex: none; }
+.sk-dot[data-state="idle"] { background: var(--accent-400); }
+.sk-dot[data-state="listening"], .sk-dot[data-state="thinking"] { background: var(--accent-500); animation: adv-blink 1.4s var(--ease) infinite; }
+.sk-dot[data-state="speaking"] { background: #E4A340; animation: adv-blink 1.1s var(--ease) infinite; }
+.sk-hang { margin-left: auto; appearance: none; border: 1px solid var(--line-2); background: var(--surface); border-radius: 999px; padding: 3px 9px; font: 700 10px/1 var(--font); letter-spacing: .06em; color: var(--ink-3); cursor: pointer; }
+.sk-hang:hover { border-color: var(--accent-400); color: var(--accent-700); }
+
+@media (max-width: 560px) {
+  .sk-scrim { padding: 0; }
+  .sk-panel {
+    width: 100%; max-height: 92vh;
+    border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    transform-origin: 50% 100%;
+  }
+  .adv-tile.dock { aspect-ratio: 16 / 9; min-height: 160px; }
+  .adv-thread.dock { min-height: 160px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sk-scrim, .sk-panel { animation: none; }
+  .sk-mic.on, .sk-dot { animation: none; }
+  .sk-seller .bar i, .sk-margin-row .bar i { transition: none; }
+}
