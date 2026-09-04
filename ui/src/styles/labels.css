@@ -1,0 +1,310 @@
+/* ===========================================================================
+   GAWAAH — the Labels screen (routes/Labels.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `lb-` so it cannot reach
+   into the till's classes in app.css or any other screen's sheet.
+
+   WHAT IS NOT HERE. The cards, buttons, inputs, radio rows, stats, skeletons,
+   empty states and refusals are the shared layer in components/ui.tsx and
+   app.css. This sheet holds only what the screen genuinely has of its own: the
+   product picker's checkbox and copy count, the sticker preview drawn to the
+   layout's millimetres, and the two-column arrangement.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css, referenced by
+   name. The palette is being rebuilt; nothing here assumes what a token holds.
+
+   COLOUR DISCIPLINE. Green, amber and red are money and recognition state. A
+   sticker sheet is neither, so this screen uses ink and the accent only. The
+   one exception is the witness chain: a chain that does not verify is red,
+   exactly as the Stock and Books screens treat it.
+   =========================================================================== */
+
+.lb-page { display: flex; flex-direction: column; gap: var(--s5); }
+.lb-page > .page-head { margin-bottom: 0; }
+
+/* Products on the left, the sheet and the talker on the right. The picker is
+   the wide one: a name, a price and a count need the room. */
+.lb-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.9fr);
+  gap: var(--s5);
+  align-items: start;
+}
+.lb-col { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+@media (max-width: 980px) {
+  .lb-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* --------------------------------------------------------------- picker -- */
+
+.lb-tools { margin-bottom: var(--s4); }
+.lb-tools .inp { max-width: 260px; }
+
+/* A bare checkbox. The shared `.opt.check` row is a whole bordered row and is
+   the wrong shape inside a table cell.
+
+   THE COMMENT HERE USED TO SAY "sized for a thumb". IT WAS NOT. Measured at
+   390x844 with touch on, this box is 20x20 — the smallest control on #/labels
+   and, since it is the checkbox that decides whether a product gets a sticker,
+   the one the screen exists to operate. Thirty-six of them down the list, each
+   12px short on both axes.
+
+   THE VISUAL BOX STAYS 20px, THE CONTROL BECOMES 36x44. A 32px ink square
+   beside a 13px product name would read as the loudest thing in the row, and
+   the row is about the product, not the tick. So the INPUT is the hit area and
+   the 20px box the eye sees is drawn on ::before.
+
+   THE OBVIOUS VERSION OF THIS FIX IS UNMEASURABLE, which is why it is not the
+   one here. Leaving the input 20x20 and hanging a big transparent
+   `position: absolute` ::before off it does make the target tappable — a
+   pseudo-element hit-tests as its originating element — but
+   `getBoundingClientRect()` still returns 20x20, so every audit of this screen
+   goes on reporting 36 controls under the floor and no one can tell the fix
+   from the bug. Growing the input itself means the number moves.
+
+   36 WIDE IS THE COLUMN, NOT A ROUND NUMBER: the `td` measured 36x177, so a
+   wider control would reach under the product name and swallow taps meant for
+   it. 44 tall is free — the row is 177px.
+
+   Both pseudos sit in `grid-area: 1 / 1` so they stack on one another and
+   `place-items: center` centres them; ::before paints the box, ::after the
+   tick over it. The input's own border and background are gone, which is why
+   :checked and :focus-visible now dress ::before instead of the input. */
+.lb-check {
+  appearance: none;
+  width: 36px; height: 44px; margin: 0; padding: 0;
+  border: 0; background: none;
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.lb-check::before {
+  content: '';
+  grid-area: 1 / 1;
+  width: 20px; height: 20px;
+  border: 1.5px solid var(--line-3);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.lb-check::after {
+  content: '';
+  grid-area: 1 / 1;
+  width: 10px; height: 6px;
+  border-left: 2px solid var(--surface);
+  border-bottom: 2px solid var(--surface);
+  transform: rotate(-45deg) scale(0);
+  margin-top: -2px;
+  transition: transform var(--fast) var(--ease-out);
+}
+.lb-check:checked::before { border-color: var(--blue-500); background: var(--blue-500); }
+.lb-check:checked::after { transform: rotate(-45deg) scale(1); }
+.lb-check:focus-visible { outline: none; }
+.lb-check:focus-visible::before { box-shadow: var(--ring); }
+
+.lb-name { font-weight: 600; color: var(--ink); }
+.lb-sku {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  margin-top: 2px;
+  /* Break only when a sku is wider than its cell, never mid-word for fun:
+     "hz_agarba / tti" on a phone read as two ids. */
+  overflow-wrap: anywhere;
+}
+
+/* What the sticker will say, beside what the till charges today when the two
+   differ. Ink only: an offer is the Offers screen's business. */
+.lb-price { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lb-charged {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Copies. Wide enough for three digits, and disabled until the row is ticked
+   so an untouched count cannot be mistaken for a chosen one. */
+.lb-copies {
+  width: 64px;
+  min-height: var(--ctl-h-sm);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.lb-copies:disabled { opacity: .45; }
+
+/* The picker's rows are dimmed, not hidden, when they are unticked. Hiding
+   would leave the shopkeeper unable to find the product they left out. */
+.lb-off td { color: var(--ink-3); }
+.lb-off .lb-name { color: var(--ink-3); font-weight: 500; }
+
+/* On a phone the name column is the one that has to give, so the count and
+   the price take no more than they need. */
+@media (max-width: 560px) {
+  .lb-copies { width: 52px; }
+  .lb-page .tbl td, .lb-page .tbl th { padding-left: var(--s2); padding-right: var(--s2); }
+}
+
+/* ---------------------------------------------------------------- sheet -- */
+
+.lb-layouts .opts { gap: var(--s2); }
+.lb-layouts .opt .opt-text .s { font-variant-numeric: tabular-nums; }
+
+.lb-skip { display: flex; align-items: center; gap: var(--s3); }
+.lb-skip .inp { width: 88px; text-align: center; }
+
+.lb-plan { display: flex; flex-direction: column; gap: var(--s4); }
+.lb-plan .statgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); }
+.lb-plan .stat { padding: var(--s3); }
+@media (max-width: 420px) {
+  .lb-plan .statgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------------------------------------------------------------------------
+   THE SHEET MAP — a scale drawing of the A4 sticker sheet, and 65 tap targets.
+   ---------------------------------------------------------------------------
+   Every cell is placed in MILLIMETRES, as a percentage of the real page, so
+   the drawing is to scale and the shopkeeper can match it against the sheet in
+   their hand. That is why no cell may be resized on its own: a cell given a
+   `min-height` stops being where the sticker is, and the picture starts lying
+   about the paper.
+
+   THE ONLY LEVER IS THE WHOLE MAP. Measured at 390x844 with touch: the map was
+   316x446.9 and each of the 65 cells was 57x31.8 — 0.2px under the 32 floor,
+   the most irritating way to miss it. The map was already at its limit: its
+   parent measured 316 too, so `maxWidth: 316` had no room left to give.
+
+   SO THE MAP BREAKS OUT OF THE CARD'S PADDING ON A PHONE. `.card-body` carries
+   20px each side (measured: body 356 wide inside a 358 card, content box 316).
+   Pulling -20px each way hands the drawing the card's full width, 356, and
+   every cell scales with it: 57x31.8 -> 64.2x35.8. Nothing is resized against
+   anything else, so the sheet is still exactly to scale — it is simply drawn
+   bigger, which on a phone is also the more legible picture.
+
+   `width: auto` matters. With `width: 100%` the box would resolve to the
+   parent's 316 content box and the negative margins would merely shift it
+   left, off the card. Auto lets the block fill parent + 40. */
+.lb-sheet { width: 100%; max-width: 316px; margin: 0 auto; }
+
+/* A TOUCH TABLET IS NOT A PHONE AND NOT A MOUSE. Above 560 the full-bleed
+   below does not apply, so a coarse pointer at 800px was still getting 57x31.8
+   cells. This is the `(pointer: coarse)` half of the convention app.css sets
+   out at THE THUMB FLOOR: a tap target is a property of the input device, not
+   of the window.
+
+   IT TAKES THE FULL-BLEED TOO, NOT JUST A BIGGER max-width. The first version
+   of this rule was `max-width: 340px` alone, with a comment claiming a tablet
+   "does not need the full-bleed — there is plenty of room". Measured, that was
+   wrong at exactly one width and it is the interesting one: at 1024 this
+   screen goes two-column, `.lb-col` narrows, and the map's PARENT is 278px —
+   so max-width is not what is binding and the cells were 50.1x27.9, worse than
+   on the phone. Raising a cap does nothing when the cap is not the constraint.
+   The negative margins are, because they buy the card's 20px of padding back
+   on both sides wherever the parent has been squeezed: 278 + 40 = 318, and the
+   cell goes to 57.3x32.0. That is the tightest width in the product and it
+   lands exactly on the floor — worth knowing before anyone narrows this column
+   again. Everywhere else a coarse pointer gets the 360 cap and a 64.9x36.2
+   cell.
+
+   THE ONE WIDTH STILL UNDER THE FLOOR IS 320: the map is already full-bleed at
+   286 and the cell is 51.5x28.7. A to-scale A4 drawing cannot do better in
+   286px without ceasing to be to scale, and the labelled "Start at cell" field
+   below is the full-size way to do the same job, so it is left honest and
+   small rather than made bigger and wrong. */
+@media (pointer: coarse) {
+  .lb-sheet { width: auto; max-width: 360px; margin-inline: -20px; }
+}
+
+/* The phone. Declared last so it wins over the tablet rule above at widths
+   where both match. Measured across 320-560: `.card-body` padding is 20px at
+   every one of them, nothing overflows, and the map stays inside the card. */
+@media (max-width: 560px) {
+  .lb-sheet { width: auto; max-width: none; margin-inline: -20px; }
+}
+
+.lb-actions { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
+.lb-actions .btn { min-width: 150px; }
+
+/* Why a button is off. Under the row, not squeezed into it: a sentence sharing
+   a flex line with two 150 px buttons wraps to three words a line at 390. */
+.lb-why {
+  margin-top: calc(var(--s3) * -1 + var(--s2));
+  font-size: var(--t-micro);
+  line-height: 1.6;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+
+/* A figure that is being fetched rather than one that is missing. Blue: the
+   machine's own colour, and money and recognition keep green, amber and red. */
+.lb-working {
+  display: flex; align-items: center; gap: var(--s2);
+  font-size: var(--t-micro);
+  color: var(--blue-700);
+}
+
+.lb-note {
+  font-size: var(--t-micro);
+  line-height: 1.6;
+  color: var(--ink-3);
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+}
+
+/* -------------------------------------------------------------- preview -- */
+
+/* One sticker, drawn to the layout's millimetres at a fixed scale, so the
+   shopkeeper sees the proportions before spending a sheet. The scale is a
+   custom property the route sets; the geometry is the server's. It is a
+   preview of layout, not of print: the screen is not a printer. */
+.lb-preview-wrap {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s4);
+  background: var(--surface-3);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+}
+.lb-preview {
+  --lb-scale: 3.2px;
+  position: relative;
+  width: calc(var(--lb-w) * var(--lb-scale));
+  height: calc(var(--lb-h) * var(--lb-scale));
+  padding: calc(var(--lb-pad) * var(--lb-scale));
+  gap: calc(var(--lb-pad) * var(--lb-scale));
+  display: flex; align-items: center;
+  background: var(--surface);
+  color: var(--navy-900);
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  flex: none;
+}
+.lb-preview.cut { border-style: dashed; }
+.lb-preview img {
+  width: calc(var(--lb-qr) * var(--lb-scale));
+  height: calc(var(--lb-qr) * var(--lb-scale));
+  flex: none;
+  display: block;
+  image-rendering: pixelated;
+}
+.lb-preview .t { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.lb-preview .n {
+  font-weight: 600; line-height: 1.15;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.lb-preview .p { font-weight: 800; line-height: 1.05; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lb-preview .k { font-family: var(--mono); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-preview-cap { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+/* --------------------------------------------------------------- talker -- */
+
+.lb-talker { display: flex; flex-direction: column; gap: var(--s4); }
+.lb-talker .field { margin-bottom: 0; }
+.lb-talker .seg { width: 100%; }
+.lb-talker .seg button { flex: 1; }
+
+/* -------------------------------------------------------------- witness -- */
+
+/* A file path, ranged left. Semibold belongs to figures, not to a path. */
+.lb-health .kv > span { font-size: var(--t-small); word-break: break-all; text-align: left; font-weight: 500; }
