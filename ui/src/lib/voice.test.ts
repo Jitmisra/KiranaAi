@@ -387,7 +387,7 @@ describe('the microphone, degrading honestly', () => {
  * ==================================================================== */
 
 import {
-  classifyUtterance, pickVoice, saidRupees, countWord, spokenName, confirmation,
+  classifyUtterance, pickVoice, voiceGenderRank, saidRupees, countWord, spokenName, confirmation,
   readProposal, tellSalaahkaar, SALAAHKAAR_PATHS, type BillProposal,
 } from './voice';
 
@@ -727,5 +727,59 @@ describe('picking a voice', () => {
 
   it('says so when there is nothing to speak with', () => {
     expect(pickVoice([], 'hi-IN')).toMatchObject({ voice: null, matched: false });
+  });
+});
+
+/* ==========================================================================
+ * The fallback voice's gender
+ *
+ * When the provider 429s, this picker is what the shopkeeper hears. Salaahkaar
+ * is drawn as a woman, so the tier that answers must not open with Rishi.
+ * ======================================================================== */
+
+function v(name: string, lang: string, isDefault = false): SpeechSynthesisVoice {
+  return { name, lang, default: isDefault, localService: true,
+           voiceURI: name } as SpeechSynthesisVoice;
+}
+
+describe('pickVoice prefers a woman inside the tier it lands on', () => {
+  it('takes Veena over Rishi when both are en-IN', () => {
+    const chosen = pickVoice([v('Rishi', 'en-IN'), v('Veena', 'en-IN')], 'en-IN');
+    expect(chosen.voice?.name).toBe('Veena');
+    expect(chosen.matched).toBe(true);
+  });
+
+  it('takes Lekha over Hemant for hi-IN', () => {
+    const chosen = pickVoice([v('Hemant', 'hi-IN'), v('Lekha', 'hi-IN')], 'hi-IN');
+    expect(chosen.voice?.name).toBe('Lekha');
+  });
+
+  it('does not reach past its tier to find her', () => {
+    // An exact hi-IN match, even a man's, beats a woman in another language:
+    // the language is the stronger claim and mispronunciation is worse.
+    const chosen = pickVoice([v('Veena', 'en-IN'), v('Hemant', 'hi-IN')], 'hi-IN');
+    expect(chosen.voice?.name).toBe('Hemant');
+  });
+
+  it('keeps the browser order when it knows neither name', () => {
+    const chosen = pickVoice([v('Aarav', 'en-IN'), v('Bhavna', 'en-IN')], 'en-IN');
+    expect(chosen.voice?.name).toBe('Aarav');
+  });
+
+  it('ranks an unknown name above a man', () => {
+    const chosen = pickVoice([v('Ravi', 'en-IN'), v('Aarav', 'en-IN')], 'en-IN');
+    expect(chosen.voice?.name).toBe('Aarav');
+  });
+
+  it('reads "female" in a name without matching "male" inside it', () => {
+    expect(voiceGenderRank('Google UK English Female')).toBe(-1);
+    expect(voiceGenderRank('Google UK English Male')).toBe(1);
+    expect(voiceGenderRank('Rishi')).toBe(1);
+    expect(voiceGenderRank('Veena')).toBe(-1);
+    expect(voiceGenderRank('Aarav')).toBe(0);
+  });
+
+  it('still says nothing is installed when the list is empty', () => {
+    expect(pickVoice([], 'hi-IN').voice).toBeNull();
   });
 });

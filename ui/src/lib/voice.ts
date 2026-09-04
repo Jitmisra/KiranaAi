@@ -1088,10 +1088,50 @@ export interface VoiceChoice {
   matched: boolean;
 }
 
+/** Voices these platforms ship that are women. Lowercased substring matches:
+    macOS (Veena, Lekha), Windows (Heera, Kalpana, Swara, Zira, Hazel), and
+    Chrome's own bundled voices, which label the gender in the name. */
+const FEMALE_VOICES = [
+  'veena', 'lekha', 'heera', 'kalpana', 'swara', 'zira', 'hazel', 'samantha',
+  'karen', 'moira', 'tessa', 'fiona', 'ava', 'allison', 'susan', 'victoria',
+  'alice', 'nicky', 'zoe', 'female',
+];
+/** And the ones that are men, so an `en-IN` tier does not open with Rishi. */
+const MALE_VOICES = [
+  'rishi', 'ravi', 'hemant', 'madhur', 'prabhat', 'daniel', 'alex', 'fred',
+  'gordon', 'oliver', 'thomas', 'david', 'mark', 'george', 'male',
+];
+
+/** -1 a woman, 0 unknown, 1 a man. 'female' is tested before 'male' because
+    the string "female" contains "male". */
+export function voiceGenderRank(name: string): -1 | 0 | 1 {
+  const n = name.toLowerCase();
+  if (FEMALE_VOICES.some((f) => n.includes(f))) return -1;
+  if (MALE_VOICES.some((m) => n.includes(m))) return 1;
+  return 0;
+}
+
+/** The best of a tier: a woman's voice if the tier holds one, else the first.
+    Stable — equal ranks keep the browser's own order. */
+function preferHer(
+  matches: ReadonlyArray<SpeechSynthesisVoice>,
+): SpeechSynthesisVoice | undefined {
+  if (matches.length < 2) return matches[0];
+  return [...matches].sort((a, b) => voiceGenderRank(a.name) - voiceGenderRank(b.name))[0];
+}
 /**
  * Pick a voice for `lang`, best first: the exact tag, then the same language
  * in any region, then an Indian-English voice, then any English, then the
  * browser's default. PURE, so the decision can be read without a browser.
+ *
+ * WITHIN EACH TIER, A WOMAN'S VOICE WINS. Salaahkaar is drawn as a woman and
+ * introduced as one; when the provider's voice is unavailable — an expired key,
+ * a 429 on the quota — this fallback is what the shopkeeper actually hears, and
+ * picking the first `en-IN` voice on the machine hands them Rishi on macOS and
+ * Ravi on Windows. The presenter's face did not change, so the voice coming out
+ * of it must not either. `SpeechSynthesisVoice` carries no gender field in any
+ * shipping browser, so this is a name list; a voice on none of the lists ranks
+ * between the two, because an unknown name is not evidence of a man.
  */
 export function pickVoice(voices: ReadonlyArray<SpeechSynthesisVoice>, lang: string): VoiceChoice {
   if (voices.length === 0) {
@@ -1100,17 +1140,17 @@ export function pickVoice(voices: ReadonlyArray<SpeechSynthesisVoice>, lang: str
   const norm = (v: SpeechSynthesisVoice) => v.lang.replace('_', '-').toLowerCase();
   const want = lang.toLowerCase();
   const base = want.split('-')[0] ?? want;
-  const exact = voices.find((v) => norm(v) === want);
+  const exact = preferHer(voices.filter((v) => norm(v) === want));
   if (exact) return { voice: exact, matched: true, note: `Speaking with ${exact.name} (${exact.lang}).` };
-  const sameLang = voices.find((v) => norm(v).startsWith(`${base}-`) || norm(v) === base);
+  const sameLang = preferHer(voices.filter((v) => norm(v).startsWith(`${base}-`) || norm(v) === base));
   if (sameLang) {
     return { voice: sameLang, matched: true, note: `Speaking with ${sameLang.name} (${sameLang.lang}) — no ${lang} voice here, this is the nearest.` };
   }
-  const indianEnglish = voices.find((v) => norm(v) === 'en-in');
+  const indianEnglish = preferHer(voices.filter((v) => norm(v) === 'en-in'));
   if (indianEnglish) {
     return { voice: indianEnglish, matched: false, note: `No ${lang} voice on this browser. Speaking with ${indianEnglish.name} (en-IN) instead — Hindi words will sound English.` };
   }
-  const anyEnglish = voices.find((v) => norm(v).startsWith('en'));
+  const anyEnglish = preferHer(voices.filter((v) => norm(v).startsWith('en')));
   const fallback = anyEnglish ?? voices.find((v) => v.default) ?? voices[0] ?? null;
   return {
     voice: fallback,

@@ -1472,3 +1472,96 @@ def test_the_session_view_carries_the_liveness_fact_the_pay_screen_polls(rig):
     assert after["paid"] is False, "a refused webhook must never settle a session"
     assert after["webhooks_seen"] == 1
     assert after["last_webhook_at"] is not None
+
+
+# ===========================================================================
+# A BILL THE COUNTER RECOGNISED BY LOOKING
+#
+# 34 of the 36 products in a seeded shop carry no printed label. For the whole
+# life of `rerun_scan` such a line had no payload to re-resolve, missed the
+# binding table and fell into `amber` — so every appearance-only bill refused
+# with `amber_in_basket` and the till could not take money for anything it had
+# recognised by camera. These hold the branch that fixed it, including the two
+# ways it must still refuse.
+# ===========================================================================
+
+def _appearance_witness(tmp_path, *, sku="ponds", paise=30000,
+                        top1_bp=6439, phi_bp=6000):
+    import datetime as _dt
+    scans = tmp_path / "scans"
+    scans.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "scan_id": "scn_look0000000000000001",
+        "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "frame_px": [419, 315],
+        "codes_found": 0,
+        "lines": [{"id": 0, "code": "", "named_by": "appearance",
+                   "sku_id": sku, "name": sku, "price_paise": paise,
+                   "top1_bp": top1_bp, "phi_bp": phi_bp,
+                   "reason": "recognised_by_appearance"}],
+        "witnessed_paise": paise,
+    }
+    (scans / f"{doc['scan_id']}.json").write_text(json.dumps(doc))
+    return doc
+
+
+def test_a_product_named_by_appearance_is_repriced_and_agrees(tmp_path, monkeypatch):
+    doc = _appearance_witness(tmp_path)
+    monkeypatch.setenv("GAWAAH_SCAN_DIR", str(tmp_path / "scans"))
+    book = paisa.DictPriceBook({"ponds": 30000})
+    req = paisa.IntentRequest(session_id="s_look_1", amount_paise=30000,
+                              scan=paisa.ScanRef(scan_id=doc["scan_id"]))
+    v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
+    assert v.agrees, (v.reason, v.detail)
+    # The PRICE is paisa's own, not the till's figure.
+    assert v.server_total_paise == 30000
+    assert v.server_lines == ("ponds",)
+    assert v.amber_items == ()
+
+
+def test_the_price_comes_from_paisa_not_from_the_witness(tmp_path, monkeypatch):
+    """A till that recorded the wrong price does not get to keep it."""
+    doc = _appearance_witness(tmp_path, paise=999999)
+    monkeypatch.setenv("GAWAAH_SCAN_DIR", str(tmp_path / "scans"))
+    book = paisa.DictPriceBook({"ponds": 30000})
+    req = paisa.IntentRequest(session_id="s_look_2", amount_paise=999999,
+                              scan=paisa.ScanRef(scan_id=doc["scan_id"]))
+    v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
+    # paisa re-priced it at its own 30000, so the declared 999999 cannot agree.
+    assert v.server_total_paise == 30000
+
+
+def test_appearance_below_its_own_gate_is_refused(tmp_path, monkeypatch):
+    """The counter must show its working, and the working must clear the bar."""
+    doc = _appearance_witness(tmp_path, top1_bp=5900, phi_bp=6000)
+    monkeypatch.setenv("GAWAAH_SCAN_DIR", str(tmp_path / "scans"))
+    book = paisa.DictPriceBook({"ponds": 30000})
+    req = paisa.IntentRequest(session_id="s_look_3", amount_paise=30000,
+                              scan=paisa.ScanRef(scan_id=doc["scan_id"]))
+    v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
+    assert not v.agrees
+    assert v.reason == "appearance_evidence_missing"
+
+
+def test_appearance_with_no_evidence_at_all_is_refused(tmp_path, monkeypatch):
+    """A line that carries no similarity is not minted on trust."""
+    doc = _appearance_witness(tmp_path, top1_bp=None, phi_bp=None)
+    monkeypatch.setenv("GAWAAH_SCAN_DIR", str(tmp_path / "scans"))
+    book = paisa.DictPriceBook({"ponds": 30000})
+    req = paisa.IntentRequest(session_id="s_look_4", amount_paise=30000,
+                              scan=paisa.ScanRef(scan_id=doc["scan_id"]))
+    v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
+    assert not v.agrees
+    assert v.reason == "appearance_evidence_missing"
+
+
+def test_an_appearance_sku_paisa_cannot_price_is_still_amber(tmp_path, monkeypatch):
+    """The short-by-silence rule survives the new path."""
+    doc = _appearance_witness(tmp_path, sku="never_taught_here")
+    monkeypatch.setenv("GAWAAH_SCAN_DIR", str(tmp_path / "scans"))
+    book = paisa.DictPriceBook({"ponds": 30000})
+    req = paisa.IntentRequest(session_id="s_look_5", amount_paise=30000,
+                              scan=paisa.ScanRef(scan_id=doc["scan_id"]))
+    v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
+    assert not v.agrees
+    assert v.reason == "amber_in_basket"

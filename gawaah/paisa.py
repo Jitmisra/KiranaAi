@@ -945,6 +945,11 @@ def rerun_scan(req: "IntentRequest", price_book: "PriceBook",
     An AMBER line — a code that decoded but resolves to nothing priced — does
     not silently drop out of the total. It BLOCKS the mint, because a bill that
     is short by silence is the worst thing this program can produce.
+
+    A line the counter named BY APPEARANCE carries no payload to re-resolve, so
+    it is re-priced by sku through paisa's own book and its recorded evidence is
+    checked against the gate the counter applied. See the branch below, which
+    says plainly what that does and does not prove.
     """
     scan = req.scan
     assert scan is not None                      # caller checks; this is the shape
@@ -985,6 +990,62 @@ def rerun_scan(req: "IntentRequest", price_book: "PriceBook",
     for ln in lines:
         payload = str((ln or {}).get("code") or "")
         claimed = (ln or {}).get("sku_id")
+        named_by = str((ln or {}).get("named_by") or ("code" if payload else ""))
+
+        if named_by == "appearance" and not payload:
+            # A LINE THE COUNTER NAMED BY LOOKING, NOT BY READING.
+            #
+            # 34 of 36 products in a seeded shop carry no printed label, and a
+            # shopkeeper who teaches from a photograph creates more of them. For
+            # the whole life of this function such a line had no payload, missed
+            # the binding table, and fell into `amber` — so every appearance-only
+            # bill refused with `amber_in_basket` and the till could not take
+            # money for anything it recognised by camera.
+            #
+            # WHAT PAISA STILL DOES ITSELF, AND WHAT IT CANNOT.
+            # The PRICE is still paisa's alone: the sku is re-priced through its
+            # own book and the till's figure is never read. What paisa cannot do
+            # is re-derive the IDENTITY — it has no camera and no gallery, and
+            # re-running an embedder here would put the shop's catalogue inside
+            # the one process that holds gateway keys. So it checks the EVIDENCE
+            # instead: the counter recorded the similarity it measured and the
+            # gate it applied, and a line that does not clear its own stated gate
+            # is refused rather than priced. That is weaker than re-resolving a
+            # payload and it is written down here as weaker.
+            #
+            # The browser is still not an author. This witness was written
+            # server-side by the till under an id; the page sends the id.
+            sku = str(claimed) if claimed else None
+            if sku is None:
+                amber.append("?")
+                continue
+            # BASIS POINTS, AS INTEGERS. This module holds no float — the
+            # lint fails the build on one — so the counter sends the similarity
+            # it measured and the gate it applied as ints, and they are compared
+            # as ints. A missing or unreadable pair is a refusal, not a pass.
+            top1_bp = (ln or {}).get("top1_bp")
+            gate_bp = (ln or {}).get("phi_bp")
+            cleared = False
+            if isinstance(top1_bp, int) and isinstance(gate_bp, int):
+                cleared = top1_bp >= gate_bp
+            if not cleared:
+                return ScanVerdict(
+                    False, "appearance_evidence_missing",
+                    f"the counter recorded {sku!r} as recognised by appearance "
+                    f"but the similarity it measured ({top1_bp!r} bp) does not "
+                    f"clear the gate it applied ({gate_bp!r} bp). Nothing is "
+                    f"minted on a likeness the counter cannot show its working "
+                    f"for.",
+                    (), (), (), 0, 0, 0, len(lines))
+            price = book_price_paise(price_book, sku)
+            if price is None:
+                amber.append(sku)
+                continue
+            witnessed += int(price)
+            priced.append(sku)
+            names.append(sku)
+            continue
+
         sku = bindings.get(payload)
         if sku is None and isinstance(payload, str) and payload.lower().startswith("gawaah:"):
             sku = payload[len("gawaah:"):].strip() or None

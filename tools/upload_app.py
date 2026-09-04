@@ -3159,6 +3159,122 @@ def scans_dir() -> Path:
     return store_dir().parent / "scans"
 
 
+def _bp(x: Any) -> Optional[int]:
+    """A 0..1 similarity as integer basis points, or None. 0.6439 -> 6439.
+
+    The money service may hold no float, so every number that has to be
+    COMPARED there crosses the wire as an int.
+    """
+    try:
+        return int(round(float(x) * 10000))
+    except (TypeError, ValueError):
+        return None
+
+
+def _witness_lines(raw: bytes, bgr: Any) -> tuple[list[dict[str, Any]],
+                                                  list[dict[str, Any]], int,
+                                                  list[dict[str, Any]]]:
+    """The counter, read for the record: (lines, amber, witnessed_paise, unnamed).
+
+    WHAT COUNTS AS AMBER HERE, AND WHY IT IS NOT EVERYTHING UNNAMED.
+
+    A DECODED CODE that cannot be priced is amber and refuses the mint. That
+    rule does not move: a code is a measurement. Something was printed on a
+    packet, this counter read it, and it could not put a price on it — so the
+    bill is short by exactly one real product, and a bill short by silence
+    looks exactly like a complete one.
+
+    A REGION THE PROPOSER FOUND AND THE GALLERY COULD NOT NAME is a different
+    animal, and treating it as amber is what made this endpoint unusable. The
+    proposer is class-agnostic on purpose; on a real counter it returns the
+    shopkeeper's hand, their sleeve, the edge of the mat and whatever is on the
+    wall behind. Refusing every charge that has a hand in frame is not caution,
+    it is a till that cannot take money. Those regions are recorded as
+    `unnamed` — they are in the witness, they are in the audit, and the page
+    shows them — but they do not refuse on their own.
+
+    The guarantee that survives is the one that matters: `witnessed_paise` is
+    the sum of what this counter could NAME and PRICE, and the charge is
+    refused unless it equals the bill. An item the camera failed to name simply
+    is not in that sum, so it cannot pay for itself.
+    """
+    codes_found = decode_all_codes(bgr)
+    lines: list[dict[str, Any]] = []
+    amber: list[dict[str, Any]] = []
+    unnamed: list[dict[str, Any]] = []
+    witnessed = 0
+
+    try:
+        read = do_counter(raw)
+        items = read.get("items") or []
+    except UploadRefused as exc:
+        # Nothing taught yet: fall back to the codes-only reading this endpoint
+        # has always done, rather than refusing a charge outright.
+        if exc.reason != R_EMPTY_GALLERY:
+            raise
+        items = []
+        known = priced_skus()
+        for i, c in enumerate(codes_found):
+            sku = resolve_code(c["payload"])
+            rec = known.get(sku) if sku else None
+            row = {"id": i, "code": c["payload"], "format": c["format"],
+                   "box": c["box"], "read_by": c.get("read_by"),
+                   "named_by": "code"}
+            if rec is None:
+                row.update({"sku_id": None, "name": None, "price_paise": None,
+                            "reason": ("code_not_taught" if sku is None
+                                       else "code_names_a_missing_product")})
+                amber.append(row)
+            else:
+                row.update({"sku_id": rec["sku_id"], "name": rec["name"],
+                            "price_paise": int(rec["price_paise"]),
+                            "reason": "code_exact"})
+                witnessed += int(rec["price_paise"])
+            lines.append(row)
+        return lines, amber, witnessed, unnamed
+
+    for i, it in enumerate(items):
+        how = str(it.get("how") or "")
+        by_code = how == "code" or it.get("code") is not None
+        row: dict[str, Any] = {
+            "id": i,
+            "code": it.get("code") or "",
+            "box": it.get("box"),
+            "named_by": "code" if by_code else "appearance",
+            "reason": it.get("reason"),
+        }
+        if it.get("price_paise") is not None and it.get("sku_id"):
+            row.update({"sku_id": str(it["sku_id"]), "name": it.get("name"),
+                        "price_paise": int(it["price_paise"])})
+            if not by_code:
+                # The EVIDENCE, carried to the money service so it can hold the
+                # gate itself rather than take a name on trust.
+                #
+                # IN BASIS POINTS, AS INTEGERS. paisa is a strict no-float
+                # module — `tools/lint_no_float.py` fails the build on a
+                # `float()` inside it — and that rule is not worth bending for a
+                # similarity score. 0.6439 travels as 6439 and the money service
+                # compares two ints, which is also the only comparison that
+                # cannot round differently on the two sides of the wire. The
+                # decimal forms are kept beside them for the page to print.
+                row["top1"] = it.get("top1")
+                row["phi_used"] = it.get("phi_used")
+                row["top1_bp"] = _bp(it.get("top1"))
+                row["phi_bp"] = _bp(it.get("phi_used"))
+            witnessed += int(it["price_paise"])
+            lines.append(row)
+        elif by_code:
+            row.update({"sku_id": None, "name": None, "price_paise": None})
+            amber.append(row)
+            lines.append(row)
+        else:
+            row.update({"sku_id": None, "name": None, "price_paise": None,
+                        "detail": it.get("detail")})
+            unnamed.append(row)
+
+    return lines, amber, witnessed, unnamed
+
+
 @app.post("/scan", dependencies=AUTH_GUARD)
 async def scan_ep(request: Request) -> JSONResponse:
     """multipart: image -> a WITNESS this counter wrote down, under an id.
@@ -3183,29 +3299,27 @@ async def scan_ep(request: Request) -> JSONResponse:
         raw = form_image(form)
         bgr, note = decode_upload(raw)
         t0 = time.perf_counter()
-        found = decode_all_codes(bgr)
-        elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
-        known = priced_skus()
-        lines: list[dict[str, Any]] = []
-        amber: list[dict[str, Any]] = []
-        witnessed = 0
-        for i, c in enumerate(found):
-            sku = resolve_code(c["payload"])
-            rec = known.get(sku) if sku else None
-            row = {"id": i, "code": c["payload"], "format": c["format"],
-                   "box": c["box"], "read_by": c.get("read_by")}
-            if rec is None:
-                row.update({"sku_id": None, "name": None, "price_paise": None,
-                            "reason": ("code_not_taught" if sku is None
-                                       else "code_names_a_missing_product")})
-                amber.append(row)
-            else:
-                row.update({"sku_id": rec["sku_id"], "name": rec["name"],
-                            "price_paise": int(rec["price_paise"]),
-                            "reason": "code_exact"})
-                witnessed += int(rec["price_paise"])
-            lines.append(row)
+        # THE WITNESS READS THE COUNTER THE WAY THE COUNTER IS READ.
+        #
+        # This endpoint decoded printed codes and NOTHING ELSE for its whole
+        # life, while the live loop beside it named products by appearance. On
+        # a shop where 34 of 36 products carry no printed label — which is what
+        # `seed_shop.py` builds and what teaching from a photograph produces —
+        # that split meant a product could be recognised, priced and put on the
+        # bill, and then be invisible to the photograph taken to charge it:
+        # `codes_found: 0`, `witnessed_paise: 0`, `chargeable: false`, and a
+        # CHARGE button that never armed. The bug was not in the recogniser
+        # (ponds scores 0.81 against a 0.60 gate); it was that the money path
+        # never asked it.
+        #
+        # `do_counter` is the same whole-counter read the Shelf and the counter
+        # button use, and it takes codes FIRST — an identifier that was read is
+        # a measurement, an appearance match is an opinion, and where they
+        # disagree the code wins. So this is the strictly wider reading, not a
+        # different one.
+        lines, amber, witnessed, unnamed = _witness_lines(raw, bgr)
+        elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
         scan_id = "scn_" + secrets.token_hex(10)
         doc = {
@@ -3214,8 +3328,13 @@ async def scan_ep(request: Request) -> JSONResponse:
 
             "frame_px": [int(bgr.shape[1]), int(bgr.shape[0])],
             "frame_sha256": hashlib.sha256(raw).hexdigest(),
-            "codes_found": len(found),
-            "distinct_codes": len({c["payload"] for c in found}),
+            "codes_found": sum(1 for ln in lines if ln.get("named_by") == "code"),
+            "distinct_codes": len({str(ln.get("code") or "") for ln in lines
+                                   if ln.get("named_by") == "code" and ln.get("code")}),
+            # Regions the proposer found and the gallery could not name. Kept
+            # in the witness so the audit shows everything that was on the
+            # counter, NOT counted as amber — see `_witness_lines`.
+            "unnamed": unnamed,
             # EVERY decoded line, including the ones this till could not price.
             # Filing them under a separate key hid them from the money
             # service's own amber check, and a basket holding one untaught code
@@ -3233,8 +3352,8 @@ async def scan_ep(request: Request) -> JSONResponse:
         return JSONResponse({
             "ok": True, "settles_money": False, "money_note": MONEY_NOTE,
             "scan_id": scan_id,
-            "codes_found": len(found), "distinct_codes": doc["distinct_codes"],
-            "items": lines, "amber": amber,
+            "codes_found": doc["codes_found"], "distinct_codes": doc["distinct_codes"],
+            "items": lines, "amber": amber, "unnamed": unnamed,
             "counts": {# NAMED means priced. Counting every line here made `named` include the
             # amber ones, so /legacy printed "2 line(s), Rs 10.00" for a counter
             # where exactly one line had a price. The sibling do_recognise_basket
