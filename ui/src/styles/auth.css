@@ -1,0 +1,542 @@
+/* ===========================================================================
+   GAWAAH — signing in, signing up, and the account menu.
+
+   Everything here is prefixed `auth-` and everything here is new markup. That
+   is not tidiness: `app.css`, `admin.css` and the rest belong to other screens,
+   and a class this file invents must never turn out to be a class one of those
+   already has. Structure comes from the shared components in
+   `components/ui.tsx` (Card, Pill, Segmented, Verdict, Refusal); this file
+   styles only what they do not cover.
+
+   NO LITERAL COLOUR. Every value comes from `tokens.css`.
+
+   GREEN, AMBER AND RED ARE NOT USED HERE AT ALL. On this product those three
+   mean money settled and recognition state, and the lock is neither: a counter
+   that is open to the whole shop's wifi is a plain fact printed at the size of
+   the fact, in the neutral and blue ink the rest of the interface uses for the
+   machine's own statements. Only the shared `Refusal` component brings amber
+   with it, and that is the house treatment for a refusal everywhere else too.
+   =========================================================================== */
+
+/* --- the page ------------------------------------------------------------
+   One column, centred, and narrow. A sign-in screen that stretches to 1280 px
+   is a form with a metre of blank paper beside it; this one keeps the eye on
+   the shop's name, the card, and the sentence about the switch. */
+
+.auth-page {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--s4);
+}
+
+.auth-col {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+
+/* `Verdict` carries its own top margin for use inside a card. In this column
+   the gap already spaces it, and both together read as a gap of 40 px. */
+.auth-col > .verdict { margin-top: 0; }
+
+/* --- whose counter this is ----------------------------------------------
+   Above the card, because somebody about to type a password should be able to
+   see which shop and which machine they are typing it into. */
+
+.auth-mark {
+  text-align: center;
+  padding: var(--s2) 0 var(--s1);
+}
+
+.auth-mark-badge {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--s4);
+  border-radius: var(--r-md);
+  display: grid;
+  place-items: center;
+  font: 800 22px/1 var(--font);
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+}
+
+.auth-mark h1 {
+  font-size: var(--t-h1);
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+
+.auth-mark p {
+  margin-top: var(--s2);
+  font-size: var(--t-small);
+  color: var(--ink-3);
+  line-height: var(--lh-body);
+}
+
+.auth-host {
+  margin-top: var(--s1);
+  color: var(--ink-4);
+}
+
+/* --- the form ------------------------------------------------------------ */
+
+.auth-lede {
+  margin-bottom: var(--s5);
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  line-height: var(--lh-body);
+}
+
+.auth-switch { margin-bottom: var(--s5); }
+
+.auth-form { display: block; }
+
+.auth-row + .auth-row { margin-top: var(--s4); }
+
+.auth-row label {
+  display: block;
+  margin-bottom: var(--s1);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.auth-row input {
+  width: 100%;
+  padding: var(--s3);
+  font: inherit;
+  /* 16 px or iOS zooms the whole page the moment the field takes focus, and a
+     counter facing a queue is not a place to be pinching a page back. */
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.auth-row input:focus-visible {
+  outline: none;
+  border-color: var(--blue-500);
+  box-shadow: var(--ring);
+}
+
+.auth-row input:disabled {
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+
+/* A placeholder must never be mistaken for a value somebody typed. The default
+   is close enough to the ink that a form full of examples reads as a form
+   already filled in. */
+.auth-row input::placeholder { color: var(--ink-4); opacity: 1; }
+
+.auth-row input.mono-in {
+  font-family: var(--mono);
+  letter-spacing: .02em;
+}
+
+.auth-sub {
+  display: block;
+  margin-top: var(--s1);
+  font-size: var(--t-small);
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* A field-level problem. Ink, not a verdict colour: this is a form telling you
+   what it needs, not the counter reporting on money. */
+.auth-bad {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+/* A field that needs attention is drawn in ink, at a weight the eye catches
+   from across the counter. It is deliberately NOT red: on this product red
+   means a payment failed, and a missing name is not that. */
+.auth-row input[aria-invalid='true'] {
+  border-color: var(--ink-3);
+  box-shadow: inset 2px 0 0 var(--ink-2);
+}
+.auth-row input[aria-invalid='true']:focus-visible {
+  border-color: var(--blue-500);
+  box-shadow: inset 2px 0 0 var(--ink-2), var(--ring);
+}
+
+/* --- the password field --------------------------------------------------
+   A SPAN, not a div: this sits inside prose-bearing markup in places and a
+   block element there is invalid HTML that the parser lifts clean out of its
+   box. `display: flex` on the span keeps the layout identical. */
+
+.auth-secret {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s2);
+}
+
+.auth-secret input { flex: 1; min-width: 0; }
+
+.auth-eye {
+  flex: none;
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  color: var(--ink-3);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+
+.auth-eye:hover:not(:disabled) {
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border-color: var(--blue-400);
+}
+
+.auth-eye[aria-pressed='true'] {
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border-color: var(--blue-400);
+}
+
+.auth-eye:disabled { opacity: .45; cursor: not-allowed; }
+
+/* --- what happened ------------------------------------------------------- */
+
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  align-items: center;
+  margin-top: var(--s5);
+}
+
+.auth-actions .btn.primary { min-height: 44px; }
+
+/* The server's own note about what it just did. Not a verdict colour — nothing
+   here settled any money. */
+.auth-note {
+  margin-top: var(--s4);
+  padding: var(--s3) var(--s4);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue-500);
+  border-radius: var(--r-sm);
+}
+
+.auth-hint {
+  margin-top: var(--s4);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-3);
+}
+
+/* --- who is signed in ---------------------------------------------------- */
+
+.auth-who {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Initials, never a photograph: this counter has one camera and it is pointed
+   at the shelf. */
+.auth-ini {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-full);
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .02em;
+  color: var(--blue-700);
+  background: var(--blue-100);
+}
+
+.auth-ini.lg {
+  width: 44px;
+  height: 44px;
+  font-size: var(--t-h3);
+}
+
+.auth-who-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.auth-who-text b {
+  font-size: var(--t-h3);
+  color: var(--navy-900);
+}
+
+.auth-who-text span {
+  font-size: var(--t-small);
+  color: var(--ink-3);
+}
+
+.auth-facts { margin: var(--s3) 0 0; }
+
+.auth-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: var(--t-small);
+}
+
+.auth-facts > div:last-child { border-bottom: 0; }
+
+.auth-facts dt {
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.auth-facts dd {
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.auth-dim { color: var(--ink-4); }
+
+/* --- the invitation -----------------------------------------------------
+   Legible exactly once. It is bordered in the machine's own blue rather than
+   in a verdict colour, because it is a thing to copy, not a thing that
+   settled. */
+
+.auth-invite {
+  margin-top: var(--s5);
+  padding: var(--s4);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  background: var(--blue-050);
+}
+
+.auth-invite-h {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--blue-700);
+}
+
+.auth-invite-code {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  font-size: var(--t-h3);
+  letter-spacing: .04em;
+  color: var(--navy-900);
+  background: var(--surface);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-sm);
+  overflow-wrap: break-word;
+  user-select: all;
+}
+
+.auth-invite .auth-actions { margin-top: var(--s3); }
+
+.auth-invite-note {
+  margin-top: var(--s3);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+}
+
+/* --- what this does not do ----------------------------------------------- */
+
+.auth-limits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.auth-limits li {
+  padding-left: var(--s4);
+  border-left: 2px solid var(--line);
+  font-size: var(--t-small);
+  line-height: var(--lh-body);
+  color: var(--ink-2);
+}
+
+.auth-limits b { color: var(--navy-900); }
+
+/* A paragraph inside a `Verdict`, which renders its children into a <p>. A
+   block-level child there is invalid HTML and gets reparented out of the
+   coloured box; a span told to be a block is not. */
+.auth-p { display: block; }
+.auth-p + .auth-p { margin-top: var(--s3); }
+
+/* --- the menu in the top bar --------------------------------------------- */
+
+.auth-menu { position: relative; flex: none; }
+
+.auth-menu-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  /* A HIT AREA, NOT A BIGGER BUTTON. Measured at 390: this chip renders
+     28x28 — under the 32 px a thumb needs — but the top bar at 320-430 has
+     no room to spare, and growing it visually would undo the widths this bar
+     was fitted to. `::before` extends the pressable area past the paint
+     without touching layout. */
+  position: relative;
+}
+.auth-menu-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: max(100%, 44px); height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+.auth-menu-nm {
+  font: 600 var(--t-small)/1 var(--font);
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On the dark bar the chip has to be light-on-dark, and the initials have to
+   stop being a pale blue disc on near-black. Scoped to the bar so the same
+   component is neutral if it is ever placed on a white surface. */
+.topbar-status .auth-menu-btn { color: var(--on-dark); }
+.topbar-status .auth-menu-btn:hover { color: var(--on-dark); }
+.topbar-status .auth-menu-btn .auth-ini {
+  color: var(--on-dark);
+  background: var(--bar-sunk);
+  box-shadow: inset 0 0 0 1px var(--bar-line);
+}
+.topbar-status .auth-menu-btn:hover .auth-ini { background: var(--bar-hover); }
+
+.auth-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  /* Above the top bar's own z-index of 60, or the menu opens behind the bar it
+     hangs from. */
+  z-index: 80;
+  width: 288px;
+  max-width: calc(100vw - 24px);
+  padding: var(--s4);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+  animation: authPop var(--fast) var(--ease) both;
+}
+
+@keyframes authPop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.auth-pop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-pop-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding-top: var(--s3);
+  font-size: var(--t-small);
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.auth-pop-facts.pad { padding-top: 0; }
+.auth-pop-facts b { color: var(--navy-900); }
+
+.auth-pop-refusal {
+  margin-top: var(--s3);
+  font-size: var(--t-small);
+  font-family: var(--mono);
+  color: var(--ink-2);
+  overflow-wrap: break-word;
+}
+
+.auth-pop-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.auth-pop-btn {
+  appearance: none;
+  width: 100%;
+  min-height: 40px;
+  padding: var(--s2) var(--s3);
+  text-align: left;
+  font: 600 var(--t-small)/1.4 var(--font);
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.auth-pop-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.auth-pop-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* --- narrow --------------------------------------------------------------
+   The bar at 390 px is already carrying a burger, a wordmark, three tabs and
+   the gateway chip. The name is the part of the account chip that yields; the
+   initials stay, because they are how you tell at a glance that somebody is
+   signed in at all. */
+
+@media (max-width: 720px) {
+  .auth-menu-nm { display: none; }
+}
+
+@media (max-width: 560px) {
+  .auth-page { padding-top: 0; }
+  .auth-mark-badge { width: 42px; height: 42px; margin-bottom: var(--s3); }
+  .auth-mark h1 { font-size: var(--t-h2); }
+  /* The popover follows the right edge of the window rather than the button,
+     which at this width is close enough to the edge to push it off-screen. */
+  .auth-pop { right: -8px; width: min(300px, calc(100vw - 24px)); }
+}
