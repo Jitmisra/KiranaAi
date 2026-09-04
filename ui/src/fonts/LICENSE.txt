@@ -1,0 +1,7 @@
+Plus Jakarta Sans — Copyright 2020 The Plus Jakarta Sans Project Authors
+(https://github.com/tokotype/PlusJakartaSans). Licensed under the SIL Open
+Font License, Version 1.1 (https://scripts.sil.org/OFL). Vendored here as the
+Google Fonts variable-weight woff2 build, latin and latin-ext subsets only,
+because this counter's Content-Security-Policy allows no external host and a
+till that has to fetch a typeface renders in Times the moment the shop's
+connection drops.

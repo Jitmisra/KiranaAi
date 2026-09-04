@@ -1,0 +1,2757 @@
+/* ===========================================================================
+   GAWAAH — application shell and components
+   ---------------------------------------------------------------------------
+   Five rules, distilled from the product interfaces that feel expensive in
+   2025–26 (Linear, Vercel, Stripe, Arc, Notion's newer surfaces) and applied
+   here to a counter that runs in a shop:
+
+     1. ONE CONTINUOUS LIGHT CHROME. No dark slab across the top; the bar, the
+        sidebar and the page are one paper surface divided by hairlines, and
+        a card is white ON it. Hierarchy comes from tone and a 1px line, not
+        from a colour block.
+     2. COLOUR IS A SIGNAL, NOT A SKIN. One accent, used for what the machine
+        does. Everything else is ink on paper, and the three verdict colours
+        appear only where money or recognition is being asserted.
+     3. A TIGHT, EVEN RHYTHM. 36px controls, 8px radii, 4pt spacing, tabular
+        figures, and type that steps by a major second — so a toolbar of five
+        different components sits on one line and a column of prices adds up
+        by eye.
+     4. ELEVATION IS EARNED. Shadows are faint, tinted to the paper, and each
+        step means something: a card at rest, a card picked up, a drawer, a
+        dialog. Nothing floats because it can.
+     5. MOTION IS SHORT AND IT DECELERATES. 120–220ms, one curve in and one
+        curve out, never a bounce; and every one of them flattens to nothing
+        under the reduced-motion guard at the foot of this file.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------- shell --
+   TWO LEVELS. A paper top bar carrying the three halves of the shop as a
+   segmented control, and beneath it a sidebar belonging to whichever half is
+   open. See components/shell.tsx for why the tab is never its own piece of
+   state. */
+
+.shell { min-height: 100%; display: flex; flex-direction: column; }
+
+/* THE FLUTES. Three wide diagonal bands of the accent at a few per cent,
+   fading out of the top-right corner — the RazorSense motif, as a ground
+   rather than an object. One fixed layer over the wash; a repeating gradient
+   costs one paint and no elements. Under the bar, over the blooms. */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: -1;
+  background: repeating-linear-gradient(
+    112deg,
+    transparent 0 260px,
+    rgba(var(--accent-rgb), .05) 260px 340px,
+    transparent 340px 520px,
+    rgba(var(--accent-rgb), .035) 520px 580px,
+    transparent 580px 900px
+  );
+  -webkit-mask-image: radial-gradient(70% 62% at 100% 0%, #000 0%, rgba(0, 0, 0, .55) 45%, transparent 82%);
+  mask-image: radial-gradient(70% 62% at 100% 0%, #000 0%, rgba(0, 0, 0, .55) 45%, transparent 82%);
+  pointer-events: none;
+}
+
+.body {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr);
+}
+
+/* ------------------------------------------------------------- top bar --
+   A FLOATING PILL, not a slab.
+
+   The reference this was rebuilt against is RazorSense's own nav: a white,
+   heavily rounded bar inset from the window edge on a pale ground, the mark
+   at the left, the sections as PLAIN TEXT at the right, and nothing else —
+   no track, no segmented chrome, no border.
+
+   `.topbar` is the sticky wrapper and paints nothing; `.topbar-in` is the
+   pill. That split is what lets the bar float without touching the DOM, and
+   `--topbar-h` still measures the whole occupied band — inset, pill, inset —
+   because the sidebar and four other stylesheets hang sticky rails off it. */
+
+.topbar {
+  position: sticky; top: 0; z-index: var(--z-bar);
+  color: var(--bar-fg);
+  padding: var(--bar-inset);
+  background: transparent;
+  /* Two controls from other files — the account chip and the ⌘K button — are
+     written against the on-dark tokens because this bar used to be dark.
+     Custom properties cascade by DOM scope, so re-pointing them HERE puts
+     those controls in ink on the light pill without touching their files,
+     while the same tokens stay white on the camera stage and in a tooltip. */
+  --on-dark:   var(--bar-fg);
+  --on-dark-2: var(--bar-fg-2);
+  --on-dark-3: var(--bar-fg-3);
+}
+
+/* The page has to disappear BEHIND a floating bar, not slide past it through
+   the gap above. A blurred layer over the whole band, masked so it fades out
+   downward: it softens whatever scrolls under it without repainting the wash
+   in a flat colour the blooms would not match. */
+.topbar::before {
+  content: '';
+  position: absolute; inset: 0; z-index: -1;
+  -webkit-mask-image: linear-gradient(#000 62%, transparent);
+  mask-image: linear-gradient(#000 62%, transparent);
+  pointer-events: none;
+}
+@supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+  .topbar::before {
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+  }
+}
+
+.topbar-in {
+  display: flex; align-items: center; gap: var(--s4);
+  height: var(--bar-h); padding: 0 var(--s3) 0 var(--s5);
+  background: var(--bar-solid);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-xl);
+  box-shadow:
+    var(--glass-edge),
+    0 0 0 1px rgba(var(--navy-rgb), .05),
+    0 2px 6px rgba(var(--shadow-rgb), .06),
+    0 14px 34px rgba(var(--shadow-rgb), .09);
+}
+@supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+  .topbar-in {
+    background: var(--bar-glass);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+  }
+}
+
+/* The lockup: the glyph, the wordmark, the Devanagari, and — when the shop has
+   told us — the shop's own name after a thin rule. `.brand-mark` keeps the text
+   "GAWAAH" exactly: the e2e suite reads it. */
+.brand {
+  display: flex; align-items: center; gap: var(--s2);
+  text-decoration: none; flex: none; min-width: 0;
+  color: var(--bar-fg);
+  border-radius: var(--r-sm);
+}
+.brand-glyph {
+  flex: none; display: inline-grid; place-items: center; color: var(--brand-mark);
+  transition: transform var(--med) var(--ease-out);
+}
+.brand:hover .brand-glyph { transform: rotate(-6deg) scale(1.05); }
+.brand-mark {
+  font-family: var(--font-display);
+  font-size: 17px; font-weight: 800; letter-spacing: -.035em; color: var(--navy-900);
+}
+.brand-deva {
+  font-family: var(--font-deva);
+  font-size: 15px; line-height: 1; font-weight: 700; color: var(--brand-mark);
+  /* A Devanagari face sits lower on the line than a Latin one; nudge it up so
+     the two words share a baseline instead of a rough one. */
+  transform: translateY(-1px);
+}
+.brand-shop {
+  display: inline-flex; align-items: center; gap: var(--s2); min-width: 0;
+  margin-left: var(--s1); padding-left: var(--s3);
+  border-left: 1px solid var(--bar-line);
+  font-size: var(--t-small); font-weight: 500; color: var(--bar-fg-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 24ch;
+}
+
+/* THE THREE HALVES OF THE SHOP, AS WORDS.
+   They were a segmented pill in a sunk track — a control, competing with the
+   controls on the screen below it. In the reference they are plain text with
+   nothing around them, and the only mark is under the open one. That mark is
+   the FLUTE: the same skew and the same gradient as the page titles, the
+   sidebar's open row, and the sheen on a primary button. */
+.tabs {
+  display: flex; align-items: center; gap: 2px;
+  margin-left: auto; padding: 0;
+  background: none; border: 0; border-radius: 0;
+  min-width: 0;
+}
+.tabs button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  /* A FLOOR, kept though this bar was never the problem: the 30 px control I
+     went looking for was `.side-sections button` in the sidebar, which looks
+     almost identical and sits on the same screen. This bar measures 38 at
+     390 and 40 above it; the floor costs nothing and stops a future narrow
+     breakpoint from dropping it under a thumb. */
+  position: relative; height: 40px; min-height: 34px; padding: 0 var(--s4);
+  font: 600 var(--t-lead)/1 var(--font); letter-spacing: -.01em;
+  color: var(--ink-3); white-space: nowrap;
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.tabs button:hover { color: var(--navy-900); background: var(--bar-hover); }
+.tabs button[aria-current] { color: var(--navy-900); }
+/* The flute under the open section. It GROWS from the centre when the section
+   changes, which is the whole switching animation — no sliding indicator to
+   keep in sync with a layout that reflows at three widths. */
+.tabs button[aria-current]::after {
+  content: '';
+  position: absolute; left: 50%; bottom: 3px;
+  width: 20px; height: 3px; margin-left: -10px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+  animation: tabFlute var(--med) var(--ease-out) both;
+}
+@keyframes tabFlute {
+  from { opacity: 0; transform: skewX(var(--flute-skew)) scaleX(.2); }
+  to   { opacity: 1; transform: skewX(var(--flute-skew)) scaleX(1); }
+}
+
+/* The right-hand end, behind a hairline: what the sections are is navigation,
+   what is over here is the account, the assistant and a waiting customer, and
+   the two groups should not read as one row of equal things.
+
+   THIS SLOT USED TO CARRY TWO MORE CHIPS — the taught count and gateway health
+   — and it is better without them. Neither changes while somebody is standing
+   at the counter, both are reported in full on a screen of their own (the pill
+   on /#/products, the Payments section of /#/settings), and at 390 px they
+   were the pair that pushed the account chip across the wordmark. What is left
+   is three controls, each of which does something when pressed. */
+.topbar-status {
+  display: flex; align-items: center; gap: var(--s2); flex: none;
+  margin-left: var(--s3); padding-left: var(--s3);
+  border-left: 1px solid var(--bar-line);
+}
+
+.side-toggle { display: none; }
+
+/* ------------------------------------------------------------- sidebar -- */
+
+/* A FLOATING PANE, like the bar. It shares `--bar-inset`, so the two read as
+   two surfaces on one ground rather than as a chrome frame with a hole cut in
+   it. The border-right is gone: an edge that runs off the window belongs to a
+   slab, and this is not one. */
+.side {
+  position: sticky; top: var(--topbar-h); align-self: start;
+  height: calc(100vh - var(--topbar-h) - var(--bar-inset));
+  margin: 0 0 var(--bar-inset) var(--bar-inset);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--s4);
+  padding: var(--s4) var(--s3);
+  background: var(--side-bg);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-xl);
+  box-shadow:
+    var(--glass-edge),
+    0 0 0 1px rgba(var(--navy-rgb), .04),
+    0 2px 6px rgba(var(--shadow-rgb), .05),
+    0 14px 34px rgba(var(--shadow-rgb), .07);
+}
+@supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+  .side { -webkit-backdrop-filter: var(--blur-soft); backdrop-filter: var(--blur-soft); }
+}
+
+/* `min-height: 0` is load-bearing. A flex child will not shrink below its own
+   content height without it, so on a short viewport the nav pushed everything
+   under it past the bottom of the sidebar — rendered, present in the DOM, and
+   simply not on screen. The nav scrolls; the footer stays put. */
+.side nav {
+  display: flex; flex-direction: column; gap: var(--s4);
+  flex: 1; min-height: 0; overflow-y: auto;
+}
+.navgroup { display: flex; flex-direction: column; gap: 2px; }
+.navgroup-h {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s1) var(--s3) var(--s3);
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps-wide);
+  text-transform: uppercase; color: var(--ink-4);
+}
+.navgroup-h span {
+  font-size: var(--t-micro); letter-spacing: 0; text-transform: none;
+  color: var(--ink-4); font-weight: 400; line-height: 1.45;
+}
+
+/* A row: an icon, then the label over its one-line purpose. The open row is a
+   white card lifted a hairline off the paper, its icon in the accent — the
+   only colour in the sidebar, so the eye lands on where it is. */
+.side nav button {
+  appearance: none; border: 0; cursor: pointer; text-align: left; width: 100%;
+  position: relative;
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  min-height: 46px;
+  background: transparent; border-radius: var(--r-md);
+  color: var(--ink-2);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+              box-shadow var(--fast) var(--ease);
+}
+/* The icon sits in its own soft tile, so a column of them reads as a set of
+   objects rather than a column of strokes. The open row's tile is accent. */
+.side nav button .i {
+  flex: none; display: inline-grid; place-items: center;
+  width: 30px; height: 30px; border-radius: var(--r-sm);
+  color: var(--ink-3); background: rgba(var(--navy-rgb), .04);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.side nav button .t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.side nav button .l { font-size: var(--t-small); font-weight: 600; color: var(--ink-2); line-height: 1.25; }
+/* The sub-label WRAPS rather than truncates. It is the sentence that says what
+   the screen is for, and "count the cash, freeze the figu…" says nothing; two
+   of seventeen run to a second line and the row simply grows. */
+.side nav button .s {
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.35;
+  text-wrap: pretty;
+}
+.side nav button:hover { background: rgba(255, 255, 255, .55); }
+.side nav button:hover .l { color: var(--ink); }
+.side nav button:hover .i { color: var(--ink); background: rgba(var(--navy-rgb), .07); }
+.side nav button[aria-current='page'] {
+  background: var(--glass-thick);
+  box-shadow: var(--shadow-1), var(--glass-edge), 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+/* The flute: a slanted blue bar on the left edge of the open row. */
+.side nav button[aria-current='page']::before {
+  content: '';
+  position: absolute; left: -3px; top: 8px; bottom: 8px; width: 7px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+}
+.side nav button[aria-current='page'] .l { color: var(--navy-900); font-weight: 700; }
+.side nav button[aria-current='page'] .s { color: var(--ink-3); }
+.side nav button[aria-current='page'] .i {
+  color: #fff; background: var(--accent-grad);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), .35);
+}
+
+/* The other two halves, at the foot of the sidebar: a laptop user should not
+   have to reach for the bar to cross the shop. OUTSIDE the <nav>, so the e2e
+   selector for a sidebar item cannot pick one of these up by its label. */
+.side-sections {
+  display: flex; gap: 2px; flex: none;
+  padding: var(--s3) 0 0; border-top: 1px solid var(--line);
+}
+.side-sections button {
+  appearance: none; border: 0; cursor: pointer; flex: 1; min-width: 0;
+  /* 30 was two pixels under a thumb. THIS IS THE SIDEBAR'S OWN section
+     switcher, not the top bar's (that one measures 38 and is fine) — the two
+     look alike and sit on the same screen, which is why the first fix went to
+     the wrong one. Measured on a phone with the drawer open. */
+  height: 34px; padding: 0 var(--s2);
+  background: transparent; border-radius: var(--r-sm);
+  font: 600 var(--t-micro)/1 var(--font); letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-4);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.side-sections button {
+  position: relative; border-radius: var(--r-sm);
+}
+.side-sections button:hover { background: var(--bar-hover); color: var(--ink); }
+/* THE SAME LANGUAGE AS THE BAR. This was a solid blue pill, which made the
+   loudest thing in the sidebar a duplicate of a control already at the top of
+   the window. It is the same three words in the same two states, so it gets
+   the same treatment: ink, and the flute underneath. */
+.side-sections button[aria-current='true'] { color: var(--navy-900); background: transparent; }
+.side-sections button[aria-current='true']::after {
+  content: '';
+  position: absolute; left: 50%; bottom: 2px;
+  width: 16px; height: 3px; margin-left: -8px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+}
+
+.brand-line {
+  flex: none;
+  padding: var(--s3) var(--s3) 0;
+  font-size: var(--t-micro); line-height: 1.55; color: var(--ink-4);
+}
+.brand-line b { color: var(--ink-2); font-weight: 700; }
+
+.main { width: 100%; max-width: 1280px; margin: 0 auto; padding: var(--s6) var(--s7) var(--s9); }
+
+.scrim { display: none; }
+
+/* --------------------------------------------------------- narrow ------ */
+
+@media (max-width: 1000px) {
+  /* The bar becomes two rows: brand and vitals, then the menu and the tabs. The
+     tabs never collapse into the drawer — on a phone they are how you move
+     between the three halves of the shop, and burying them costs two taps every
+     time.
+
+     GRID, NOT flex-wrap. --topbar-h has to equal the bar's real height, because
+     the drawer and the scrim both hang off it — and with flex-wrap at 380 px the
+     status chips took a third row of their own, so the drawer opened 57 px too
+     high and left a stripe of page showing above it. Fixed rows make the number
+     arithmetic (52 + 44) instead of a hope. */
+  /* A tighter inset on a phone — 12 px of margin either side of a 390 px
+     window is 6 % of it — and the pill carries two rows. --topbar-h is the
+     arithmetic, not a hope: 8 + (46 + 42 + 2) + 8 = 106. The `+ 2` is the
+     pill's own top and bottom border: `height` is `auto` here, so unlike the
+     wide bar (a fixed --bar-h, where border-box swallows it) the border adds
+     to the row sum. Measured 106 against a token that said 104, which is
+     exactly the two-pixel stripe of page the drawer used to show above it. */
+  :root { --bar-inset: 8px; --topbar-h: 106px; }
+
+  .topbar-in {
+    display: grid; align-items: center;
+    /* The third column is `minmax(0, auto)`, NOT `auto`. An `auto` track sizes
+       to its content's max-content and will happily overflow the grid — which
+       is why `min-width: 0` on `.topbar-status` did nothing: the CHILD could
+       shrink, the TRACK could not. Measured: the account chip painted over the
+       GAWAAH wordmark at 390 while a programmatic overflow check on the bar
+       reported clean, because the bar itself was never the thing overflowing. */
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
+    grid-template-rows: 46px 42px;
+    /* The menu button sizes the first column, so the tabs begin right beside it
+       instead of being indented to clear the wordmark above. */
+    grid-template-areas: 'brand brand status' 'menu tabs tabs';
+    /* row-gap MUST be reset: the flex `gap` above is shorthand for both axes,
+       and 16 px of it survived into the grid and made the bar taller than
+       --topbar-h. */
+    height: auto; padding: 0 var(--s3); column-gap: var(--s3); row-gap: 0;
+    border-radius: var(--r-lg);
+  }
+  .brand { grid-area: brand; }
+  .brand-shop { max-width: 16ch; }
+  .topbar-status { grid-area: status; margin-left: 0; padding-left: 0; border-left: 0; justify-content: flex-end; }
+  /* Tighter chips: at 380 px the bar is the one place where a few pixels of
+     letter-spacing decide whether "gateway up" is readable or clipped. */
+  .topbar-status .pill { padding: 4px 8px; letter-spacing: .04em; }
+
+  /* THE STATUS SLOT MUST NOT GROW PAST THE BAR.
+     It is grid column 3 of a three-column row, and a grid item's automatic
+     minimum is its own min-content — so adding the account chip pushed the
+     row 33 px wide at 390 and the chip painted straight over the GAWAAH
+     wordmark, with "gateway up" hanging off the right edge. Measured, and
+     visible in a screenshot before it was visible in any number: `.topbar-in`
+     itself did not overflow, so an overflow check on the bar reported clean.
+     `min-width: 0` lets the column shrink; the children then yield in
+     priority order below. */
+  .topbar-status { min-width: 0; }
+
+  /* The account chip yields its NAME first — the initials still identify who
+     is signed in, and the popover carries the rest. On the first run the
+     instruction survives, because that is the one state that wants a hand. */
+  .topbar-status .auth-menu { min-width: 0; }
+  .topbar-status .auth-menu-nm { display: none; }
+  .topbar-status .auth-menu-btn { max-width: 100%; }
+  /* THE BRAND MUST NOT SPILL OUT OF ITS OWN BOX. `.brand` is a flex row in a
+     squeezed grid column; measured at 390 its box was 64 px while `.brand-mark`
+     rendered 76 px and simply overflowed. Nothing overlapped `.brand`'s
+     rectangle — which is why an overlap check against it reported clean while
+     a screenshot showed the account chip printed straight across GAWAAH. */
+  .brand { min-width: 0; overflow: hidden; }
+  .brand-mark { flex: none; }
+  .brand-deva { flex: none; }
+
+  /* The chip shows the short word here; the popover carries the instruction. */
+  .topbar-status .auth-menu-long { display: none; }
+  .topbar-status .auth-menu-short { display: inline; }
+
+  .tabs {
+    grid-area: tabs; width: 100%; margin: 0;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: 1; padding: 0 var(--s3); height: 38px; font-size: var(--t-body); }
+  .tabs button[aria-current]::after { bottom: 1px; }
+
+  .side-toggle {
+    grid-area: menu; justify-self: start;
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; width: 34px; height: 34px;
+    padding: 0; background: transparent; border: 1px solid var(--bar-line);
+    border-radius: var(--r-md); cursor: pointer;
+  }
+  .side-toggle span { display: block; width: 16px; height: 2px; background: var(--bar-fg); border-radius: 2px; }
+  .side-toggle { border-color: var(--bar-line); }
+
+  .body { grid-template-columns: minmax(0, 1fr); }
+
+  .side {
+    position: fixed; z-index: var(--z-drawer);
+    top: var(--topbar-h); bottom: var(--bar-inset); left: -288px; width: 268px; height: auto;
+    /* The float's margin would push a fixed drawer off its own `left`. */
+    margin: 0 0 0 var(--bar-inset);
+    border-radius: var(--r-xl);
+    /* `align-self: start` above is what makes the sidebar sit at the top of the
+       grid row on a laptop — and on an absolutely positioned box it ALSO
+       overrides the top/bottom stretch, so the drawer came out 338 px tall and
+       floated in the middle of the screen. Put the stretch back explicitly. */
+    align-self: stretch;
+    transition: left var(--med) var(--ease);
+  }
+  .shell.open .side { left: 0; box-shadow: var(--shadow-3), var(--glass-edge); }
+
+  .scrim {
+    display: block; position: fixed; z-index: var(--z-scrim); inset: var(--topbar-h) 0 0 0;
+    background: var(--scrim); opacity: 0; pointer-events: none;
+    transition: opacity var(--med) var(--ease);
+  }
+  .shell.open .scrim { opacity: 1; pointer-events: auto; }
+
+  .main { padding: var(--s5) var(--s4) var(--s9); }
+}
+
+/* ----------------------------------------------------------------- card -- */
+
+/* GLASS. Translucent white over the wash, a hairline of light along the top,
+   a soft ink-tinted shadow beneath. No blur by default — twenty cards on one
+   screen, each blurring what is behind it, is what makes an old phone drop
+   frames — a laptop gets it, below. */
+.card {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--glass-edge), 0 0 0 1px var(--line);
+}
+@media (min-width: 1000px) {
+  @supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+    .card { -webkit-backdrop-filter: var(--blur-soft); backdrop-filter: var(--blur-soft); }
+  }
+}
+/* NOT `overflow: hidden` on `.card` itself, however tempting. A card is the
+   usual parent of a tooltip and of the till's drag layer, and a clip here
+   silently swallows both. The head and foot round their own outer corners
+   instead, and a card whose body really must be clipped asks for `.clip`. */
+.card.clip { overflow: hidden; }
+.card-head {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s5);
+  min-height: 52px;
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  /* The same glass as the body. What makes the head read as a header is the
+     weight of its title and the hairline under it. */
+  background: transparent;
+}
+.card-head h2 { font-size: var(--t-lead); font-weight: 700; letter-spacing: var(--tr-tight); }
+/* A drawn mark before a card's title, in a soft blue tile. Optional: a card
+   that is one of six on a screen does not need one; the hero card does. */
+.card-ico {
+  flex: none; display: inline-grid; place-items: center;
+  width: 34px; height: 34px; border-radius: var(--r-sm);
+  color: var(--accent-600);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), .16), rgba(var(--accent-rgb), .06));
+  box-shadow: var(--glass-edge), 0 0 0 1px rgba(var(--accent-rgb), .14);
+}
+.card-head .spacer { flex: 1; }
+/* The title's second line: what the panel is for, in a shopkeeper's words. It
+   is inside the flex head, so it needs its own column to sit under the title. */
+.card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.card-title .card-sub {
+  font-size: var(--t-micro); color: var(--ink-3); font-weight: 400;
+  letter-spacing: var(--tr-flat); line-height: 1.45;
+}
+/* On a phone a title plus its controls will not share a line. Let them stack
+   rather than squeeze the title to two letters and an ellipsis. */
+@media (max-width: 560px) {
+  .card-head { flex-wrap: wrap; row-gap: var(--s2); }
+  .card-head .spacer { flex-basis: 100%; height: 0; }
+}
+.card-body { padding: var(--s5); }
+.card-body.tight { padding: var(--s4); }
+/* No padding at all: for a card whose whole body is a table or a list that
+   draws its own edges. */
+.card-body.flush { padding: 0; }
+.card-foot {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s5);
+  border-top: 1px solid var(--line); background: rgba(var(--navy-rgb), .025);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  font-size: var(--t-small); color: var(--ink-3);
+}
+
+/* A crisp small-caps section label. `--tr-caps` is what makes 11px uppercase
+   readable rather than a wall of letters. */
+.eyebrow {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps-wide);
+  text-transform: uppercase; color: var(--ink-4);
+}
+/* The same label with a rule running off to the right, for dividing a long
+   screen into named parts without adding another card. */
+.sectionhead {
+  display: flex; align-items: center; gap: var(--s3);
+  margin: var(--s6) 0 var(--s3);
+}
+/* The rule is a real element and not `::after`, so an aside (a count, a button)
+   can sit on the far side of it. A pseudo-element is always the last child and
+   would have pushed anything else back to the left. */
+.sectionhead .line { flex: 1; height: 1px; background: var(--line); }
+.sectionhead .eyebrow { flex: none; }
+.hr { height: 1px; background: var(--line); border: 0; margin: var(--s5) 0; }
+
+.muted { color: var(--ink-3); font-size: var(--t-small); }
+.hint { color: var(--ink-3); font-size: var(--t-small); margin-top: var(--s3); line-height: var(--lh-loose); }
+
+/* --------------------------------------------------------------- layout -- */
+
+.grid { display: grid; gap: var(--s5); }
+.till-grid { grid-template-columns: minmax(0, 1.55fr) minmax(340px, .85fr); align-items: start; }
+.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1080px) {
+  .till-grid, .two, .three { grid-template-columns: minmax(0, 1fr); }
+}
+
+.page-head { margin-bottom: var(--s5); }
+.page-head h1 {
+  font-size: var(--t-h1); font-weight: 800; letter-spacing: var(--tr-display);
+  display: flex; align-items: center; gap: var(--s3);
+}
+/* The flute before every page title. A heading is not an action, so the
+   words stay ink — the mark beside them is the machine's signature. */
+.page-head h1::before {
+  content: '';
+  flex: none; width: 9px; height: .78em;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+  box-shadow: 0 4px 12px rgba(var(--accent-rgb), .35);
+}
+.page-head { margin-bottom: var(--s6); }
+/* 15px and not 14: the opening sentence of a screen is the one paragraph a
+   shopkeeper reads standing up, at arm's length, in shop light. */
+.page-head p { color: var(--ink-3); margin-top: var(--s2); max-width: 68ch; font-size: var(--t-h3); line-height: var(--lh-loose); }
+
+/* --------------------------------------------------------------- button -- */
+
+/* One height token drives button, input, select and the segmented control, so
+   a filter row made of four different components sits on ONE line. Before it
+   they were 34, 38, 36 and 32 px and every toolbar in the app was a staircase. */
+.btn {
+  appearance: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+  position: relative;
+  min-height: var(--ctl-h); padding: 0 var(--s4);
+  font: 600 var(--t-small)/1 var(--font); letter-spacing: .02em;
+  color: var(--ink);
+  /* A pane of glass: translucent white, a hairline, a line of light along the
+     top, the faintest drop. The secondary button of every interface that feels
+     expensive in 2026, and it sits on the wash instead of on top of it. */
+  background: var(--glass);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  box-shadow: var(--shadow-0), var(--glass-edge);
+  /* Deliberately NOT `white-space: nowrap`. A shopkeeper's phone is 390 px and
+     several of these labels are whole sentences ("NOTHING ON THE COUNTER");
+     a label that wraps inside its button is readable, and one that overflows
+     drags the page sideways. Only the small variants below refuse to wrap. */
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+              color var(--fast) var(--ease),
+              transform var(--xfast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--line-3); color: var(--navy-900);
+  background: var(--glass-thick);
+  box-shadow: var(--shadow-1), var(--glass-edge);
+  transform: translateY(-1px);
+}
+/* A press goes back down. 1px, and on the shortest duration in the file: a
+   press has to be felt and must not be watched. */
+.btn:active:not(:disabled) { transform: translateY(0); box-shadow: var(--shadow-0); }
+.btn:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+
+.btn.primary {
+  background: var(--accent-grad);
+  border-color: transparent; color: var(--on-dark);
+  box-shadow: var(--lift-blue);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .08);
+  overflow: hidden;
+}
+/* THE PULSE. A slanted band of light crosses the button when it is hovered —
+   the flute, moving. It is a pseudo-element, so `.btn.loading::after` (the
+   spinner) wins where both apply, and it flattens under reduced motion. */
+.btn.primary::before {
+  content: '';
+  position: absolute; top: -20%; bottom: -20%; left: -40%; width: 30%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .34), rgba(255, 255, 255, 0));
+  transform: skewX(var(--flute-skew)) translateX(-120%);
+  transition: transform .55s var(--ease-out);
+  pointer-events: none;
+}
+.btn.primary:hover:not(:disabled)::before { transform: skewX(var(--flute-skew)) translateX(520%); }
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-grad-hover);
+  border-color: transparent; color: var(--on-dark);
+  box-shadow: var(--lift-blue), 0 12px 28px rgba(var(--accent-rgb), .28);
+}
+.btn.primary:disabled { box-shadow: none; }
+
+.btn.pay {
+  background: linear-gradient(135deg, #24935B 0%, var(--green) 60%, var(--green-2) 100%);
+  border-color: transparent; color: var(--on-dark);
+  border-radius: var(--r-lg);
+  font-size: var(--t-h3); min-height: var(--ctl-h-lg); padding: 0 var(--s6); width: 100%;
+  box-shadow: var(--lift-green);
+}
+.btn.pay:hover:not(:disabled) {
+  background: var(--green-2);
+  border-color: var(--green-2); color: var(--on-dark);
+  box-shadow: var(--lift-green);
+}
+/* Green means money on this product. A disabled CHARGE is not an action, so it
+   does not get to wear the colour that means one — it goes neutral instead of
+   merely faded, which reads as "nothing to charge" rather than "broken". */
+.btn.pay:disabled {
+  background: var(--surface-3); border-color: var(--line-2);
+  color: var(--ink-4); box-shadow: none; opacity: 1;
+}
+
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-3); box-shadow: none; }
+.btn.ghost:hover:not(:disabled) { background: rgba(var(--navy-rgb), .06); border-color: transparent; color: var(--ink); box-shadow: none; transform: none; }
+.btn.danger { color: var(--red); border-color: var(--red-line); background: var(--glass); }
+.btn.danger:hover:not(:disabled) { background: var(--red-bg); border-color: var(--red); color: var(--red-2); }
+/* The one for a row of icons and repeated small actions: no chrome until it is
+   reached for. Quieter than `ghost`, which still fills on hover. */
+.btn.quiet {
+  background: transparent; border-color: transparent; color: var(--ink-3);
+  box-shadow: none; padding: 0 var(--s3);
+}
+.btn.quiet:hover:not(:disabled) { background: var(--surface-3); border-color: transparent; color: var(--ink); box-shadow: none; }
+
+.btn.sm { min-height: 30px; padding: 0 var(--s3); font-size: var(--t-micro); white-space: nowrap; border-radius: var(--r-sm); }
+.btn.lg { min-height: var(--ctl-h-lg); padding: 0 var(--s6); font-size: var(--t-h3); border-radius: var(--r-lg); }
+/* TWO PIXELS, AND THEY ARE THE DIFFERENCE BETWEEN A BUTTON AND A DECORATION.
+   `.btn.sm` is the workhorse of every row action on this product, and at 30px
+   it was under the 32px a thumb needs on a phone. Measured at 390 signed in,
+   this one rule takes 33 buttons on expiry, 63 on gst, 41 on purchases and 3
+   on stock from 30px to 32 — the whole small-button population of those
+   screens. It is a min-height only: nothing re-flows, because every one of
+   those buttons was already sitting in a row with more than 32px of line box
+   around it. Phones only, so laptop density is unchanged. */
+@media (max-width: 560px) {
+  .btn.sm { min-height: 32px; }
+}
+.btn.block { width: 100%; }
+/* A square button holding one glyph. Sized off the control height so it lines
+   up with whatever it sits beside. */
+.btn.iconly { padding: 0; width: var(--ctl-h); }
+.btn.iconly.sm { width: var(--ctl-h-sm); }
+.btn.iconly.lg { width: var(--ctl-h-lg); }
+.btn > svg { flex: none; }
+/* Both children of a Button are ELEMENTS, always: `.btn.loading > *` is what
+   hides the label while the ring spins, and a bare text node is not a `*`. */
+.btn > .btn-ico { display: inline-flex; flex: none; }
+.btn > .btn-label { display: inline-flex; align-items: center; gap: var(--s2); min-width: 0; }
+.btn > .btn-label:empty { display: none; }
+
+/* WAITING. The label stays in place and keeps the button its own width — a
+   button that shrinks to the word "Saving…" moves everything beside it — and a
+   ring spins where the label was. `visibility` and not `opacity`, so a screen
+   reader does not read a label the sighted user cannot act on. */
+.btn.loading { cursor: progress; }
+.btn.loading > * { visibility: hidden; }
+.btn.loading::after {
+  content: ''; position: absolute; width: 15px; height: 15px;
+  border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  opacity: .85;
+  animation: btnspin .7s linear infinite;
+}
+@keyframes btnspin { to { transform: rotate(1turn); } }
+/* With the spin flattened, a hidden label beside a frozen ring says nothing at
+   all. Give the label back and let `aria-busy` and the disabled state carry the
+   news instead — this is the one place where less motion needs different copy,
+   not the same copy standing still. */
+@media (prefers-reduced-motion: reduce) {
+  .btn.loading > * { visibility: visible; }
+  .btn.loading::after { display: none; }
+}
+
+.btn-row { display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; }
+.btn-row.end { justify-content: flex-end; }
+
+/* ----------------------------------------------------------------- pill -- */
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: var(--r-full);
+  font: 700 var(--t-micro)/1.4 var(--font); letter-spacing: .05em;
+  text-transform: uppercase; white-space: nowrap;
+  border: 1px solid transparent;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+/* A pill that stands alone as a status, rather than trailing a title. */
+.pill.lg { padding: 6px 12px; font-size: var(--t-small); letter-spacing: .04em; }
+/* Tinted glass, not a solid tint: the verdict shows through to the wash. */
+.pill.ok    { background: rgba(var(--green-rgb), .10);  color: var(--green);    border-color: rgba(var(--green-rgb), .28); }
+.pill.amb   { background: rgba(var(--amber-rgb), .11);  color: var(--amber);    border-color: rgba(var(--amber-rgb), .30); }
+.pill.bad   { background: rgba(var(--red-rgb), .09);    color: var(--red);      border-color: rgba(var(--red-rgb), .28); }
+.pill.code  { background: rgba(var(--accent-rgb), .09); color: var(--blue-700); border-color: rgba(var(--accent-rgb), .26); }
+.pill.off   { background: rgba(var(--navy-rgb), .05);   color: var(--ink-3);    border-color: var(--line-2); }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.pill.ok .dot { animation: pulse 2s var(--ease) infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* -------------------------------------------------------------- verdict -- */
+
+/* A verdict is the most important box in this product: it is where the counter
+   says what it decided and why. It gets a mark of its own — an icon column and
+   a 3px edge in the verdict colour — so it is recognisable across the room and
+   before it is read.
+
+   The icon is a SIBLING of the <h4>, never inside it. `.verdict h4` is asserted
+   on in the e2e suite by text content, and a glyph parked in that heading would
+   be read as part of the machine's own words. */
+.verdict {
+  border-radius: var(--r-md); padding: var(--s4) var(--s5);
+  border: 1px solid; border-left-width: 4px; margin-top: var(--s4);
+  box-shadow: var(--glass-edge);
+  animation: verdictIn var(--med) var(--ease-out) both;
+}
+/* The two-column layout is conditional on an icon actually being there.
+   `ErrorBoundary` renders `.verdict` by hand with a bare <h4> and <p>, and an
+   unconditional `display: flex` would have set that heading and its paragraph
+   side by side on the one screen nobody sees until something has gone wrong. */
+.verdict:has(> .v-ico) { display: flex; align-items: flex-start; gap: var(--s3); }
+@keyframes verdictIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.verdict > .v-ico { flex: none; margin-top: 1px; }
+.verdict > .v-main { flex: 1; min-width: 0; }
+.verdict h4 { font-size: var(--t-h3); font-weight: 700; margin-bottom: var(--s2); letter-spacing: var(--tr-flat); }
+/* Tinted glass. The left edge carries the full verdict colour; the field is
+   the same colour at a tenth, so the wash shows through it. */
+.verdict.green { background: rgba(var(--green-rgb), .09);  border-color: rgba(var(--green-rgb), .24);  border-left-color: var(--green); }
+.verdict.green h4, .verdict.green > .v-ico { color: var(--green); }
+.verdict.amber { background: rgba(var(--amber-rgb), .10);  border-color: rgba(var(--amber-rgb), .26);  border-left-color: var(--amber); }
+.verdict.amber h4, .verdict.amber > .v-ico { color: var(--amber); }
+.verdict.red   { background: rgba(var(--red-rgb), .08);    border-color: rgba(var(--red-rgb), .24);    border-left-color: var(--red); }
+.verdict.red h4, .verdict.red > .v-ico { color: var(--red); }
+.verdict.info  { background: rgba(var(--accent-rgb), .07); border-color: rgba(var(--accent-rgb), .22); border-left-color: var(--accent-500); }
+.verdict.info h4, .verdict.info > .v-ico { color: var(--blue-700); }
+.verdict p { font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-loose); }
+
+/* ------------------------------------------------------------------- kv -- */
+
+.kv {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4);
+  padding: var(--s3) 0; border-bottom: 1px solid var(--line);
+  font-size: var(--t-small);
+}
+.kv:last-child { border-bottom: 0; }
+/* TWO TIERS, NOT ONE. Thirty of these rows down the Settings screen used to be
+   set at one size in one weight, key and value alike, so a row carrying `1781`
+   read with exactly the weight of a row carrying a sentence and the figures a
+   shopkeeper actually came for were the quietest thing on the page. The key is
+   now the label — small, light, receding — and the VALUE carries the weight,
+   because on this product the value is usually a number and the number is
+   usually money. `tabular-nums` below is what keeps a column of them aligned. */
+.kv > b {
+  color: var(--ink-4); font-weight: 500; font-size: var(--t-small);
+  letter-spacing: var(--tr-flat); flex: 0 1 auto;
+}
+/* `min-width: 0` and not just a wrap rule on the text. A flex item's automatic
+   minimum is its min-content width, and `overflow-wrap: break-word` is defined
+   NOT to shrink min-content — so a 64-character session hash held this row 128 px
+   wider than the phone until the item itself was allowed to shrink. */
+/* The weight and the ink carry the tier, NOT the size. A step up to --t-body
+   here reads beautifully in a full-width card and re-wraps every row in a
+   340px rail — "never sets" broken across two lines to make room for a figure
+   that had not grown. Ink and weight cost no width at all. */
+.kv > span {
+  color: var(--navy-900); font-weight: 700;
+  text-align: right; font-variant-numeric: tabular-nums; min-width: 0;
+}
+/* A value that is a whole sentence rather than a figure. Semibold prose at the
+   end of a long row shouts; the paths, the file names and the explanatory
+   clauses stay at reading weight and let the figures keep the emphasis. */
+.kv > span > .mono, .kv > span > code { font-weight: 500; }
+
+/* ---------------------------------------------------------------- stage -- */
+
+.stage {
+  position: relative; overflow: hidden;
+  background: var(--navy-900);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2), 0 0 0 1px rgba(var(--navy-rgb), .35);
+  aspect-ratio: 16 / 10;
+  display: grid; place-items: center;
+}
+.stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* The overlay must NEVER swallow a click. It once covered START CAMERA
+   entirely, and `element.click()` in tests skips hit-testing, so the button
+   tested fine and was dead in every real hand. */
+.stage canvas.ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.stage .drag-layer { position: absolute; inset: 0; cursor: crosshair; }
+
+.camgate {
+  position: relative; z-index: 2;
+  padding: var(--s8) var(--s6); text-align: center; max-width: 52ch;
+}
+.camgate h3 { color: var(--on-dark); font-size: var(--t-h2); margin-bottom: var(--s3); }
+.camgate p { color: var(--on-dark-2); font-size: var(--t-small); line-height: 1.65; margin-bottom: var(--s6); }
+
+.stage-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: linear-gradient(to top, rgba(var(--navy-rgb), .82), rgba(var(--navy-rgb), 0));
+  color: var(--on-dark); font-size: var(--t-micro);
+}
+.stage-bar .mono { color: var(--on-dark-2); }
+
+.readout {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  min-height: 34px; margin-bottom: var(--s3);
+}
+.readout .names { font-size: var(--t-h3); font-weight: 700; color: var(--navy-900); }
+
+/* ----------------------------------------------------------------- bill -- */
+
+.bill { display: flex; flex-direction: column; }
+.bill-lines { max-height: 46vh; overflow-y: auto; }
+.bill-line {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; border-bottom: 1px solid var(--line);
+  animation: lineIn var(--med) var(--ease);
+}
+@keyframes lineIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.bill-line .nm { font-weight: 600; }
+.bill-line .qty {
+  font-size: var(--t-micro); font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums;
+  background: rgba(var(--navy-rgb), .06); padding: 3px 9px; border-radius: var(--r-full);
+}
+.bill-line .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.bill-total {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: var(--s5) 0 var(--s4);
+  border-top: 2px solid var(--navy-900); margin-top: var(--s2);
+}
+/* The total is the largest figure on the counter, and it wears the ink
+   gradient — the one place ink is allowed to be more than flat. */
+.bill-total .amt {
+  background: linear-gradient(180deg, var(--navy-900) 0%, #2A2F4A 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.bill-total .lbl { font-size: var(--t-micro); font-weight: 700; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-3); }
+.bill-total .amt {
+  font-family: var(--font-display);
+  font-size: var(--t-display); font-weight: 800; letter-spacing: var(--tr-display);
+  color: var(--navy-900); font-variant-numeric: tabular-nums;
+}
+
+/* NOTHING HERE YET is a state, not an absence, so it is drawn. The mark is a
+   quiet ink outline — never a verdict colour, because an empty list is neither
+   a settled payment nor a refusal. */
+/* NOTHING HERE YET is a state, not an absence, so it is drawn. The mark is a
+   quiet ink outline — never a verdict colour, because an empty list is neither
+   a settled payment nor a refusal.
+
+   BLOCK LAYOUT, not flex, deliberately: half the callers pass a fragment with
+   a bare <br> in it, and in a flex column a <br> becomes a flex item of its own
+   and the row gap is applied twice around a line break that has no height. */
+.empty {
+  padding: var(--s8) var(--s4); text-align: center; color: var(--ink-4);
+  font-size: var(--t-small); line-height: 1.7;
+}
+.empty .empty-ico {
+  display: grid; place-items: center; width: 52px; height: 52px; margin: 0 auto var(--s4);
+  border-radius: var(--r-lg); color: var(--accent-600);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), .14), rgba(var(--accent-rgb), .05));
+  box-shadow: var(--glass-edge), 0 0 0 1px rgba(var(--accent-rgb), .12);
+}
+.empty .empty-title {
+  display: block; margin-bottom: var(--s2);
+  font-size: var(--t-h3); font-weight: 700; color: var(--ink-2); letter-spacing: var(--tr-flat);
+}
+.empty .empty-body { display: block; max-width: 46ch; margin: 0 auto; }
+.empty .btn-row { justify-content: center; margin-top: var(--s4); }
+
+/* THE BARE FORM — one sentence, no mark and no title. A sentence adrift in the
+   middle of a tall white card is the shape of a panel that failed to load; the
+   same sentence inside a dashed inset panel is the shape of a space that has
+   been reserved. Same words, same colour discipline (never a verdict colour),
+   one step up in size so it is not mistaken for the help text under a field.
+   The idiom is not new: it is what `.bk-hintstate` already draws on History. */
+.empty.bare {
+  padding: var(--s6) var(--s5);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-md);
+  background: rgba(var(--navy-rgb), .025);
+  color: var(--ink-3);
+  font-size: var(--t-body);
+  line-height: var(--lh-loose);
+}
+.empty.bare .empty-body { max-width: 54ch; }
+/* Inside a table the panel would otherwise sit hard against the cell edge and
+   read as a broken row rather than as an empty list. */
+table.tbl td > .empty.bare { margin: var(--s2) 0; }
+
+/* ------------------------------------------------------------------ qr --- */
+
+.qr-wrap { text-align: center; padding: var(--s4) 0; }
+.qr-wrap img {
+  width: 260px; max-width: 100%; border-radius: var(--r-lg);
+  border: 1px solid var(--line); background: var(--surface); padding: var(--s4);
+  box-shadow: var(--shadow-2), var(--glass-edge);
+}
+
+/* ---------------------------------------------------------------- forms -- */
+
+/* ---------------------------------------------------------------------------
+   FORM CONTROLS
+
+   `.field` is the label/control/help stack every screen already uses. The
+   control styling below is written against BOTH `.field input` (which the
+   existing routes rely on, having no class on the input itself) and a bare
+   `.inp` class, so a control can be used outside a field — in a table cell, in
+   a toolbar — and still look like the same object.
+   --------------------------------------------------------------------------- */
+
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--s4); }
+.field > label:not(.opt):not(.switch), .field-label {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-3);
+}
+/* `:not(.opt):not(.switch)` is load-bearing. A checkbox and a switch are BOTH
+   <label> elements, and a checkbox dropped straight into a field inherited the
+   field label's `text-transform: uppercase` — so "Record the discrepancy" came
+   out shouting at 11px while the identical switch one line below, nested one
+   div deeper, did not. */
+/* A required field says so where the eye already is, in the label, and in ink
+   rather than in red — nothing here has failed yet. */
+.field-req { color: var(--ink-4); font-weight: 600; letter-spacing: 0; margin-left: 4px; text-transform: none; }
+
+.inp,
+.field input, .field select, .field textarea {
+  font: 400 var(--t-body)/1.4 var(--font); color: var(--ink);
+  min-height: var(--ctl-h);
+  padding: var(--s2) var(--s3); background: var(--glass-thick);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  box-shadow: var(--shadow-0), var(--glass-edge);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+              background var(--fast) var(--ease);
+}
+/* A checkbox or a radio inside a field is a control of its own — see `.opt` and
+   `.switch`, which hide the native box and draw their own — so it takes none of
+   the text-box treatment above.
+
+   THE EXCLUSION IS A SEPARATE RULE and not a `:not()` on the selector above,
+   which is how this was written first and is a trap: `:not([type='checkbox'])`
+   counts as a CLASS towards specificity, so `.field input:not(…):not(…)` scored
+   higher than `.field.bad input` and `.field input:focus`. A refused field kept
+   its grey border and a focused one never turned blue, and nothing about the
+   declarations said why. */
+.field input[type='checkbox'], .field input[type='radio'] {
+  min-height: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; box-shadow: none;
+}
+.inp:hover:not(:disabled):not(:focus),
+.field input:hover:not(:disabled):not(:focus),
+.field select:hover:not(:disabled):not(:focus),
+.field textarea:hover:not(:disabled):not(:focus) { border-color: var(--line-3); }
+
+.inp:focus, .inp:focus-visible,
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none; border-color: var(--blue-500); box-shadow: var(--ring), var(--glass-edge);
+  background: var(--surface);
+}
+.inp:disabled, .field input:disabled, .field select:disabled, .field textarea:disabled {
+  background: var(--surface-3); color: var(--ink-4); cursor: not-allowed; box-shadow: none;
+}
+.inp::placeholder, .field input::placeholder, .field textarea::placeholder { color: var(--ink-5); }
+
+/* A number that will be compared against the one above it lines up. */
+.inp.num, .field input[inputmode='decimal'], .field input[inputmode='numeric'], .field input[type='number'] {
+  font-variant-numeric: tabular-nums;
+}
+.inp.sm { min-height: var(--ctl-h-sm); font-size: var(--t-small); padding: var(--s1) var(--s2); }
+textarea.inp { min-height: 84px; line-height: var(--lh-body); resize: vertical; }
+
+/* A field the server refused. The border and halo change; the LABEL does not,
+   because the reason belongs under the control where it can be a sentence. */
+/* The border carries the full red, not the pale line colour: a refusal the eye
+   has to hunt for is a refusal that gets typed past. */
+.field.bad input, .field.bad select, .field.bad textarea, .inp.bad {
+  border-color: var(--red);
+}
+.field.bad input:focus, .field.bad select:focus, .field.bad textarea:focus, .inp.bad:focus {
+  border-color: var(--red); box-shadow: var(--ring-red);
+}
+.field .err { font-size: var(--t-micro); color: var(--red); line-height: 1.5; }
+
+/* A native select, with the chevron drawn rather than left to the platform —
+   an unstyled select is the one control that gives away that nobody looked at
+   this screen. The arrow is an inline data URI: the CSP allows no external
+   host, and `data:` is not one. The stroke is the ONE literal colour in this
+   file: a data URI cannot read a custom property. It is --ink-3, by hand. */
+.inp.sel, .field select {
+  appearance: none; -webkit-appearance: none;
+  padding-right: var(--s7);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%23555B6C' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--s3) center;
+}
+
+.field .sub { font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5; }
+
+/* An input with a fixed unit or prefix welded to it — "₹" before a price. The
+   wrapper carries the border so the two read as one control. */
+.inp-group {
+  display: flex; align-items: stretch; min-width: 0;
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--glass-thick); box-shadow: var(--shadow-0), var(--glass-edge);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.inp-group:focus-within { border-color: var(--blue-500); box-shadow: var(--ring); }
+.inp-group > .fix {
+  display: inline-flex; align-items: center; padding: 0 var(--s3);
+  background: rgba(var(--navy-rgb), .035); color: var(--ink-3);
+  font-size: var(--t-small); font-weight: 600; white-space: nowrap;
+}
+.inp-group > .fix:first-child { border-right: 1px solid var(--line); border-radius: var(--r-md) 0 0 var(--r-md); }
+.inp-group > .fix:last-child { border-left: 1px solid var(--line); border-radius: 0 var(--r-md) var(--r-md) 0; }
+.inp-group > input {
+  flex: 1; min-width: 0; border: 0; background: transparent; box-shadow: none;
+  min-height: var(--ctl-h); padding: var(--s2) var(--s3);
+  font: 400 var(--t-body)/1.4 var(--font); color: var(--ink);
+}
+.inp-group > input:focus { outline: none; box-shadow: none; }
+
+/* --------------------------------------------------- switch, radio, check --
+   A switch is BLUE when it is on, never green. Green on this product means a
+   payment settled; a setting that is merely enabled may not borrow that. */
+
+.switch {
+  display: inline-flex; align-items: center; gap: var(--s3);
+  cursor: pointer; min-width: 0;
+  /* The native input is absolutely positioned and invisible; without a
+     positioned parent it resolves against the page and can end up as a
+     zero-size box somewhere else entirely. */
+  position: relative;
+}
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .track {
+  flex: none; position: relative; width: 40px; height: 24px;
+  background: var(--surface-4); border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  transition: background var(--med) var(--ease), border-color var(--med) var(--ease);
+}
+.switch .knob {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  background: var(--surface); border-radius: 50%; box-shadow: var(--shadow-1);
+  transition: transform var(--med) var(--ease-out);
+}
+.switch input:checked + .track { background: var(--accent-grad); border-color: transparent; box-shadow: 0 2px 8px rgba(var(--accent-rgb), .3); }
+.switch input:checked + .track .knob { transform: translateX(16px); }
+.switch input:focus-visible + .track { box-shadow: var(--ring); }
+.switch input:disabled + .track { opacity: .5; }
+.switch:has(input:disabled) { cursor: not-allowed; }
+.switch .switch-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.switch .switch-text .l { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+.switch .switch-text .s { font-size: var(--t-micro); color: var(--ink-4); line-height: 1.45; }
+
+/* A radio group and a checkbox share a row shape: the whole row is the target,
+   because a 14px circle is not something a thumb hits in a shop. */
+.opts { display: flex; flex-direction: column; gap: var(--s2); }
+.opts.inline { flex-direction: row; flex-wrap: wrap; gap: var(--s3); }
+.opt {
+  position: relative;
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s3); min-height: var(--ctl-h);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.opt:hover { border-color: var(--line-3); background: var(--surface-2); }
+.opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+.opt .mark {
+  flex: none; width: 18px; height: 18px; margin-top: 1px;
+  border: 1.5px solid var(--line-3); background: var(--surface);
+  border-radius: 50%;
+  display: grid; place-items: center;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.opt.check .mark { border-radius: var(--r-xs); }
+.opt .mark::after {
+  content: ''; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--surface); transform: scale(0);
+  transition: transform var(--fast) var(--ease-out);
+}
+.opt.check .mark::after {
+  width: 10px; height: 6px; border-radius: 0; background: none;
+  border-left: 2px solid var(--surface); border-bottom: 2px solid var(--surface);
+  transform: rotate(-45deg) scale(0); margin-top: -2px;
+}
+.opt input:checked + .mark { border-color: transparent; background: var(--accent-grad); }
+.opt input:checked + .mark::after { transform: scale(1); }
+.opt.check input:checked + .mark::after { transform: rotate(-45deg) scale(1); }
+.opt input:focus-visible + .mark { box-shadow: var(--ring); }
+.opt:has(input:checked) { border-color: var(--blue-300); background: var(--blue-050); }
+.opt:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.opt .opt-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.opt .opt-text .l { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+.opt .opt-text .s { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.45; }
+
+/* A four-option segmented control is 448 px wide and a phone is 380. It scrolls
+   inside itself rather than shoving the whole page sideways — the options stay
+   full size and reachable, and nothing else on the page is dragged out of
+   alignment by a filter row. */
+/* A capsule track of sunk glass; the chosen segment is a white pill lifted
+   off it, the same shape as the section tabs in the bar. */
+.seg {
+  display: inline-flex; padding: 3px; background: rgba(var(--navy-rgb), .055);
+  border: 1px solid var(--line); border-radius: var(--r-full); gap: 2px;
+  max-width: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none;
+}
+.seg::-webkit-scrollbar { display: none; }
+.seg button {
+  flex: none;
+  appearance: none; border: 0; cursor: pointer; background: transparent;
+  min-height: calc(var(--ctl-h) - 8px);
+  padding: 0 var(--s4); border-radius: var(--r-full);
+  font: 700 var(--t-micro)/1.4 var(--font); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+  /* Named properties, not `all`. `transition: all` also animates the box-shadow
+     of the focus ring, so tabbing onto a segment made the ring fade in — which
+     reads as lag on the one interaction that has to feel instant. */
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.seg button:hover:not([aria-pressed='true']) { color: var(--ink); background: rgba(var(--navy-rgb), .04); }
+.seg button[aria-pressed='true'] { background: var(--surface); color: var(--navy-900); box-shadow: var(--shadow-1), var(--glass-edge), 0 0 0 1px var(--line); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg.sm button { min-height: calc(var(--ctl-h-sm) - 8px); padding: 0 var(--s3); }
+.seg.wide { display: flex; width: 100%; }
+.seg.wide button { flex: 1; }
+
+/* --------------------------------------------------------------- tables -- */
+
+.sku-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--s4); }
+.sku {
+  border: 1px solid var(--glass-line); border-radius: var(--r-lg); overflow: hidden;
+  background: var(--glass); box-shadow: var(--shadow-1), var(--glass-edge), 0 0 0 1px var(--line);
+  transition: box-shadow var(--med) var(--ease), transform var(--med) var(--ease);
+}
+.sku:hover { box-shadow: var(--shadow-2), var(--glass-edge), 0 0 0 1px var(--line); transform: translateY(-3px); }
+.sku .thumb { height: 112px; background: linear-gradient(180deg, rgba(var(--navy-rgb), .03), rgba(var(--navy-rgb), .06)); overflow: hidden; }
+/* `max-height: 100%` did NOT constrain these — a percentage max-height against
+   a grid track that sizes itself resolves to none, so a 840x1015 thumbnail
+   rendered at 372 px tall and spilled over the product's own name. Explicit
+   height plus object-fit needs no percentage resolution at all. */
+.sku .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 8px; display: block; }
+.sku .meta { padding: var(--s3) var(--s4) var(--s4); }
+.sku .nm { font-weight: 700; font-size: var(--t-small); }
+.sku .pr { font-variant-numeric: tabular-nums; color: var(--navy-900); font-weight: 700; margin-top: 2px; }
+.sku .row { display: flex; align-items: center; gap: 6px; margin-top: var(--s3); flex-wrap: wrap; }
+
+.thumb-slot {
+  border: 1px dashed var(--line-2); border-radius: var(--r-lg);
+  min-height: 150px; display: grid; place-items: center; background: rgba(var(--navy-rgb), .025);
+  overflow: hidden;
+}
+.thumb-slot img { max-width: 100%; max-height: 220px; object-fit: contain; display: block; }
+
+/* ---------------------------------------------------------------- misc --- */
+
+.stack { display: flex; flex-direction: column; gap: var(--s5); }
+/* `min-width: 0` so that when a .row is itself a flex item it may shrink. Its
+   automatic minimum is otherwise the min-content of whatever it holds, which is
+   how a filter row full of buttons pushed itself out through the right border
+   of the card it lives in. */
+.row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; min-width: 0; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: var(--s4); }
+/* Session ids, keys and URLs have no spaces to break at, so on a phone they ran
+   straight off the right edge of the page. Break them rather than let one
+   identifier decide the width of the whole document. */
+.mono { font-family: var(--mono); font-size: var(--t-micro); overflow-wrap: break-word; }
+.scroll-x { overflow-x: auto; }
+
+/* ---------------------------------------------------------------- loading --
+   NO PANEL RENDERS BLANK. A skeleton is drawn at the shape of the thing that is
+   coming, so the layout does not jump when it lands.
+
+   The sweep is a background-position animation and not a moving pseudo-element:
+   it costs one composited property, and the blanket reduced-motion rule at the
+   bottom of this file stops it dead without leaving an invisible box behind —
+   the block keeps its grey and simply stops shimmering. */
+/* Pale blue blocks, not grey ones: a skeleton is the machine working, and on
+   this product that is the accent's job. The sweep is the same band of light
+   the thinking panel uses, at the same angle. */
+.skel {
+  background: linear-gradient(90deg,
+    rgba(var(--accent-rgb), .09) 25%,
+    rgba(var(--accent-rgb), .04) 50%,
+    rgba(var(--accent-rgb), .09) 75%);
+  background-size: 200% 100%; animation: sh 1.4s linear infinite; border-radius: var(--r-sm);
+}
+@keyframes sh { to { background-position: -200% 0; } }
+
+/* A stack of lines at text metrics. The last one is short, because a paragraph
+   whose final line reaches the right margin is the one thing real text never
+   does, and the eye notices. */
+.skel-text { display: flex; flex-direction: column; gap: var(--s2); }
+.skel-text .skel { height: 11px; border-radius: var(--r-full); }
+.skel-text .skel:last-child { width: 62%; }
+.skel-row {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3) 0; border-bottom: 1px dashed var(--line);
+}
+.skel-row:last-child { border-bottom: 0; }
+.skel-row .skel { height: 12px; border-radius: var(--r-full); }
+.skel-row .skel.grow { flex: 1; }
+/* A card body's worth of loading, at the padding a card body has, so the
+   spinner-free wait is exactly the size of what replaces it. */
+.skel-card { padding: var(--s5); display: flex; flex-direction: column; gap: var(--s4); }
+
+/* --------------------------------------------------------------- tables -- */
+
+table.moments { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+table.moments th {
+  text-align: left; padding: var(--s2) var(--s3) var(--s3) 0;
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+table.moments td {
+  padding: var(--s4) var(--s4) var(--s4) 0; vertical-align: top;
+  border-bottom: 1px dashed var(--line); line-height: 1.6;
+}
+table.moments tr:last-child td { border-bottom: 0; }
+table.moments a { color: var(--blue-600); text-decoration: none; font-weight: 600; }
+table.moments a:hover { text-decoration: underline; }
+
+/* ------------------------------------------------------- capture stage --- */
+
+.capture-stage { aspect-ratio: 4 / 3; }
+.capture-stage .still {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; background: var(--navy-900);
+}
+.capture-stage .camgate { max-width: 46ch; }
+
+/* ----------------------------------------------------- brain components -- */
+
+/* The gate label is absolutely positioned above the track; without this
+   headroom it collided with whatever heading sat above the gauge. */
+.gauge { margin-top: 26px; }
+.gauge-track {
+  position: relative; height: 12px; border-radius: var(--r-full);
+  background: var(--surface-3); overflow: visible;
+}
+.gauge-fill {
+  height: 100%; border-radius: var(--r-full); background: var(--blue-500);
+  transition: width var(--med) var(--ease), background var(--med) var(--ease);
+}
+.gauge-fill.danger { background: var(--red); }
+.gauge-gate { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink-3); }
+.gauge-gate span {
+  position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: .05em;
+  color: var(--ink-3); white-space: nowrap;
+}
+.gauge-foot { display: flex; justify-content: space-between; margin-top: var(--s3); align-items: baseline; }
+.gauge-foot .val { font-size: var(--t-h2); font-weight: 800; font-variant-numeric: tabular-nums; color: var(--navy-900); }
+.gauge-foot .val.danger { color: var(--red); }
+
+.bigverdict {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s5); border-radius: var(--r-md);
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.bigverdict .w {
+  font-family: var(--font-display);
+  font-size: var(--t-display); font-weight: 800; letter-spacing: var(--tr-display); line-height: 1.1;
+  color: var(--navy-900);
+}
+.bigverdict .n { font-size: var(--t-small); color: var(--ink-2); line-height: 1.6; }
+.bigverdict.amb { background: var(--amber-bg); border-color: var(--amber-line); }
+.bigverdict.amb .w { color: var(--amber); }
+.bigverdict.bad { background: var(--red-bg); border-color: var(--red-line); }
+.bigverdict.bad .w { color: var(--red); }
+.bigverdict.ok  { background: var(--green-bg); border-color: var(--green-line); }
+.bigverdict.ok .w { color: var(--green); }
+
+.beat-track { height: 5px; border-radius: var(--r-full); background: var(--surface-3); overflow: hidden; }
+.beat-fill { height: 100%; background: var(--blue-500); transition: width var(--slow) var(--ease); }
+
+/* --------------------------------------------------------------- ledger -- */
+
+.ledger-line {
+  display: grid; grid-template-columns: 1fr auto auto; gap: var(--s4);
+  align-items: baseline; padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line); font-size: var(--t-small);
+}
+.ledger-line:last-child { border-bottom: 0; }
+.ledger-line .nm { font-weight: 600; }
+.ledger-line .why { color: var(--ink-4); font-size: 11px; }
+.ledger-line .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+.ledger-line.amber .nm, .ledger-line.amber .amt { color: var(--amber); }
+
+/* ------------------------------------------------------------ pay screen -- */
+
+.pay-grid { grid-template-columns: minmax(0, 1fr) minmax(340px, .9fr); align-items: start; }
+@media (max-width: 1080px) { .pay-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.qr-wrap.big { padding: var(--s5) 0 var(--s3); }
+.qr-wrap.big img {
+  width: 320px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--surface); padding: var(--s4); box-shadow: var(--shadow-2);
+}
+.pay-amount {
+  margin-top: var(--s4);
+  font-family: var(--font-display);
+  font-size: var(--t-display); font-weight: 800; letter-spacing: var(--tr-display);
+  color: var(--navy-900); font-variant-numeric: tabular-nums;
+}
+
+/* The contact sheet: one square per frame in a teaching burst, coloured by
+   whether the quality gate kept it. Small on purpose — it is evidence that the
+   gate ran, not a photo gallery. */
+.contact-sheet { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.contact-sheet .chip {
+  width: 26px; height: 26px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 600 11px/1 var(--font-mono, ui-monospace, monospace);
+  border: 1px solid transparent; cursor: default;
+}
+.contact-sheet .chip.ok  { background: var(--green-bg); color: var(--green); border-color: var(--green-line); }
+.contact-sheet .chip.bad { background: var(--red-bg); color: var(--red); border-color: var(--red-line); }
+
+/* ===========================================================================
+   THE STOREFRONT — Shop.tsx (a customer's phone) and Orders.tsx (the laptop)
+   ---------------------------------------------------------------------------
+   Appended block. Everything here is prefixed `shop-`, `order`, `journey` or
+   `stepper` so it cannot collide with the counter's own classes above.
+
+   Shop.tsx is designed for a PHONE first and is capped at 560 px on a laptop
+   rather than stretched: the shopkeeper previews the same page they are asking
+   customers to read, and a page that reflows into three columns on the preview
+   is not the page anybody will actually see.
+   =========================================================================== */
+
+.shopfront {
+  max-width: 560px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  /* Room for the sticky basket bar, plus the phone's own home indicator. */
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+.shop-hero h1 { font-size: var(--t-h1); font-weight: 800; letter-spacing: var(--tr-display); }
+.shop-hero p { color: var(--ink-3); margin-top: var(--s2); line-height: 1.6; }
+
+/* --------------------------------------------------------- the catalogue -- */
+
+.shop-list { display: flex; flex-direction: column; gap: var(--s3); }
+
+.shop-item {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.shop-item.in { border-color: var(--blue-200); box-shadow: inset 3px 0 0 var(--blue-500); }
+
+.shop-item .thumb {
+  width: 64px; height: 64px; border-radius: var(--r-sm);
+  background: var(--surface-3); overflow: hidden;
+  display: grid; place-items: center;
+}
+.shop-item .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 4px; display: block; }
+/* A product taught from a printed code alone has no photograph and never will.
+   Its initial is a placeholder that admits to being one, rather than a stock
+   image of something this shop does not stock. */
+.shop-item .thumb .initial {
+  font: 800 24px/1 var(--font); color: var(--ink-4); text-transform: uppercase;
+}
+
+.shop-item .meta { min-width: 0; }
+.shop-item .nm { font-weight: 600; line-height: 1.35; }
+.shop-item .pr { color: var(--navy-900); font-weight: 700; margin-top: 2px; }
+
+/* 44 px is the smallest target a thumb hits reliably on a phone. Every control
+   on this page clears it; ADD and the stepper are the two that get pressed
+   while walking. */
+.shop-item .btn.add { min-width: 76px; min-height: 44px; font-weight: 700; }
+
+.stepper {
+  display: inline-flex; align-items: center;
+  border: 1px solid var(--line-2); border-radius: var(--r-full);
+  background: var(--surface);
+  overflow: hidden;
+}
+.stepper button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  width: 44px; height: 44px; font: 700 20px/1 var(--font); color: var(--blue-600);
+}
+.stepper button:hover { background: var(--blue-050); }
+.stepper button:active { background: var(--blue-100); }
+.stepper .n { min-width: 34px; text-align: center; font-weight: 700; }
+
+/* --------------------------------------------------------- the basket bar -- */
+
+.shop-bar {
+  position: fixed; z-index: 40;
+  left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4) calc(var(--s3) + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -6px 20px rgba(var(--shadow-rgb), .10);
+}
+.shop-bar .btn { min-height: 48px; flex: 1; }
+.shop-bar .btn.ghost { flex: 0 0 auto; }
+.shop-total { display: flex; flex-direction: column; line-height: 1.2; padding-right: var(--s2); }
+.shop-total .n { font-size: var(--t-micro); color: var(--ink-3); font-weight: 600; }
+.shop-total .amt { font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); }
+
+/* Above the phone breakpoint the bar follows the 560 px column rather than the
+   whole window, so the preview on a laptop is the phone's layout and not a
+   full-width toolbar nobody will ever see. */
+@media (min-width: 720px) {
+  .shop-bar {
+    left: 50%; right: auto; transform: translateX(-50%);
+    width: min(560px, calc(100vw - 32px));
+    bottom: var(--s5);
+    border: 1px solid var(--line); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-3);
+  }
+}
+
+.shop-foot { justify-content: center; }
+.btn.pay.big { width: 100%; min-height: 56px; font-size: var(--t-h3); margin-top: var(--s4); }
+a.btn.pay.big { display: grid; place-items: center; text-decoration: none; }
+
+.shopfront textarea {
+  font: 400 var(--t-body)/1.5 var(--font); color: var(--ink);
+  padding: var(--s3); background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  resize: vertical;
+}
+.shopfront textarea:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+/* 16 px or iOS zooms the whole page on focus and the customer loses the form. */
+.shopfront input, .shopfront textarea { font-size: 16px; }
+
+/* ------------------------------------------------------------ the journey -- */
+
+.journey { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.journey li {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) 0; color: var(--ink-4); position: relative;
+}
+.journey li .mark {
+  width: 14px; height: 14px; border-radius: 50%; flex: none;
+  border: 2px solid var(--line-2); background: var(--surface);
+}
+/* The rail between two dots. Drawn on the item rather than as a pseudo-track so
+   the last step has no tail hanging off it. */
+.journey li + li::before {
+  content: ''; position: absolute; left: 6px; top: -8px; width: 2px; height: 16px;
+  background: var(--line-2);
+}
+.journey li.done { color: var(--ink-2); }
+.journey li.done .mark { border-color: var(--green); background: var(--green); }
+.journey li.done + li::before { background: var(--green); }
+.journey li.now { color: var(--navy-900); font-weight: 700; }
+.journey li.now .mark { border-color: var(--blue-500); background: var(--blue-500); box-shadow: 0 0 0 4px var(--blue-100); }
+
+/* --------------------------------------------------- the shopkeeper's list -- */
+
+.orders-grid { grid-template-columns: minmax(0, 1.5fr) minmax(320px, .8fr); align-items: start; }
+@media (max-width: 1080px) { .orders-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.order-list { display: flex; flex-direction: column; gap: var(--s4); }
+
+.order {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); overflow: hidden;
+}
+.order > header {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+.order > header .who { font-weight: 700; color: var(--navy-900); }
+.order > header .when { font-size: var(--t-micro); color: var(--ink-4); }
+.order > header .amt { font-weight: 800; color: var(--navy-900); }
+
+.order-body {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s5); padding: var(--s4);
+}
+@media (max-width: 720px) { .order-body { grid-template-columns: minmax(0, 1fr); } }
+
+.order-body .what .bill-line { padding: 6px 0; }
+.order-body .where { display: flex; flex-direction: column; gap: 4px; }
+.order-body .where address {
+  font-style: normal; white-space: pre-wrap; line-height: 1.5; color: var(--ink);
+}
+.order-body .where .phone {
+  color: var(--blue-600); text-decoration: none; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.order-body .where .phone:hover { text-decoration: underline; }
+.order-body .where .mono { color: var(--ink-4); margin-top: 4px; }
+
+.order .btn-row { padding: 0 var(--s4) var(--s4); }
+
+/* ==========================================================================
+   THE MANAGEMENT SCREENS — History, Inventory, Settings.
+   Added in one block. Everything above is reused as-is: Card, KV, Pill,
+   Verdict, Empty, Refusal, table.moments, .ledger-line, .bill. What follows is
+   only what those could not already do.
+   ========================================================================== */
+
+/* History: a bill row is a control, so it has to look like one. The open row
+   keeps a left edge rather than a fill — a filled row read as "selected AND
+   settled" next to the green PAID pill, which is two different facts. */
+table.moments.hist tbody tr { cursor: pointer; transition: background var(--fast) var(--ease); }
+table.moments.hist tbody tr:hover { background: var(--surface-2); }
+table.moments.hist tbody tr.open { background: var(--blue-050); box-shadow: inset 3px 0 0 var(--blue-500); }
+table.moments.hist td:first-child { padding-left: var(--s3); }
+
+/* The excluded lines sit INSIDE an amber verdict, which already has a tinted
+   background, so the dashed rules the ledger line normally draws disappear
+   into it. */
+.excl-lines { display: block; margin-top: var(--s3); border-top: 1px solid var(--amber-line); }
+.excl-lines .ledger-line { border-bottom-color: var(--amber-line); }
+.excl-lines .ledger-line .amt { font-weight: 600; }
+
+/* The full event list for one session. Collapsed by default: it is evidence
+   that the derivation is checkable, not something to read every time. */
+.timeline { margin-top: var(--s4); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.timeline summary {
+  cursor: pointer; font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-4);
+}
+.timeline summary:hover { color: var(--ink-2); }
+.timeline table.moments td { padding: var(--s2) var(--s3) var(--s2) 0; }
+
+/* Inventory: seven columns, and the numeric ones have to line up or the eye
+   cannot compare them down the column. */
+table.moments.inv td { padding-top: var(--s3); padding-bottom: var(--s3); }
+table.moments.inv td:first-child { padding-left: var(--s3); }
+
+/* The stock cell is a button that looks like a value until you hover it. The
+   count and the moment it was made are shown TOGETHER and always: a remaining
+   figure without its count time is exactly the plausible-looking number this
+   page refuses to print. */
+.stock-cell {
+  display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  border-color: transparent; background: transparent; padding: var(--s2);
+  text-align: right; min-width: 96px;
+}
+.stock-cell:hover { border-color: var(--line-2); background: var(--surface-2); }
+.stock-cell b { font-size: var(--t-h3); font-variant-numeric: tabular-nums; }
+.stock-cell .stock-sub { font-size: var(--t-micro); color: var(--ink-4); font-weight: 400; }
+.stock-cell .stock-neg { color: var(--red); }
+.stock-edit { display: flex; align-items: center; gap: var(--s2); justify-content: flex-end; }
+.stock-edit input {
+  width: 84px; text-align: right; padding: var(--s2) var(--s3);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  font: inherit; font-variant-numeric: tabular-nums;
+}
+.stock-edit input:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+
+/* Settings: the webhook liveness facts, at the size of the thing they report.
+   This panel is the difference between "nobody has paid yet" and "nothing can
+   reach this counter", which otherwise look identical from the till. */
+/* These are SPANS. `Verdict` renders its children inside a <p>, where a <div>
+   is invalid and gets lifted out of the box by the parser — so the elements are
+   phrasing content and the layout is put on them here instead. */
+.wh-facts {
+  display: flex; flex-wrap: wrap; gap: var(--s6);
+  margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid currentColor;
+}
+.wh-fact { display: flex; flex-direction: column; gap: 2px; }
+.wh-fact .wh-n {
+  font-size: var(--t-h2); font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.wh-fact .wh-l {
+  font-size: var(--t-micro); text-transform: uppercase; letter-spacing: .08em;
+  opacity: .75;
+}
+
+/* A span that must break its own line, for mono detail inside a <p>-bound
+   Verdict where a <div> would be invalid and get reparented out of the box. */
+.mono.blk { display: block; }
+
+/* ---------------------------------------------------------------------------
+   EDITING A BILL LINE
+   The camera proposes and the operator decides. These controls are deliberately
+   quiet until the row is hovered or focused: a bill that shouts − + × at every
+   line reads like a spreadsheet, and the common case is that the camera got it
+   right and nobody needs to touch anything.
+   --------------------------------------------------------------------------- */
+.bill-line.editable { display: flex; align-items: center; gap: 10px; }
+.bill-line.editable .nm { flex: 1; min-width: 0; }
+.bill-line.editable .amt { min-width: 5.5rem; text-align: right; }
+
+.qty-edit { display: inline-flex; align-items: center; gap: 2px; }
+.qty-edit .qty { min-width: 1.75rem; text-align: center; font-variant-numeric: tabular-nums; }
+
+.qbtn {
+  width: 24px; height: 24px; padding: 0; line-height: 1;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--ink-2);
+  font-size: 15px; cursor: pointer;
+  opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease;
+}
+.bill-line:hover .qbtn,
+.bill-line:focus-within .qbtn { opacity: 1; }
+.qbtn:hover { background: var(--surface-3); color: var(--ink); }
+/* Always reachable from the keyboard, whatever the hover state says. */
+.qbtn:focus-visible { opacity: 1; outline: var(--focus); outline-offset: 1px; }
+.qbtn.drop:hover { background: var(--red-bg); color: var(--red); }
+
+@media (hover: none) {
+  /* A touchscreen has no hover, so nothing would ever be visible. */
+  .qbtn { opacity: 1; width: 30px; height: 30px; }
+}
+
+/* ---------------------------------------------------------------------------
+   GLOBAL FINISH
+   The last layer of polish that belongs to no single screen: keyboard focus,
+   text selection, route entrances, and the reduced-motion guard that covers
+   every animation in the file at once.
+   --------------------------------------------------------------------------- */
+
+/* One focus treatment everywhere. Individual outlines existed on two controls
+   and nowhere else, so tabbing through the app was legible on those two and
+   invisible on the rest — which reads as broken to a keyboard user. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: var(--focus);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--r-sm, 6px);
+}
+
+::selection { background: var(--accent-100); color: var(--navy-900); }
+
+/* Each route breathes in rather than snapping. OPACITY ONLY, on purpose: an
+   animation that touches `transform` makes the element a containing block for
+   `position: fixed` for as long as the fill-mode holds it, so a fixed basket
+   bar inside a route pinned itself to the route instead of the viewport and
+   sat invisible below the fold. Measured, worked around downstream with a
+   portal — and fixed here at the cause so the next fixed or sticky child does
+   not re-discover it. */
+.main > * { animation: routeIn .22s var(--ease) both; }
+@keyframes routeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* The blanket guard. Every animation and transition in this file drops to
+   effectively zero for anyone who asked their OS for less motion — one rule,
+   so a screen added later cannot forget it. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* The order bell: a customer ordered from the shutter QR and is waiting. It is
+   a button dressed as a pill — pressing it goes to the queue — and it only
+   exists while the count is above zero, because a badge that counts handled
+   work never reaches zero and teaches everyone to ignore it. */
+/* A PILL CARRYING A SENTENCE MUST WRAP. `.pill` is `white-space: nowrap`,
+   which is right for "PAID" or "4 TAUGHT" and wrong for "3 delivered ·
+   unpaid" — at 320 that ran 22 px past the edge on Orders. Only the wide
+   ones wrap, and only on a narrow screen, so short pills keep their shape. */
+@media (max-width: 460px) {
+  .pill { white-space: normal; }
+}
+
+.order-bell { appearance: none; border: 0; background: none; padding: 0; cursor: pointer; position: relative; }
+/* A HIT AREA, not a bigger pill. The bell renders 38x25 — the pill's own
+   height — and it is the fastest route to a waiting order, so it is a bad
+   thing to miss with a thumb. The top bar at 320-430 has no room to grow, so
+   the target extends past the paint the way the account chip's does. */
+.order-bell::before {
+  content: '';
+  position: absolute; top: 50%; left: 50%;
+  width: max(100%, 44px); height: 44px;
+  transform: translate(-50%, -50%);
+}
+.order-bell .pill { animation: bellIn .3s var(--ease) both; }
+@keyframes bellIn { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+/* The sentence on a laptop, the count alone on a phone. See the narrow-bar
+   block below for the measurement that decided it. */
+.bell-short { display: none; }
+.bell-long { display: inline; }
+
+/* Narrow bar triage — and there is much less to triage than there was.
+   Three things fight for 390 px now: the brand, the account chip and Ask, over
+   a second row carrying the burger and the three tabs. The two chips that used
+   to win that fight by clipping the brand (the taught count and gateway
+   health) are no longer in the bar at all. The Devanagari mark stays: it is the
+   brand. */
+@media (max-width: 560px) {
+  /* `column-gap`, never `gap`: the shorthand also sets row-gap, and 12px of it
+     between the bar's two fixed rows made the bar 109px against a --topbar-h
+     of 96 — measured, and the drawer opened 13px too high. */
+  .topbar-in { column-gap: var(--s3); }
+
+  /* TWO RULES USED TO LIVE HERE AND ARE DELIBERATELY GONE.
+
+     The first hid `.pill.ok`/`.pill.amb` without a liveness dot — that was the
+     taught-count chip, and nothing else in this slot has ever matched it: the
+     account chip is `off`, or `amb` WITH a dot, and the order bell is `code`.
+     A selector kept for chips that no longer exist is a rule the next person
+     has to disprove.
+
+     The second hid the Ask trigger, because the status row wanted 245 px
+     inside 342 at 390 and something had to go. Measured again with the pills
+     gone: at 390 that row is 90.3 px without Ask and 163.4 px with it, word
+     and all — and the bar reports no overflow, no clipping, no off-screen
+     child and no overlap at 320, 360, 390, 430, 560, 1000 or 1440. At 320 the
+     account chip drops to its dot (the rule below) and the row is 96.1 px. So
+     the one control a shopkeeper reaches for mid-bill stays reachable on the
+     phone in their hand, wearing the whole word. */
+
+  /* A WAITING CUSTOMER IS THE WIDEST THING IN THIS ROW, and it was breaking
+     the bar long before the vitals pills left it.
+
+     Measured with three orders waiting, on the bar as it shipped: the status
+     row was 330 px at 430 and the brand column got 46 px for a lockup that
+     needs 97, so `overflow: hidden` cut GAWAAH to "GAW" at 320, 360, 390 AND
+     430. Dropping the two pills took that row to 290 and fixed nothing — the
+     bell's own sentence, "3 new orders", is 118.8 px of it.
+
+     So the bell says the NUMBER here, which is the fact that changes. The
+     count becomes the button's accessible name and its `title` supplies the
+     noun — "New orders from the storefront", in all three languages — so the
+     sentence is not lost, though it is not the same sentence the pill drops.
+     Pressing it still goes to the queue. Measured after, three orders waiting:
+     the pill is 38.2 px, the status row 144.3 px at 390 and 112.2 px at 320
+     (where the word ASK drops as well), and the brand column gets 191.7 px at
+     390 and 153.8 px at 320 for a lockup that needs 97 — nothing clipped,
+     nothing overlapping, nothing off-screen at any of the seven widths.
+     Nothing about the dot changes: a waiting customer never hides. */
+  .bell-long { display: none; }
+  .bell-short { display: inline; }
+}
+
+/* ONE MORE YIELD, AND ONLY WHILE SOMEBODY IS WAITING. With the short bell the
+   row still came to 211 px around 360 against 209 available — over by two, and
+   two is a clipped wordmark. `:has()` scopes the yield to the state that is
+   actually tight: a bar with no orders in it keeps the word "ACCOUNT" down to
+   340, and a bar with a bell drops it to the dot that rule was already going to
+   leave. The dot is what makes a new shopkeeper look; the popover carries the
+   rest. Measured with the yield: the chip is 25 px and the row 144.3. */
+@media (max-width: 430px) {
+  .topbar-status:has(.order-bell) .auth-menu-long,
+  .topbar-status:has(.order-bell) .auth-menu-short { display: none; }
+}
+
+/* On a phone the LAST thing to yield is the Devanagari half of the lockup.
+   The Latin wordmark stays — it is what the e2e suite reads and what a
+   shopkeeper recognises — and everything else in that row is reachable from
+   nowhere else.
+
+   THE BREAKPOINT IS 430, NOT 380, AND A SCREENSHOT IS WHY. At 380 the numbers
+   said 390 px was clean: nothing overlapped, nothing was off-screen. The
+   picture showed "गवाह" clipped mid-word to "गव" by `.brand`'s own
+   `overflow: hidden` — technically inside its box, and worse than not drawing
+   it. A mark cut in half is not a mark. */
+@media (max-width: 430px) {
+  .brand-deva { display: none; }
+  /* And one step down on the wordmark. At 360 the lockup measured 106 px into
+     a 102 px box — four pixels, enough for `overflow: hidden` to shave the
+     final H off GAWAAH. 15px brings it to 67 and the whole word survives. */
+  .brand-mark { font-size: 15px; }
+}
+
+/* 320 px — an old iPhone SE, a cheap Android. Two chips and a wordmark do not
+   fit, so the account chip keeps its dot and drops its word. The dot is amber
+   on a counter with no account, which is the state that needs the tap, and the
+   button keeps its `title`. */
+@media (max-width: 340px) {
+  .topbar-status .auth-menu-short,
+  .topbar-status .auth-menu-long { display: none; }
+  .topbar-status .auth-menu .pill { padding: 5px 7px; }
+  /* The order bell's pill is tone `code` and is not touched by the rules
+     above — a waiting customer never hides, and needs no !important to not. */
+
+  /* AND THE WORD "ASK" GOES, BUT ONLY WITH A BELL BESIDE IT, AND THE REASON IS
+     BENGALI. The trigger is 65.1 px wearing "Ask", 61.9 px wearing "पूछो" and
+     81.8 px wearing "জিজ্ঞাসা" — measured, all three — and a three-digit queue
+     adds eight more to the row. At 320 that is the difference between 169 px
+     of room and needing 172. English fits either way; a bar that only fits in
+     English is a bar that breaks for the shopkeeper it was built for. The
+     glyph is what stays, at the full 28 px target, and `title` still says the
+     whole sentence in whichever language is set. */
+  .topbar-status:has(.order-bell) .ask-label { display: none; }
+  .topbar-status:has(.order-bell) .ask-trigger { padding: 0 9px; }
+}
+
+/* ===========================================================================
+   THE SHARED LAYER, PART TWO
+   ---------------------------------------------------------------------------
+   Everything below is ADDITIVE. Not one selector above was renamed, because
+   twenty screens and several e2e specs name these classes; what follows is the
+   set of primitives those screens kept re-inventing badly — tabs, a tooltip, a
+   toast, a dialog, a table — written once so a screen added tomorrow inherits
+   them rather than hand-rolling a sixth version.
+
+   Two rules run through all of it:
+     · GREEN, AMBER AND RED MEAN MONEY AND RECOGNITION. A saved setting is not
+       green, a switch that is on is not green, a selected tab is not green.
+       Blue is action; ink is structure.
+     · MOTION IS SHORT AND IT DECELERATES. Nothing overshoots, nothing bounces,
+       and the blanket reduced-motion guard at the foot of this file still
+       flattens every animation named here without leaving a hole behind.
+   =========================================================================== */
+
+/* ------------------------------------------------------------------ tabs --
+   NOT `.tabs` — that is the dark bar's own three sections and is asserted on.
+   This is the in-page tab strip: one screen, several views of it. */
+
+.tabset {
+  display: flex; align-items: stretch; gap: var(--s1);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto; scrollbar-width: none; min-width: 0;
+}
+.tabset::-webkit-scrollbar { display: none; }
+.tabset > button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  position: relative; flex: none;
+  display: inline-flex; align-items: center; gap: var(--s2);
+  min-height: 40px; padding: 0 var(--s4);
+  font: 600 var(--t-small)/1 var(--font); letter-spacing: var(--tr-flat);
+  color: var(--ink-3); white-space: nowrap;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.tabset > button:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); }
+.tabset > button[aria-selected='true'] { color: var(--navy-900); }
+.tabset > button:disabled { opacity: .45; cursor: not-allowed; }
+/* The mark sits ON the strip's own hairline, so the tab and the panel under it
+   read as one object rather than as a list above a box. */
+.tabset > button[aria-selected='true']::after {
+  content: ''; position: absolute; left: var(--s2); right: var(--s2); bottom: -1px;
+  height: 3px; background: var(--accent-grad); border-radius: 3px 3px 0 0;
+}
+/* A count beside a tab's name. Never a verdict colour: "4 pending" is a
+   quantity, not a judgement about money. */
+.tabset .tab-count {
+  font-size: var(--t-micro); font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 1px 6px; border-radius: var(--r-full);
+  background: var(--surface-3); color: var(--ink-3);
+}
+.tabset > button[aria-selected='true'] .tab-count { background: var(--blue-100); color: var(--blue-700); }
+.tabpanel { padding-top: var(--s5); }
+
+/* --------------------------------------------------------------- tooltip --
+   Hover AND focus, so it is reachable from a keyboard. CSS-only: a tooltip
+   that needs a re-render to appear is a tooltip that lags behind the pointer.
+
+   It is `position: absolute` inside its trigger, so it is clipped by any
+   scrolling ancestor — which is why `.card` above is deliberately not
+   `overflow: hidden`. Inside a scrolling table it will still be cut; put the
+   explanation in the column header there instead. */
+
+.tip { position: relative; display: inline-flex; align-items: center; }
+.tip > .tip-bubble {
+  position: absolute; z-index: var(--z-tip);
+  left: 50%; bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(4px);
+  width: max-content; max-width: 260px;
+  padding: var(--s2) var(--s3);
+  background: var(--navy-900); color: var(--on-dark);
+  font: 400 var(--t-micro)/1.5 var(--font); letter-spacing: var(--tr-flat);
+  text-transform: none; text-align: left;
+  border-radius: var(--r-md); box-shadow: var(--shadow-3);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease-out);
+}
+.tip > .tip-bubble::after {
+  content: ''; position: absolute; top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: var(--navy-900);
+}
+.tip > .tip-bubble.below {
+  bottom: auto; top: calc(100% + 8px);
+  transform: translateX(-50%) translateY(-4px);
+}
+.tip > .tip-bubble.below::after {
+  top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--navy-900);
+}
+.tip:hover > .tip-bubble,
+.tip:focus-within > .tip-bubble { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* A trigger that is nothing but the offer of an explanation. */
+.tip-mark {
+  appearance: none; border: 1px solid var(--line-2); background: var(--surface);
+  color: var(--ink-4); cursor: help;
+  width: 16px; height: 16px; border-radius: 50%; padding: 0;
+  font: 700 10px/1 var(--font);
+  display: inline-grid; place-items: center;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.tip:hover .tip-mark, .tip:focus-within .tip-mark { color: var(--blue-600); border-color: var(--blue-400); }
+
+/* ----------------------------------------------------------------- toast --
+   Something happened that the screen you are looking at cannot show. It is a
+   NOTICE, never a receipt: nothing here is the record of anything, and the
+   audit chain is where a shopkeeper goes for that. */
+
+.toasts {
+  position: fixed; z-index: var(--z-toast);
+  right: var(--s5); bottom: var(--s5);
+  display: flex; flex-direction: column-reverse; gap: var(--s3);
+  width: min(400px, calc(100vw - 2 * var(--s4)));
+  /* The column itself must not eat clicks in the corner of the page; only the
+     toasts inside it are targets. */
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--glass-thick); color: var(--ink);
+  border: 1px solid var(--glass-line); border-left: 4px solid var(--ink-4);
+  border-radius: var(--r-md); box-shadow: var(--shadow-3), var(--glass-edge), 0 0 0 1px var(--line);
+  -webkit-backdrop-filter: var(--blur-soft); backdrop-filter: var(--blur-soft);
+  animation: toastIn var(--med) var(--ease-out) both;
+}
+.toast.out { animation: toastOut var(--fast) var(--ease-in) both; }
+@keyframes toastIn  { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(6px); } }
+.toast .toast-ico { color: var(--ink-3); margin-top: 1px; }
+.toast .toast-body { display: flex; flex-direction: column; min-width: 0; }
+.toast .toast-title { font-size: var(--t-small); font-weight: 700; color: var(--navy-900); }
+.toast .toast-note { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; margin-top: 2px; }
+.toast .toast-x {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  color: var(--ink-4); padding: 2px; margin: -2px -4px 0 0; border-radius: var(--r-xs);
+  display: inline-grid; place-items: center;
+}
+.toast .toast-x:hover { color: var(--ink); background: var(--surface-3); }
+/* The tones are the verdict tones, and they mean what they mean everywhere
+   else on this product. `info` is the default precisely so that a routine
+   "saved" cannot come out green. */
+.toast.info { border-left-color: var(--blue-500); }
+.toast.info .toast-ico { color: var(--blue-600); }
+.toast.ok   { border-left-color: var(--green); }
+.toast.ok .toast-ico { color: var(--green); }
+.toast.amb  { border-left-color: var(--amber); }
+.toast.amb .toast-ico { color: var(--amber); }
+.toast.bad  { border-left-color: var(--red); }
+.toast.bad .toast-ico { color: var(--red); }
+
+/* On a phone the bottom-right corner is where the thumb rests and where the
+   storefront's basket bar already lives, so notices come down from the top. */
+@media (max-width: 560px) {
+  .toasts {
+    right: var(--s3); left: var(--s3); width: auto;
+    bottom: auto; top: calc(var(--topbar-h) + var(--s3));
+    flex-direction: column;
+  }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+}
+
+/* -------------------------------------------------------- modal / sheet --
+   A dialog stops the page. On a phone it becomes a bottom sheet, because a
+   centred box on a 390px screen is a box with no room either side of it and a
+   thumb cannot reach its top edge. */
+
+.modal-scrim {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--s5);
+  background: var(--scrim-hard);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  animation: scrimIn var(--fast) var(--ease) both;
+}
+@keyframes scrimIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal {
+  display: flex; flex-direction: column; min-height: 0;
+  width: min(560px, 100%); max-height: min(86vh, 100%);
+  background: var(--glass-thick);
+  border: 1px solid var(--glass-line); border-radius: var(--r-xl);
+  box-shadow: var(--shadow-4), var(--glass-edge), 0 0 0 1px var(--line);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  animation: modalIn var(--med) var(--ease-out) both;
+}
+.modal.wide { width: min(880px, 100%); }
+.modal.narrow { width: min(420px, 100%); }
+@keyframes modalIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+.modal-head {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s5) var(--s5) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.modal-head .modal-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.modal-head h3 { font-size: var(--t-h2); font-weight: 700; letter-spacing: var(--tr-tight); }
+.modal-head .modal-sub { font-size: var(--t-small); color: var(--ink-3); line-height: 1.5; }
+.modal-x {
+  appearance: none; border: 1px solid transparent; background: transparent; cursor: pointer;
+  flex: none; width: 30px; height: 30px; margin: -3px -6px 0 0;
+  border-radius: var(--r-sm); color: var(--ink-3);
+  display: inline-grid; place-items: center;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.modal-x:hover { background: var(--surface-3); color: var(--ink); }
+
+.modal-body { padding: var(--s5); overflow-y: auto; min-height: 0; }
+.modal-body > .field:last-child { margin-bottom: 0; }
+.modal-foot {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  justify-content: flex-end;
+  padding: var(--s4) var(--s5);
+  border-top: 1px solid var(--line); background: rgba(var(--navy-rgb), .025);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+}
+/* The sentence that says what pressing the button will actually do sits on the
+   LEFT of the footer, not under the button, where nobody reads it. */
+.modal-foot .modal-note { margin-right: auto; font-size: var(--t-micro); color: var(--ink-3); max-width: 40ch; line-height: 1.5; }
+
+@keyframes sheetIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+.modal-scrim.sheet { align-items: flex-end; padding: 0; }
+.modal-scrim.sheet > .modal {
+  width: 100%; max-width: none; max-height: 88vh;
+  border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: sheetIn var(--med) var(--ease-out) both;
+}
+@media (max-width: 560px) {
+  /* Every dialog is a sheet at this width, whether it asked to be or not. */
+  .modal-scrim { align-items: flex-end; padding: 0; }
+  .modal, .modal.wide, .modal.narrow {
+    width: 100%; max-height: 88vh;
+    border-radius: var(--r-xl) var(--r-xl) 0 0; border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: sheetIn var(--med) var(--ease-out) both;
+  }
+  .modal-foot { border-radius: 0; }
+  .modal-foot .btn { flex: 1; }
+  .modal-foot .modal-note { flex-basis: 100%; margin-right: 0; }
+}
+
+/* ----------------------------------------------------------------- table --
+   `table.moments` above is the counter's own long-form list and is untouched.
+   This is the general one: sticky header, tabular figures, a right-aligned
+   numeric column, and rows that can be pressed.
+
+   THE STICKY HEADER IS REAL, not decorative. The wrapper caps its own height
+   (`--tbl-max`) and scrolls, so the header pins to the top of the wrapper
+   rather than to the viewport, where the dark bar would cover it. A short
+   table never reaches the cap and behaves exactly like an ordinary one. */
+
+.tbl-wrap {
+  --tbl-max: 72vh;
+  max-height: var(--tbl-max);
+  overflow: auto;
+  /* A scroll container that can be reached by a keyboard needs to say so. */
+  scrollbar-width: thin;
+}
+/* On a phone, a scroll region inside a scrolling page is a trap: the thumb
+   catches the inner one and the page appears frozen. The cap is lifted and the
+   header simply scrolls away with its rows. */
+@media (max-width: 720px) { .tbl-wrap { --tbl-max: none; } }
+
+table.tbl {
+  width: 100%;
+  /* `separate`, not `collapse`. With collapsed borders a sticky <th> leaves its
+     own bottom border behind at the top of the scroll and the rows slide over a
+     line that belongs to the header. */
+  border-collapse: separate; border-spacing: 0;
+  font-size: var(--t-small);
+}
+table.tbl thead th {
+  position: sticky; top: 0; z-index: 2;
+  text-align: left; white-space: nowrap;
+  padding: var(--s3) var(--s4);
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-4);
+  background: rgba(244, 245, 251, .92);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow-0);
+}
+table.tbl tbody td {
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top; line-height: 1.5;
+}
+table.tbl tbody tr:last-child td { border-bottom: 0; }
+/* Every figure a shopkeeper compares down a column, in one rule. */
+table.tbl th.num, table.tbl td.num {
+  text-align: right; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+table.tbl td.num { font-weight: 600; color: var(--navy-900); }
+/* A skeleton is a BLOCK, and a block box ignores its parent's `text-align` when
+   it places itself — so the loading state for a right-aligned money column drew
+   its grey bar hard against the left edge, and every number jumped across the
+   cell the moment the data landed. */
+table.tbl td.num > .skel { margin-left: auto; }
+table.tbl tbody tr.pressable { cursor: pointer; }
+table.tbl tbody tr.pressable:hover td { background: rgba(var(--navy-rgb), .03); }
+table.tbl tbody tr.open td { background: rgba(var(--accent-rgb), .07); }
+table.tbl tbody tr.open td:first-child { box-shadow: inset 3px 0 0 var(--blue-500); }
+table.tbl tbody tr.quiet td { color: var(--ink-3); }
+table.tbl caption {
+  caption-side: bottom; text-align: left; padding: var(--s3) var(--s4);
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5;
+}
+/* A column that is worth less than the horizontal scroll it would cost. */
+@media (max-width: 720px) {
+  table.tbl th.drop, table.tbl td.drop { display: none; }
+}
+
+/* ------------------------------------------------- a table, restacked --
+   OPT-IN, AND IT AFFECTS NOTHING THAT DOES NOT ASK. Every selector below is
+   qualified by `.tbl-cards` on the <table> itself, so a table that has not
+   added the class is untouched at every width. It is deliberately NOT tied to
+   `table.tbl`: the counter's own `table.moments` and the purchases table are
+   hand-rolled and opt in the same way.
+
+   WHY: a table on a 390 px phone is not a table. Measured at 390 before this
+   existed — the expiry batch table ran 338 px past the viewport inside its
+   scroller, purchases 235, stock 127. A shopkeeper had to drag a grid sideways
+   with one thumb to read a figure, and two of those tables were bought back
+   under 560 by DELETING columns (`.hide-sm`, `.pu-hide-sm`, `.drop`) — a
+   number that is not on the screen at all is worse than one that is.
+
+   So under 560 each row becomes a card: the first cell is its heading, and
+   every other cell is one receipt line — what it is on the left, the figure on
+   the right, where the eye already goes for a number. NOTHING IS DROPPED; the
+   columns hidden on a phone come back, because there is now room for them. */
+@media (max-width: 560px) {
+  table.tbl-cards,
+  table.tbl-cards > thead,
+  table.tbl-cards > tbody,
+  table.tbl-cards > tbody > tr,
+  table.tbl-cards > tbody > tr > td { display: block; }
+
+  /* The floor widths that forced the sideways scroll are what we are undoing. */
+  table.tbl-cards { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; }
+
+  /* The header is TAKEN OFF THE SCREEN, NOT DELETED. Each cell now carries its
+     own label, so the visible header would say everything twice — but a screen
+     reader still needs the row to exist for the table to make sense. */
+  table.tbl-cards > thead {
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+
+  table.tbl-cards > tbody > tr {
+    margin-bottom: var(--s3);
+    padding: var(--s4);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-0);
+  }
+  table.tbl-cards > tbody > tr:last-child { margin-bottom: 0; }
+
+  /* A COLUMN HIDDEN FOR WANT OF WIDTH COMES BACK. There is a whole card row
+     for it now, so there is no longer anything to buy by dropping it. */
+  table.tbl-cards > tbody > tr > td.drop,
+  table.tbl-cards > tbody > tr > td.hide-sm,
+  table.tbl-cards > tbody > tr > td.pu-hide-sm { display: flex; }
+
+  table.tbl-cards > tbody > tr > td {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--s4);
+    padding: 4px 0;
+    border-bottom: 0;
+    text-align: right;
+    vertical-align: baseline;
+  }
+  /* 12px and not `--t-micro`'s 11: this label is the only thing naming the
+     figure beside it, and 11px uppercase on a cheap Android is not a label. */
+  table.tbl-cards > tbody > tr > td::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 12px; font-weight: 700; letter-spacing: var(--tr-caps);
+    text-transform: uppercase; color: var(--ink-4);
+    text-align: left; line-height: 1.5;
+  }
+  /* The first cell names the row, so it is the card's heading, not a labelled
+     line: full width, its own rule under it. */
+  table.tbl-cards > tbody > tr > td:first-child {
+    display: block; text-align: left;
+    padding: 0 0 var(--s3); margin-bottom: var(--s3);
+    border-bottom: 1px solid var(--line);
+  }
+  table.tbl-cards > tbody > tr > td:first-child::before { content: none; }
+
+  /* A cell whose column has no name is the row's ACTIONS. It gets the width of
+     the card, so the buttons stop being a row of slivers at the right edge. */
+  table.tbl-cards > tbody > tr > td[data-label='']::before { content: none; }
+  table.tbl-cards > tbody > tr > td[data-label=''] {
+    display: block; text-align: left;
+    padding-top: var(--s3); margin-top: var(--s2);
+    border-top: 1px solid var(--line);
+  }
+  table.tbl-cards > tbody > tr > td[data-label=''] > * { display: flex; flex-wrap: wrap; gap: var(--s2); }
+  table.tbl-cards > tbody > tr > td[data-label=''] .btn { flex: 1 1 auto; }
+
+  /* The empty and loading states are single cells spanning the old columns —
+     they are not rows of a card and must not be drawn as one. */
+  table.tbl-cards > tbody > tr:has(> td[colspan]) {
+    padding: 0; border: 0; background: none; box-shadow: none;
+  }
+  table.tbl-cards > tbody > tr > td[colspan] { display: block; text-align: left; }
+  table.tbl-cards > tbody > tr > td[colspan]::before { content: none; }
+
+  /* A skeleton cell has no label and no figure; left-align it so the loading
+     shape is the shape of the card that lands, not a row of right-hugging bars. */
+  table.tbl-cards > tbody > tr > td > .skel { margin-left: 0; }
+
+  table.tbl-cards > caption { caption-side: bottom; text-align: left; }
+}
+
+/* ------------------------------------------------------------------ stat --
+   One number, what it is, and what qualifies it. The qualifier is not optional
+   in this product: a figure with no window and no source is the kind of
+   confident number the whole counter exists to refuse to print. */
+
+.statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--s4); }
+.stat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s5) var(--s5);
+  background: var(--glass); border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-1), var(--glass-edge), 0 0 0 1px var(--line);
+  min-width: 0;
+}
+.stat .stat-l {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps-wide);
+  text-transform: uppercase; color: var(--ink-4);
+}
+.stat { position: relative; overflow: hidden; }
+.stat .stat-v {
+  font-family: var(--font-display);
+  font-size: var(--t-display); font-weight: 800; letter-spacing: var(--tr-display);
+  line-height: 1.1; color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+/* The flute under a figure: a short slanted bar at the foot of the card. A
+   verdict-coloured stat draws it in its own colour, so the mark says the same
+   thing the number does. */
+.stat::after {
+  content: '';
+  position: absolute; left: var(--s5); bottom: 0; width: 34px; height: 4px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px 2px 0 0;
+}
+.stat.green::after { background: var(--green); }
+.stat.amber::after { background: var(--amber); }
+.stat.red::after   { background: var(--red); }
+.stat.unknown::after { background: var(--line-2); }
+.stat .stat-s { font-size: var(--t-small); color: var(--ink-3); line-height: 1.45; }
+.stat.green .stat-v { color: var(--green); }
+.stat.amber .stat-v { color: var(--amber); }
+.stat.red   .stat-v { color: var(--red); }
+/* A figure the counter would not commit to. Not amber — abstaining is not a
+   warning about money, it is the absence of a claim. */
+.stat.unknown .stat-v { color: var(--ink-4); font-weight: 700; letter-spacing: var(--tr-tight); }
+.stat.sm .stat-v { font-size: var(--t-h1); }
+
+/* --------------------------------------------------------------- toolbar --
+   A row of controls above a list. `align-items: center` and one control height
+   is the whole trick; before it, four components sat on four baselines. */
+.toolbar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  min-width: 0; margin-bottom: var(--s4);
+}
+.toolbar .spacer { flex: 1; min-width: 0; }
+
+/* A route still arriving. Quiet by design — a spinner for something that takes
+   80 ms reads as slower than nothing at all. */
+.route-loading { padding: var(--s7) var(--s5); color: var(--ink-3); font-size: var(--t-small); }
+
+/* A monospace span holds the things with no spaces in them — filesystem paths,
+   64-char chain heads, session ids. `overflow-wrap: break-word` is defined NOT
+   to shrink an element's min-content, so a flex or grid child still refuses to
+   narrow and pushes the page sideways; `anywhere` does shrink it, and the
+   `min-width: 0` is what lets the flex item accept that. Measured: a shop path
+   pushed the Categories screen 58 px past a 390 px viewport. Fixed here rather
+   than on that one screen, because every screen that prints a path or a hash
+   would have found it in turn. */
+.mono {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   THE ASK DOCK SITS BOTTOM-LEFT, NOT BOTTOM-RIGHT
+   Measured at 1440: bottom-right put the launcher at (1336, 836) squarely on
+   top of the CHARGE button at (1038, 830)-(1387, 884) — the single most
+   important control on the counter, covered by a chat bubble.
+   Reserving space at the end of the document does not fix it: the launcher is
+   `position: fixed`, so it floats over whatever is at that viewport corner at
+   any scroll position, and the till's bill column lives in exactly that corner
+   on every screen. Bottom-LEFT is empty on all eighteen routes (checked), and
+   it clears the sidebar rather than sitting on it.
+   --------------------------------------------------------------------------- */
+
+
+/* The assistant's trigger, in the chrome where it cannot cover anything. */
+.ask-trigger {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px 0 9px; cursor: pointer;
+  font: 600 var(--t-micro)/1 var(--font); letter-spacing: var(--tr-caps);
+  color: var(--bar-fg); background: var(--bar-sunk);
+  border: 1px solid var(--bar-line); border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.ask-trigger:hover { background: var(--bar-hover); color: var(--bar-fg); }
+.ask-trigger[aria-expanded='true'] { color: #fff; background: var(--accent-grad); border-color: transparent; }
+.ask-trigger svg { color: var(--accent-300); }
+
+/* The account chip's two labels: the long one everywhere there is room. */
+.auth-menu-short { display: none; }
+.auth-menu-long { display: inline; }
+
+/* The microphone's language choice, in the voice bar's own row. Wraps on a
+   phone rather than squeezing the LISTEN button, and the raw tag stays
+   visible because a shopkeeper reporting a mishearing needs to be able to
+   say which recogniser produced it. */
+.vb-langs { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vb-langid { color: var(--ink-4); font-size: 11px; }
+
+/* Why a spoken word became this product, when the two are written in different
+   scripts. Small, but never hidden — the bill says what it did. */
+.vb-respelt { font-size: 11px; line-height: 1.5; }
+
+/* ===========================================================================
+   THE WORKING STATES — thinking, ray, progress, insight, success.
+   ---------------------------------------------------------------------------
+   Taken from RazorSense's own component boards: a soft mesh panel for the
+   moment the machine is busy, a mark that turns while it is, a sentence whose
+   FIGURES carry the colour, a skeleton of pale blocks, and a success mark.
+
+   ONE DEPARTURE, AND IT IS DELIBERATE. Their meshes are green. On this counter
+   green means a signature-verified webhook settled a payment and nothing else,
+   so every mesh here is BLUE — the machine's own colour, the same accent as
+   the flute. Green appears in exactly one of these components, `.success`,
+   where it is telling the truth.
+   =========================================================================== */
+
+/* The mesh. Four blurred blooms over a pale ground, drifting slowly. It is a
+   BACKGROUND, never a container: it carries no border and no shadow, so
+   whatever sits on it keeps its own edges. */
+.mesh {
+  position: relative; isolation: isolate;
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(42% 56% at 12% 18%, rgba(var(--accent-rgb), .30) 0%, rgba(var(--accent-rgb), 0) 70%),
+    radial-gradient(38% 48% at 88% 26%, rgba(35, 190, 214, .26) 0%, rgba(35, 190, 214, 0) 72%),
+    radial-gradient(46% 52% at 72% 88%, rgba(var(--accent-rgb), .18) 0%, rgba(var(--accent-rgb), 0) 70%),
+    radial-gradient(34% 40% at 26% 84%, rgba(126, 208, 255, .24) 0%, rgba(126, 208, 255, 0) 72%),
+    linear-gradient(150deg, #F4F8FF 0%, #F7FBFF 55%, #F3F7FE 100%);
+  background-size: 200% 200%, 190% 190%, 210% 210%, 180% 180%, 100% 100%;
+  animation: meshDrift 18s var(--ease) infinite alternate;
+}
+@keyframes meshDrift {
+  from { background-position: 0% 0%, 100% 0%, 60% 100%, 0% 100%, 0 0; }
+  to   { background-position: 30% 20%, 70% 30%, 30% 70%, 30% 70%, 0 0; }
+}
+
+/* ------------------------------------------------------------- thinking -- */
+/*
+   WHAT IT MAY AND MAY NOT SAY. The panel lists the stages a turn goes
+   through. The browser does NOT know which stage the server is in, so by
+   default no step is marked done — a tick this page cannot verify is the same
+   lie as a figure it cannot derive. A caller that genuinely drives the stages
+   itself passes `state` per step and gets the marks. */
+
+.thinking { padding: var(--s5); overflow: hidden; }
+.thinking-head {
+  display: flex; align-items: center; gap: var(--s3);
+  font: 700 var(--t-h3)/1.3 var(--font); color: var(--navy-900);
+  letter-spacing: var(--tr-tight);
+}
+.thinking-steps {
+  list-style: none; margin: var(--s4) 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.thinking-step {
+  position: relative;
+  display: flex; align-items: center; gap: var(--s3);
+  padding-left: var(--s2);
+  font-size: var(--t-small); line-height: 1.45; color: var(--ink-3);
+}
+/* The rail between the marks. Drawn on the step so the last one has no tail. */
+.thinking-step + .thinking-step::before {
+  content: ''; position: absolute; left: calc(var(--s2) + 4px); top: -14px;
+  width: 1px; height: 14px; background: var(--line-2);
+}
+.thinking-mark {
+  flex: none; width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--line-3); background: var(--surface);
+}
+.thinking-step.done { color: var(--ink-2); }
+.thinking-step.done .thinking-mark { border-color: var(--accent-500); background: var(--accent-500); }
+.thinking-step.now { color: var(--navy-900); font-weight: 600; }
+.thinking-step.now .thinking-mark {
+  border-color: var(--accent-500); background: var(--accent-500);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .18);
+}
+/* The sweep: one band of light crossing the whole panel, at the flute's angle,
+   for as long as the machine is busy. It IS the "something is happening"
+   signal, so nothing else has to pretend to be one. */
+.thinking::after {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent);
+  transform: skewX(var(--flute-skew));
+  animation: thinkSweep 2.1s var(--ease) infinite;
+  pointer-events: none;
+}
+@keyframes thinkSweep {
+  from { transform: skewX(var(--flute-skew)) translateX(-130%); }
+  to   { transform: skewX(var(--flute-skew)) translateX(130%); }
+}
+
+/* ------------------------------------------------------- the working mark -- */
+/*
+   Three flutes that light in sequence. RazorSense turns its own four-petal
+   glyph here; that mark is Razorpay's, so this one is built from the motif
+   this product already uses everywhere else. */
+.working { display: inline-flex; align-items: flex-end; gap: 3px; height: 16px; }
+.working i {
+  display: block; width: 4px; height: 100%;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 1.5px;
+  opacity: .28;
+  animation: workFlute 1.1s var(--ease) infinite;
+}
+.working i:nth-child(2) { animation-delay: .13s; }
+.working i:nth-child(3) { animation-delay: .26s; }
+@keyframes workFlute {
+  0%, 100% { opacity: .28; transform: skewX(var(--flute-skew)) scaleY(.62); }
+  40%      { opacity: 1;   transform: skewX(var(--flute-skew)) scaleY(1); }
+}
+
+/* --------------------------------------------------------------- insight -- */
+/*
+   A sentence set large, where the FIGURE carries the emphasis and the words
+   around it recede — RazorSense's insights card, which is the right shape for
+   a counter whose whole job is saying where a number came from.
+
+   `.fig` is the accent by default. `.fig.green` is only for money a webhook
+   settled; `.fig.amber` for a figure the counter abstained on. The reservation
+   is the same one every other screen keeps. */
+.insight {
+  padding: var(--s6) var(--s6) var(--s5);
+  font: 600 clamp(20px, 2.3vw, 27px)/1.35 var(--font-display);
+  letter-spacing: var(--tr-display);
+  color: var(--ink-3);
+  text-wrap: balance;
+}
+.insight .fig { color: var(--accent-600); font-weight: 800; font-variant-numeric: tabular-nums; }
+.insight .fig.green { color: var(--green); }
+.insight .fig.amber { color: var(--amber); }
+.insight .fig.ink   { color: var(--navy-900); }
+.insight-tag {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-bottom: var(--s4);
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: var(--tr-caps-wide); text-transform: uppercase;
+  color: var(--accent-700);
+}
+.insight-foot {
+  margin-top: var(--s4); padding-top: var(--s3);
+  border-top: 1px solid rgba(var(--navy-rgb), .07);
+  font: 400 var(--t-micro)/1.55 var(--font);
+  letter-spacing: var(--tr-flat); color: var(--ink-4);
+}
+
+/* --------------------------------------------------------------- success -- */
+/*
+   The one green thing in this block, and it is green because it is only ever
+   shown when a signature-verified webhook has settled a payment. */
+.success-mark {
+  display: grid; place-items: center;
+  width: 56px; height: 56px; border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(135deg, #3FBF80 0%, var(--green) 60%, var(--green-2) 100%);
+  box-shadow: 0 2px 6px rgba(var(--green-rgb), .30), 0 10px 26px rgba(var(--green-rgb), .28);
+  animation: successPop var(--med) var(--ease-out) both;
+}
+@keyframes successPop {
+  from { opacity: 0; transform: scale(.72); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* -------------------------------------------------------------- progress -- */
+.progress {
+  height: 6px; border-radius: var(--r-full);
+  background: rgba(var(--navy-rgb), .07);
+  overflow: hidden;
+}
+.progress > i {
+  display: block; height: 100%; border-radius: var(--r-full);
+  background: var(--accent-grad);
+  box-shadow: 0 1px 4px rgba(var(--accent-rgb), .40);
+  transition: width var(--slow) var(--ease);
+}
+/* Width unknown: a band that travels, rather than a bar that claims a fraction
+   nobody measured. */
+.progress.indeterminate > i {
+  width: 34%;
+  animation: progressRun 1.35s var(--ease) infinite;
+}
+@keyframes progressRun {
+  from { transform: translateX(-110%); }
+  to   { transform: translateX(400%); }
+}
+
+/* ==========================================================================
+   THE SIDEBAR'S SCROLLBAR
+   --------------------------------------------------------------------------
+   `.side nav` scrolls (617 px of routes into 554 px on a 820 px-tall window),
+   and on a machine with classic scrollbars turned on the platform drew a solid
+   grey bar hard against the route labels. Two problems in one: it is chrome
+   the design never accounted for, and it had no gutter, so "what leaves the
+   shelf" ran right up against it.
+
+   The bar goes. The AFFORDANCE does not — hiding an overflow with no other
+   signal is how a menu quietly loses half its items — so a short fade at the
+   foot of the nav says there is more below, and it disappears exactly when
+   nothing is left to scroll to (`animation-timeline: scroll()` where it is
+   supported; where it is not, the fade simply stays, which is the safe way
+   round). A gutter goes back on the right either way.
+   ========================================================================== */
+/* BOTH scrollers, not just the inner one. `.side` is `overflow-y: auto` too
+   (line ~226) and takes over on a short window, so hiding the bar on the nav
+   alone left the platform drawing one on the panel itself at some heights. */
+.side,
+.side nav {
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;         /* old Edge */
+  padding-right: var(--s2);
+  scroll-padding-block: var(--s3);
+  overscroll-behavior: contain;     /* the page must not scroll when this ends */
+}
+.side::-webkit-scrollbar,
+.side nav::-webkit-scrollbar { width: 0; height: 0; }
+
+/* The fade. `position: sticky` inside the scroller keeps it pinned to the
+   visible foot without a wrapper element or a resize listener. */
+.side nav::after {
+  content: '';
+  position: sticky; bottom: 0; left: 0;
+  display: block; height: 20px; margin-top: -20px;
+  flex: none; pointer-events: none;
+  /* --side-bg, NOT --surface. The first version faded to #FFFFFF over a
+     panel that is not white, so instead of dissolving it painted a pale band
+     across the last route.
+
+     And it is SOFT, because it may never fade out: scroll-driven animations
+     are the only thing that can hide it at the end of the scroll, and where
+     they are unsupported this gradient is permanent. A permanent 28 px wash of
+     solid panel colour is a band; 20 px at two-thirds strength is an edge. */
+  background: linear-gradient(to top,
+    color-mix(in srgb, var(--side-bg) 82%, transparent) 0%,
+    transparent 100%);
+}
+@supports (animation-timeline: scroll()) {
+  .side nav::after {
+    animation: side-fade-out linear both;
+    animation-timeline: scroll(self block);
+    /* PLAIN PERCENTAGES. `contain 85% contain 100%` was written here first —
+       those are `view()` range names and mean nothing on a `scroll()`
+       timeline, so the range was invalid and the fade never faded: it sat at
+       full strength as a pale band across the last route, scrolled or not. */
+    animation-range: 82% 100%;
+  }
+  @keyframes side-fade-out { to { opacity: 0; } }
+}
+
+/* ===========================================================================
+   THE THUMB FLOOR
+   ---------------------------------------------------------------------------
+   A shopkeeper works this counter one-handed, behind a till, on a cheap
+   Android. Measured at 390x844 signed in, before this block: 151 controls on
+   #/categories were under 32x32, 143 on #/labels, 120 on #/products, 69 on
+   #/orders. They are not 483 different buttons. They are SIX shared controls,
+   each two to eight pixels short of a thumb, repeated down a list:
+
+     .btn.sm          min-height 30  (products 72, orders 42, till 5, ...)
+     .seg button      min-height 28  (2-5 on every route in the product)
+     .seg.sm button   min-height 20
+     .inp.sm          min-height 28  (labels 35)
+     .field input     min-height 28
+     .od-body .od-dest .phone    20.1 tall — and it is a tel: link, which is
+                                 the one control on #/orders a phone is FOR.
+                                 (Listed here as `.order-body .where .phone`
+                                 until it was measured again: that selector
+                                 matches nothing and never did. See below.)
+
+   So the fix belongs here, once, and not at 483 call sites.
+
+   WHY THIS MEDIA QUERY AND NOT `max-width: 560px` ALONE. A tap target is a
+   property of the INPUT DEVICE, not of the window: a 1440px touchscreen needs
+   36px just as much as a 390px phone does, and a 390px desktop window driven
+   by a mouse does not. This file already reasons that way twice — `.qbtn`
+   grows under `@media (hover: none)` and `.cat-icon` does the same in
+   categories.css — so `(pointer: coarse)` is the established idea here and the
+   width is the belt to its braces.
+
+   THE MEASUREMENT THAT ALMOST DIDN'T HAPPEN: headless Chromium reports
+   `hover: hover` and `pointer: fine` unless the context is created with
+   `hasTouch: true`. Measured without it, `.cat-icon` reads 27px and the two
+   `(hover: none)` rules this codebase already ships are invisible — so the
+   "before" number counts controls that were never broken on a real phone.
+   With touch on, #/categories is 162 under-32, not 196. Measure with touch.
+
+   HEIGHT ONLY, DELIBERATELY. Every one of these controls already measured
+   wider than 32px (the narrowest was 46.1px, "NONE" on #/labels), so padding
+   is left exactly as it was. Widening them would have pushed the three-button
+   rows on #/orders and #/products off the right edge for no gain.
+   =========================================================================== */
+@media (max-width: 560px), (pointer: coarse) {
+  /* 36px, not 44: these sit in rows of two and three inside a card, and 44
+     turns a card's action row into a third of the card. 44 is reserved below
+     for the controls that are alone and primary. */
+  .btn.sm { min-height: 36px; }
+
+  .seg button { min-height: 36px; }
+  .seg.sm button { min-height: 32px; }
+
+  /* NOT `.field textarea`. `textarea.inp` carries `min-height: 84px` at the
+     same specificity as `.field textarea`, so naming the textarea here would
+     win on source order and collapse every multi-line box on the product to
+     36px — a note field one line tall. Checkbox and radio are excluded for the
+     same class of reason: they are square controls whose size is set where
+     they are drawn, and a min-height would stretch the box away from its tick. */
+  .inp.sm,
+  .field input:not([type='checkbox']):not([type='radio']),
+  .field select { min-height: 36px; }
+
+  /* CALLING THE CUSTOMER IS THE POINT OF A PHONE. This is a `tel:` link and it
+     measured 282x20.1 — full width, and less than two thirds of a thumb tall.
+     Inline-flex so the min-height is honoured; the row it sits in is a column,
+     so nothing reflows sideways.
+
+     THE SELECTOR WAS WRONG AND THE RULE HAD NEVER APPLIED. It was written as
+     `.order-body .where .phone`. Neither class is rendered anywhere in this
+     codebase any more — `grep -rn "order-body" src/` outside this file returns
+     nothing, and so does `className="where"`. The order card was rebuilt on
+     `.od-*` (storefront.css) and this rule was left pointing at the markup it
+     used to have. The measurement above was right; the target was not. Today
+     the link still measures 282x20.1 on #/orders, which is how a dead rule
+     announces itself.
+
+     WHY IT LIVES HERE AND NOT IN storefront.css, where `.od-dest .phone` is
+     defined: storefront.css is owned by another agent this cycle. That file's
+     rule is `.od-dest .phone` (0,2,0) and it loads AFTER this one — app.css is
+     the entry stylesheet, storefront.css a lazily-imported route chunk — so
+     matching its specificity would lose on source order. `.od-body .od-dest
+     .phone` is (0,3,0) and wins wherever the two files land. */
+  .od-body .od-dest .phone {
+    min-height: 36px;
+    display: inline-flex; align-items: center;
+    align-self: flex-start;
+  }
+}

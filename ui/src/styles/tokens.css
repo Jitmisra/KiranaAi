@@ -1,0 +1,423 @@
+/* ===========================================================================
+   GAWAAH — design tokens
+   ---------------------------------------------------------------------------
+   One source of truth for colour, type, space, elevation and motion. Every
+   component references a token and never a literal, so the whole counter can
+   be re-themed from this file alone — which is exactly what happened on
+   3 September 2026, when twenty-eight screens changed skin from here.
+
+   THE PALETTE: AURORA, GLASS, INK, INDIGO.
+   A light, airy ground — not flat paper but a soft wash of lavender-white into
+   warm cream with two faint colour blooms behind it — and every surface on it
+   is GLASS: translucent white, blurred where the machine can afford it, edged
+   with a hairline of light. Ink stays blue-black for every word and figure,
+   and there is still ONE accent, an electric indigo, for what the machine
+   itself does. It is now a gradient on the primary action, because a flat
+   fill on a glass page reads as a sticker.
+
+   WHY THE ACCENT STAYS INDIGO: the three verdict colours are spoken for.
+   Green means a payment settled, amber means the counter abstained, red means
+   it refused. A shopkeeper glancing from across the counter cannot be asked
+   to tell a button from a warning by a shade, and indigo is the one hue no
+   verdict borrows. --accent-600 clears WCAG AA as text on white and on the
+   wash (5.9:1 and 5.6:1, measured).
+
+   GREEN, AMBER AND RED ARE STATE, NEVER DECORATION. Desaturated on purpose so
+   they read as a verdict and not as a brand. Nothing decorative may wear the
+   colour that means a rupee actually arrived.
+
+   NOTHING IN THIS FILE IS RENAMED. Thirty screens reference these names. The
+   `--blue-*` and `--navy-*` names are kept as ALIASES of the accent and ink
+   ramps. New tokens are added freely; old ones only change value.
+   =========================================================================== */
+
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('../fonts/PlusJakartaSans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('../fonts/PlusJakartaSans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* --- accent: indigo ---------------------------------------------------
+     The action colour and the machine's own mark. 500 is the fill of a primary
+     button and the colour of a focus outline; 600/700 are the text weights. */
+  /* RAZORPAY BLUE. The operator asked for blue, not violet, and pointed at
+     RazorSense. 500 is the fill of the primary action; 600 and 700 are the
+     text weights (600 on white is 5.4:1, measured). */
+  --accent-050: #EAF3FF;
+  --accent-100: #D6E8FF;
+  --accent-200: #ADD1FF;
+  --accent-300: #7FB8FF;
+  --accent-400: #4F9BF5;
+  --accent-500: #2B84EA;
+  --accent-600: #1B66D9;
+  --accent-700: #124FB3;
+  --accent-800: #0C3A85;
+  --accent-rgb: 43, 132, 234;
+  /* The primary action is a GRADIENT, one token, so no screen invents its own
+     pair of stops. Lighter and cooler at the top-left: the light in this design
+     comes from the upper-left, everywhere. */
+  --accent-grad: linear-gradient(135deg, #3E9BFF 0%, #2B84EA 55%, #1B66D9 100%);
+  --accent-grad-hover: linear-gradient(135deg, #52A8FF 0%, #3A90F2 55%, #2470E0 100%);
+  /* THE FLUTE. RazorSense's signature is the slanted bar from the Razorpay
+     glyph — "the core born from the glyph". Here it is a skew and a gradient
+     that several rules share: the mark before a page title, the bar beside the
+     open sidebar row, the underline of a big figure, the sheen that crosses a
+     primary button. One angle everywhere, or it is five different motifs. */
+  --flute-skew: -18deg;
+  --flute-grad: linear-gradient(180deg, #3E9BFF 0%, #1B66D9 100%);
+
+  /* Aliases. The names thirty screens use for "the action colour". */
+  --blue-800: var(--accent-800);
+  --blue-700: var(--accent-700);
+  --blue-600: var(--accent-600);
+  --blue-500: var(--accent-500);
+  --blue-400: var(--accent-400);
+  --blue-300: var(--accent-300);
+  --blue-200: var(--accent-200);
+  --blue-100: var(--accent-100);
+  --blue-050: var(--accent-050);
+  --blue-rgb: var(--accent-rgb);
+
+  /* --- ink -----------------------------------------------------------------
+     Blue-black, the ledger ink. Five steps, each one checked against both the
+     white card and the paper ground: --ink-4 is the lightest colour that may
+     carry a word (4.8:1 on paper), and --ink-5 carries only a placeholder. */
+  --ink:        #0F1433;
+  --ink-2:      #2C3352;
+  --ink-3:      #4B5474;
+  --ink-4:      #5E6788;   /* 4.8:1 on the glass sidebar, the darkest ground it sits on */
+  --ink-5:      #8B93AE;   /* placeholder text, and nothing more important */
+  --navy-900:   #02042B;   /* Razorpay navy: headings, totals, the bar */
+  --navy-rgb:   2, 4, 43;
+
+  /* --- surface: paper -------------------------------------------------------
+     The ground is warm paper and a card is white on it, which is what lifts a
+     card without a heavy shadow. The steps below the card are the pressed
+     control, the track behind a fill, the sidebar. */
+  --surface:    #FFFFFF;
+  --surface-2:  #F4F7FD;   /* the page's flat fallback; the wash paints over it */
+  --surface-3:  #EAF0FA;   /* a pressed control, a track, a table head */
+  --surface-4:  #DCE5F3;   /* the switch track at rest */
+  --side-bg:    rgba(255, 255, 255, .55);   /* the sidebar: glass over the wash */
+  --line:       rgba(17, 20, 32, .07);
+  --line-2:     rgba(17, 20, 32, .13);      /* the resting border of a control */
+  --line-3:     #8D93A8;                    /* a border that has to survive being hovered: 3:1 */
+
+  /* --- glass -----------------------------------------------------------------
+     Every raised surface is translucent white over the wash. Three strengths:
+     a card (thick), the chrome (thin, so the page shows through the bar as it
+     scrolls), and an overlay (thickest, over a scrim). `--glass-edge` is the
+     hairline of light along the top of a pane that makes it read as glass and
+     not as a grey rectangle; it is drawn as an inset shadow, so it costs no
+     layout. Blur is a separate token because it is expensive and not every
+     surface gets it. */
+  --glass:        rgba(255, 255, 255, .82);
+  --glass-thin:   rgba(255, 255, 255, .62);
+  --glass-thick:  rgba(255, 255, 255, .92);
+  --glass-line:   rgba(255, 255, 255, .85);
+  --glass-edge:   inset 0 1px 0 rgba(255, 255, 255, .9);
+  --blur:         saturate(1.6) blur(22px);
+  --blur-soft:    saturate(1.3) blur(12px);
+
+  /* --- the wash ---------------------------------------------------------------
+     The ground itself. A cool lavender-white at the top-left, warm cream at the
+     bottom-right, and two faint blooms — one accent, one marigold — that give a
+     glass surface something to be over. Fixed to the viewport, so the blooms
+     do not scroll away under a long screen. */
+  --wash: linear-gradient(160deg, #EEF4FF 0%, #F4F7FD 42%, #FBF8F2 100%);
+  /* Blue top-left, a cooler cyan mid-right so the middle of a tall page is not
+     dead, marigold bottom-right. Over the blooms, `body::after` in app.css
+     draws the flutes — three wide diagonal bands of the accent at a few per
+     cent, fading out of the top-right corner. */
+  --bloom-a: radial-gradient(56% 46% at 6% 0%,   rgba(var(--accent-rgb), .20) 0%, rgba(var(--accent-rgb), 0) 62%);
+  --bloom-c: radial-gradient(40% 36% at 96% 42%,  rgba(35, 190, 214, .11)     0%, rgba(35, 190, 214, 0) 60%);
+  --bloom-b: radial-gradient(48% 40% at 100% 100%, rgba(228, 163, 64, .14)   0%, rgba(228, 163, 64, 0) 60%);
+
+  /* --- verdict: money and recognition only ------------------------------
+     Desaturated on purpose. Each text colour clears 4.5:1 on white AND on its
+     own tinted background, so a verdict box is readable in shop light. */
+  --green:      #1E7A4C;
+  --green-2:    #186340;   /* the pressed state of a green thing */
+  --green-bg:   #E6F3EB;
+  --green-line: #B5D9C3;
+  --green-rgb:  30, 122, 76;
+  --amber:      #8A5A10;
+  --amber-bg:   #FAF1DF;
+  --amber-line: #E9D19E;
+  --amber-rgb:  138, 90, 16;
+  --red:        #B3302C;
+  --red-2:      #902521;
+  --red-bg:     #FBEBEA;
+  --red-line:   #EFBDBB;
+  --red-rgb:    179, 48, 44;
+
+  /* The same three, lifted for legibility on a DARK surface (the camera stage,
+     a tooltip). Still money and recognition only. */
+  --green-on-dark: #4FD69C;
+  --amber-on-dark: #F5B940;
+  --red-on-dark:   #FF8A8F;
+
+  /* --- the bar --------------------------------------------------------------
+     The top bar is now PAPER, not a dark slab: one continuous light chrome,
+     with the shop's own name in it. The names below are kept because two
+     controls from other files (the account chip, the ⌘K button) are styled
+     against them; their values are ink washes rather than white ones.
+     `--bar-solid` is the opaque fallback for a browser with no backdrop-filter:
+     a translucent bar over a scrolling page is not a degraded design there, it
+     is an unreadable one. */
+  /* THE BAR FLOATS, AND IT IS LIGHT. RazorSense's own nav is a white pill
+     inset from the window edge on a pale ground — not a full-bleed slab — so
+     that is what this is. The names below are read by the account chip and the
+     ⌘K button, which were written against a dark bar; `.topbar` re-points the
+     on-dark tokens at these, so those two controls land in ink without their
+     files changing. */
+  --bar-solid:  #FFFFFF;
+  --bar-glass:  rgba(255, 255, 255, .78);
+  --bar-blur:   20px;
+  --bar-line:   rgba(var(--navy-rgb), .09);
+  --bar-hover:  rgba(var(--navy-rgb), .05);
+  --bar-sunk:   rgba(var(--navy-rgb), .045);   /* a chip resting ON the bar */
+  --bar-fg:     var(--ink);
+  --bar-fg-2:   var(--ink-3);
+  --bar-fg-3:   var(--ink-4);
+
+  /* THE FLOAT. One inset for the bar AND the sidebar, so the two panes share
+     a margin and the page reads as three floating surfaces rather than a
+     chrome frame with a hole in it. `--topbar-h` stays what it has always
+     been — the TOTAL space the bar occupies, inset included — because four
+     stylesheets hang sticky rails off it. */
+  --bar-inset:  12px;
+  --bar-h:      58px;
+
+  /* Text on a genuinely dark surface — the stage, a tooltip, a dark button.
+     Inside `.topbar` these are re-pointed at the bar's own ink (see app.css),
+     so a control written for the old dark bar lands on the light one legibly. */
+  --on-dark:    #FFFFFF;
+  --on-dark-2:  #B9BCC8;
+  --on-dark-3:  #8B8F9C;
+  --scrim:      rgba(var(--navy-rgb), .40);
+  /* The modal's own scrim is darker than the drawer's: a dialog stops the page
+     rather than sliding over one edge of it. */
+  --scrim-hard: rgba(var(--navy-rgb), .56);
+
+  /* The brand glyph. Indigo, like every other mark the machine makes. */
+  --brand-mark: var(--accent-500);
+
+  /* --- type ------------------------------------------------------------------
+     System UI only. The CSP allows no external host, and a counter that has to
+     fetch a typeface is a counter that renders in Times when the shop's
+     connection drops. The Devanagari stack matters: the brand is गवाह, and a
+     mark that falls back to a serif Devanagari beside a sans wordmark is a mark
+     that looks borrowed. */
+  /* Plus Jakarta Sans, vendored under src/fonts (OFL, latin + latin-ext,
+     49 kB). Served from this origin, so the CSP is untouched and the shop's
+     connection dropping changes nothing. Devanagari and Bengali glyphs are not
+     in it and fall through to the system faces below, which is what
+     `font-display: swap` is for. */
+  --font: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Text',
+          'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Noto Sans', 'Noto Sans Devanagari', Arial, sans-serif;
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display',
+          'Segoe UI Variable Display', 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Noto Sans', Arial, sans-serif;
+  --font-deva: 'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Devanagari',
+          'Nirmala UI', Mangal, var(--font);
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /* THE SCALE. Text sizes step by roughly a major second (×1.08–1.125) so a
+     caption, a body line and a lead sit close enough to read as one voice;
+     display sizes step by a third (×1.3–1.38) so a total is unmistakably a
+     total. 11 · 13 · 14 · 15 · 16 · 20 · 26 · 36 · 48. */
+  --t-mega:    56px;   /* the amount on the pay screen, alone on its line */
+  --t-display: 42px;   /* a total, and nothing else */
+  --t-h1:      32px;
+  --t-h2:      21px;
+  --t-h3:      15px;
+  --t-lead:    16px;   /* a page's opening sentence, and phone inputs */
+  --t-body:    14px;
+  --t-small:   13px;
+  --t-micro:   11px;
+
+  /* OPTICAL SIZING. Big type is set too loose at its default and small type too
+     tight; a ramp without tracking to match it reads as two typefaces. The
+     display tracking is what makes a ₹ total look set rather than typed. */
+  --tr-mega:    -.045em;
+  --tr-display: -.035em;
+  --tr-tight:   -.018em;
+  --tr-flat:     0;
+  --tr-caps:    .08em;
+  --tr-caps-wide: .12em;
+
+  --lh-tight:  1.15;
+  --lh-head:   1.25;
+  --lh-body:   1.55;
+  --lh-loose:  1.65;
+
+  /* --- shell metrics -----------------------------------------------------------
+     `--topbar-h` is the height of the WHOLE bar, tabs included, because the
+     sidebar and the drawer both hang off it. The narrow breakpoint changes it
+     rather than guessing. */
+  --topbar-h: 82px;   /* --bar-inset + --bar-h + --bar-inset */
+  --side-w:   264px;
+
+  /* --- space (4pt) ---------------------------------------------------------- */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px; --s8: 40px; --s9: 56px;
+  --s10: 72px;
+
+  /* --- form --------------------------------------------------------------------
+     Rounder than before: 12 on a control, 18 on a card, 24 on a dialog. The
+     rule that still holds is that a control is never rounder than half its
+     height — a 36px button at 12px is a soft rectangle, not a capsule; the
+     capsule is `--r-full` and is reserved for pills and segmented tracks. */
+  --r-xs: 6px; --r-sm: 9px; --r-md: 12px; --r-lg: 18px; --r-xl: 24px;
+  --r-full: 999px;
+
+  /* CONTROL HEIGHTS. One number per size, shared by button, input, select and
+     the segmented control, so a filter row of four different components sits
+     on one line. 36 is the smallest a mouse hits comfortably; 44 is the smallest
+     a thumb hits reliably, and is what every control on a phone gets. */
+  --ctl-h:    36px;
+  --ctl-h-sm: 28px;
+  --ctl-h-lg: 44px;
+  --ctl-px:   var(--s3);
+
+  /* --- elevation ---------------------------------------------------------------
+     Shadows are tinted UMBER, not grey and not navy: on warm paper a cool grey
+     shadow reads as dirt and a blue one as a glow. Each step is a direct shadow
+     (the object's own edge) over an ambient one (the room).
+
+     0  a hairline lift — a table header that has scrolled under itself
+     1  a card at rest
+     2  a card that has been picked up (hover, the QR, a popover)
+     3  the drawer, and anything that has left the page
+     4  a dialog, which is the only thing allowed to look this far off it */
+  /* Tinted to the INK now, not to paper: on a cool wash a warm shadow reads as
+     a stain. Every step is a soft ambient over a crisp near-edge, and every
+     card also wears --glass-edge, the hairline of light along its top. */
+  --shadow-rgb: 24, 28, 60;
+  --shadow-0: 0 1px 2px rgba(var(--shadow-rgb), .05);
+  --shadow-1: 0 1px 2px rgba(var(--shadow-rgb), .05), 0 6px 18px rgba(var(--shadow-rgb), .06);
+  --shadow-2: 0 2px 6px rgba(var(--shadow-rgb), .06), 0 16px 40px rgba(var(--shadow-rgb), .10);
+  --shadow-3: 0 4px 10px rgba(var(--shadow-rgb), .08), 0 24px 56px rgba(var(--shadow-rgb), .16);
+  --shadow-4: 0 8px 20px rgba(var(--shadow-rgb), .12), 0 40px 90px rgba(var(--shadow-rgb), .26);
+  /* A control that is pressed goes IN rather than merely darker. */
+  --shadow-in: inset 0 1px 2px rgba(var(--shadow-rgb), .12);
+  /* The two coloured lifts. Only an action button and a money button get one,
+     and they are here so no route invents a third. The inset hairline of light
+     along the top edge is what separates a button that was drawn from a
+     rectangle that was filled. */
+  --lift-blue:  inset 0 1px 0 rgba(255, 255, 255, .30), 0 1px 2px rgba(var(--accent-rgb), .32), 0 10px 26px rgba(var(--accent-rgb), .34);
+  --lift-green: inset 0 1px 0 rgba(255, 255, 255, .26), 0 2px 4px rgba(var(--green-rgb), .26), 0 10px 26px rgba(var(--green-rgb), .24);
+
+  /* --- focus ------------------------------------------------------------------
+     Two treatments, on purpose. `--ring` is the soft halo a text field wears
+     while it is being typed into; `--focus` is the 2px outline a keyboard user
+     tabs through, and it is the one that carries the accessibility claim
+     (--accent-500 on white is 6.5:1). They coexist without doubling up because
+     the halo is a box-shadow and the outline is an outline. */
+  --ring:       0 0 0 3px rgba(var(--accent-rgb), .22);
+  --ring-red:   0 0 0 3px rgba(var(--red-rgb), .20);
+  --ring-amber: 0 0 0 3px rgba(var(--amber-rgb), .22);
+  --focus:      2px solid var(--accent-500);
+  --focus-offset: 2px;
+
+  /* --- stacking ---------------------------------------------------------------- */
+  --z-bar:     60;
+  --z-drawer:  55;
+  --z-scrim:   50;
+  --z-bottom:  40;   /* the storefront's basket bar */
+  --z-modal:   100;
+  --z-palette: 118;  /* ⌘K: over a dialog, under a notice */
+  --z-toast:   120;
+  --z-tip:     130;  /* a tooltip explains the thing on top, so it is on top */
+
+  /* --- motion --------------------------------------------------------------------
+     One decelerating curve for things ARRIVING, one accelerating for things
+     LEAVING, and a flat one for a colour change that should not appear to move
+     at all. Nothing here overshoots: a counter is not a toy and a bill line
+     that bounces is a bill line a shopkeeper looks at twice. */
+  --ease:     cubic-bezier(.2, .7, .3, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in:  cubic-bezier(.4, 0, 1, 1);
+  --xfast: 90ms;
+  --fast:  120ms;
+  --med:   220ms;
+  --slow:  420ms;
+}
+
+/* A counter runs for eight hours in a bright shop. Honour the OS setting for
+   reduced motion — the scan pulse and snap animations are the whole point of
+   the interface, so they degrade to instant rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --xfast: 0ms; --fast: 0ms; --med: 0ms; --slow: 0ms; }
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+html { background: var(--surface-2); }
+
+/* THE WASH, once, behind everything. A fixed pseudo-layer rather than a
+   `background-attachment: fixed` on body, which repaints the whole page on
+   every scroll on a phone. The blooms are two radial gradients on top of the
+   linear wash; on a browser with no gradient support the flat --surface-2
+   above is what shows, and nothing is unreadable. */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: -1;
+  background: var(--bloom-a), var(--bloom-c), var(--bloom-b), var(--wash);
+  pointer-events: none;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* TABULAR FIGURES EVERYWHERE. This is a counter: every column of numbers a
+     shopkeeper reads is compared against the one above it, and figures that
+     jitter by a glyph width are figures that are hard to add up. Set once here
+     rather than remembered on every price. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'cv11' 1;
+}
+
+/* The ramp applied. A heading's tracking belongs to its SIZE, not to the
+   element, which is why these are set here once rather than at every use. */
+h1, h2, h3, h4 {
+  margin: 0; color: var(--navy-900);
+  font-family: var(--font-display);
+  line-height: var(--lh-head); letter-spacing: var(--tr-tight);
+  text-wrap: balance;
+}
+h4 { font-family: var(--font); letter-spacing: var(--tr-flat); }
+p { margin: 0; }
+p, li, td, .card-sub, .hint, .muted { text-wrap: pretty; }
+
+/* The keyboard ring, once, for everything. The halo on a text field is a
+   box-shadow and stacks on top of this without doubling. */
+:focus-visible { outline: var(--focus); outline-offset: var(--focus-offset); border-radius: var(--r-sm); }
+
+/* Numbers that a shopkeeper compares down a column must not jitter. */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+.mono { font-family: var(--mono); }
