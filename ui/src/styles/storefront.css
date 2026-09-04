@@ -1,0 +1,488 @@
+/* ===========================================================================
+   THE STOREFRONT, REDRAWN — Shop.tsx (a stranger's phone) and Orders.tsx
+   (the shopkeeper's laptop).
+   ---------------------------------------------------------------------------
+   Imported by both routes. Every class here is prefixed `sf-` (the shop) or
+   `od-` (the order desk) so nothing collides with app.css — including the
+   older `shop-`/`order` block appended there, which these screens no longer
+   read. Tokens only: blue is action and the machine's own marks, verdict
+   green/amber/red stay reserved for money and recognition state. A discount
+   is money the customer keeps, not money that settled, so the SAVE tag is
+   drawn in the blue family and never in green.
+
+   Mobile first. This page is read one-handed at 390 px; the desktop layout is
+   the same page given room, not a different page.
+   =========================================================================== */
+
+/* ------------------------------------------------------------- the shop -- */
+
+.sf {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  /* Room for the sticky basket bar, plus the phone's own home indicator. */
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+/* Checkout and the order live in one narrow column: a form and a journey are
+   read top to bottom, and 1440 px of width would not make either clearer. */
+.sf.narrow { max-width: 560px; }
+
+.sf-hero h1 { font-size: var(--t-h1); font-weight: 800; letter-spacing: -.02em; }
+.sf-hero p { color: var(--ink-3); margin-top: var(--s2); line-height: 1.6; max-width: 62ch; }
+.sf-oid { color: var(--ink-3); font-size: var(--t-small); }
+
+/* ---- search-as-you-type --------------------------------------------------
+   Sticky under the top bar: with a few hundred products on sale nobody
+   scrolls, they type, and the box must still be there when they do. */
+
+.sf-search {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 30;
+  /* A solid strip of the page's own ground, flush under the top bar, so the
+     shelf scrolling past cannot peek around the pill's rounded corners. The
+     negative margins give the padding back to the flex gap, so the resting
+     layout is unchanged. */
+  background: var(--surface-2);
+  padding: var(--s3) 0;
+  margin: calc(-1 * var(--s3)) 0;
+}
+.sf-search .box { position: relative; display: flex; align-items: center; }
+.sf-search svg {
+  position: absolute; left: 18px; width: 18px; height: 18px;
+  color: var(--ink-4); pointer-events: none;
+}
+.sf-search input {
+  width: 100%;
+  min-height: 50px;
+  /* 16 px or iOS zooms the whole page on focus and the customer loses it. */
+  font-size: 16px;
+  font-family: var(--font);
+  color: var(--ink);
+  padding: 0 52px 0 48px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-1);
+}
+.sf-search input::placeholder { color: var(--ink-4); }
+.sf-search input:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.sf-search .clear {
+  position: absolute; right: 7px;
+  width: 38px; height: 38px; border-radius: var(--r-full);
+  appearance: none; border: 0; cursor: pointer;
+  background: var(--surface-3); color: var(--ink-2);
+  font: 600 15px/1 var(--font);
+}
+.sf-search .clear:hover { background: var(--blue-050); color: var(--blue-700); }
+
+.sf-count { font-size: var(--t-small); color: var(--ink-3); margin-top: calc(-1 * var(--s3)); }
+
+/* ---- the product grid --------------------------------------------------- */
+
+.sf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s3);
+}
+@media (min-width: 720px) {
+  .sf-grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: var(--s4); }
+}
+
+.sf-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.sf-card:hover { border-color: var(--line-2); box-shadow: var(--shadow-2); }
+.sf-card.in { border-color: var(--blue-400); box-shadow: 0 0 0 1px var(--blue-400), var(--shadow-1); }
+
+/* The photo well. The taught photos are small crops of a packet on a counter,
+   so they sit CONTAINED on a quiet surface — never stretched to fill. */
+.sf-ph {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.sf-ph img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  padding: var(--s3);
+}
+/* A product taught from its printed code alone has no photograph and never
+   will. Its initial admits to being a placeholder. */
+.sf-ph .initial {
+  font: 800 44px/1 var(--font);
+  color: var(--ink-4);
+  text-transform: uppercase;
+}
+
+/* The saving is money the customer KEEPS, not money that settled: blue
+   family, never green. */
+.sf-save {
+  position: absolute; top: var(--s2); left: var(--s2); z-index: 1;
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .04em;
+  color: var(--blue-700);
+  background: var(--blue-100);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.sf-body {
+  display: flex; flex-direction: column; gap: var(--s1);
+  padding: var(--s3) var(--s3) var(--s2);
+  flex: 1;
+}
+.sf-nm {
+  font-weight: 600; font-size: var(--t-small); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* Two lines reserved so a shelf of cards keeps its prices on one rule. */
+  min-height: 2.7em;
+}
+.sf-price { display: flex; align-items: baseline; gap: var(--s2); margin-top: auto; flex-wrap: wrap; }
+.sf-price .now { font-size: var(--t-h3); font-weight: 800; color: var(--navy-900); }
+.sf-mrp { font-size: var(--t-small); color: var(--ink-4); text-decoration: line-through; }
+
+.sf-ctl { padding: 0 var(--s3) var(--s3); }
+.sf-add {
+  width: 100%; min-height: 44px;
+  appearance: none; cursor: pointer;
+  font: 700 var(--t-small)/1 var(--font); letter-spacing: .03em;
+  color: var(--blue-600);
+  background: var(--surface);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.sf-add:hover { background: var(--blue-050); border-color: var(--blue-400); }
+.sf-add:active { background: var(--blue-100); }
+
+.sf-step {
+  display: flex; align-items: center; width: 100%; min-height: 44px;
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.sf-step button {
+  appearance: none; border: 0; cursor: pointer; background: transparent;
+  flex: 0 0 44px; align-self: stretch;
+  font: 700 19px/1 var(--font); color: var(--blue-700);
+}
+.sf-step button:hover { background: var(--blue-100); }
+.sf-step button:active { background: var(--blue-200); }
+.sf-step .n { flex: 1; text-align: center; font-weight: 800; color: var(--navy-900); }
+
+/* Loading: the shape of the shelf, before the shelf. */
+.sf-ph-skel { aspect-ratio: 1 / 1; border-radius: 0; }
+.sf-txt-skel { height: 13px; border-radius: var(--r-sm); }
+.sf-txt-skel.short { width: 55%; }
+
+/* ---- the basket bar ------------------------------------------------------
+   Slides up when the first item lands. One count, one total, one CHECKOUT. */
+
+.sf-bar {
+  position: fixed; z-index: 40;
+  left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4) calc(var(--s3) + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  box-shadow: var(--shadow-3);
+  animation: sf-rise var(--med) var(--ease);
+}
+@keyframes sf-rise { from { transform: translateY(110%); } }
+@media (min-width: 720px) {
+  .sf-bar {
+    left: var(--s5); right: var(--s5); bottom: var(--s5);
+    width: min(560px, 100%);
+    margin: 0 auto;
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: var(--s3) var(--s4);
+  }
+}
+.sf-tot { display: flex; flex-direction: column; line-height: 1.25; padding: 0 var(--s2); }
+.sf-tot .n {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink-3); white-space: nowrap;
+}
+.sf-tot .n b { color: var(--blue-700); font-weight: 800; }
+.sf-tot .amt { font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); }
+.sf-bar .btn { min-height: 48px; }
+.sf-bar .sf-go { flex: 1; font-weight: 800; font-size: var(--t-h3); letter-spacing: .02em; }
+.sf-bar .btn.ghost { flex: 0 0 auto; }
+
+/* ---- checkout ------------------------------------------------------------ */
+
+.sf textarea {
+  font: 400 16px/1.5 var(--font); color: var(--ink);
+  padding: var(--s3); background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  resize: vertical;
+}
+.sf textarea:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.sf input { font-size: 16px; }
+
+/* "You save" rides INSIDE the bill, above the total: it explains why the
+   total is lower than the shelf, in the blue the rest of the shop's own
+   marks use. */
+.sf-saved {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--s2) 0;
+  border-bottom: 1px dashed var(--line);
+  color: var(--blue-700); font-weight: 700; font-size: var(--t-small);
+}
+
+/* ---- the delivery journey ------------------------------------------------
+   Four stops on one line, joined by a rail. Travelled track is blue — the
+   machine's own mark — and the current stop carries the emphasis. Green is
+   not used here: this rail is where the PARCEL is, never whether money
+   settled. */
+
+.sf-journey {
+  list-style: none; margin: var(--s2) 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+}
+.sf-journey li {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+  text-align: center;
+  font-size: var(--t-micro); font-weight: 600; color: var(--ink-4);
+  padding: 0 2px;
+}
+.sf-journey li .mark {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--line-2); background: var(--surface);
+  display: grid; place-items: center;
+  position: relative; z-index: 1;
+  transition: background var(--med) var(--ease), border-color var(--med) var(--ease);
+}
+/* The rail: from the previous stop's centre to this one's. Drawn on every li
+   but the first, so the ends of the journey have no loose tail. */
+.sf-journey li + li::before {
+  content: ''; position: absolute; top: 12px; right: 50%;
+  width: 100%; height: 2px; background: var(--line-2);
+}
+.sf-journey li.done { color: var(--ink-2); }
+.sf-journey li.done .mark { border-color: var(--blue-600); background: var(--blue-600); }
+.sf-journey li.done .mark::after {
+  content: '✓'; color: var(--on-dark); font: 800 13px/1 var(--font);
+}
+.sf-journey li.done + li::before { background: var(--blue-600); }
+.sf-journey li.now { color: var(--navy-900); font-weight: 800; }
+.sf-journey li.now .mark {
+  border-color: var(--blue-500); background: var(--blue-500);
+  box-shadow: 0 0 0 4px var(--blue-100);
+}
+.sf-journey li.now .mark::after {
+  content: ''; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--on-dark);
+}
+
+.sf-status { text-align: center; }
+
+.sf-foot { justify-content: center; }
+
+/* The closing "how this shop works" card reads as a footnote, not a fourth
+   shelf: one narrow column wherever the grid above went wide. */
+.sf-note { width: 100%; max-width: 560px; margin: var(--s4) auto 0; }
+
+/* ========================================================================== */
+/* ------------------------------------------------------- the order desk -- */
+/* ========================================================================== */
+
+.od-grid {
+  display: grid; gap: var(--s5);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+@media (min-width: 1080px) {
+  .od-grid { grid-template-columns: minmax(0, 1.6fr) minmax(340px, .8fr); }
+  /* THE QUEUE FOLLOWS THE READER. On a quiet morning the queue is one short
+     card and the rail beside it — the shutter code, what a customer can and
+     cannot do — is four times its height, so the whole left half of the screen
+     used to scroll past as bare paper. Pinned, that half stays the queue: the
+     one thing on this screen a shopkeeper is actually waiting on. The cap and
+     the inner scroll are for the evening, when the queue is longer than the
+     window; it is the same idiom `.bh-aside` uses on History. */
+  .od-queue {
+    position: sticky;
+    top: calc(var(--topbar-h) + var(--s4));
+    align-self: start;
+    max-height: calc(100vh - var(--topbar-h) - var(--s7));
+    overflow-y: auto;
+    border-radius: var(--r-lg);
+  }
+}
+
+/* A group header inside the queue: NEW, then PACKING, then OUT. The count
+   chip is blue — it is the machine counting, not a verdict. */
+.od-sec { display: flex; align-items: center; gap: var(--s3); margin: var(--s3) 0; }
+.od-sec:first-child { margin-top: 0; }
+.od-sec .t {
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-3); white-space: nowrap;
+}
+.od-sec .n {
+  font-size: var(--t-micro); font-weight: 800;
+  color: var(--blue-700); background: var(--blue-050);
+  border: 1px solid var(--blue-200); border-radius: var(--r-full);
+  padding: 1px 8px;
+}
+.od-sec .rule { flex: 1; height: 1px; background: var(--line); }
+
+.od-list { display: flex; flex-direction: column; gap: var(--s4); }
+
+.od-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+/* A brand-new order must be impossible to miss in a queue of settled ones. */
+.od-card.fresh { border-color: var(--blue-400); box-shadow: 0 0 0 1px var(--blue-400), var(--shadow-1); }
+
+.od-head {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.od-head .who { font-weight: 700; color: var(--navy-900); }
+.od-head .when { font-size: var(--t-micro); color: var(--ink-4); }
+.od-head .spacer { flex: 1; }
+.od-amt { font-size: var(--t-h3); font-weight: 800; color: var(--navy-900); }
+
+.od-body {
+  display: grid; gap: var(--s4);
+  grid-template-columns: minmax(0, 1fr);
+  padding: var(--s4);
+}
+@media (min-width: 720px) {
+  .od-body { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: var(--s6); }
+}
+
+.od-k {
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-4);
+  margin-bottom: var(--s1);
+}
+.od-items .bill-line { padding: 6px 0; }
+.od-dest { display: flex; flex-direction: column; gap: var(--s1); font-size: var(--t-small); }
+.od-dest address { font-style: normal; white-space: pre-wrap; line-height: 1.5; color: var(--ink); }
+.od-dest .phone {
+  color: var(--blue-600); text-decoration: none; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.od-dest .phone:hover { text-decoration: underline; }
+.od-dest .oid { color: var(--ink-4); margin-top: var(--s2); }
+
+/* The next action is the whole point of the card, so it gets the weight; a
+   cancel is real but quiet, parked on the far side where a hurried thumb is
+   not. */
+.od-act {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border-top: 1px dashed var(--line);
+}
+.od-act .od-next { min-height: 44px; padding: 0 var(--s6); font-weight: 700; letter-spacing: .02em; }
+.od-act .od-cancel { margin-left: auto; }
+
+/* ---- the shutter sticker -------------------------------------------------
+   Drawn as the thing it becomes: a card to cut out and tape to the shutter.
+   The dashed edge is the scissor line. */
+
+.od-sticker {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  border: 2px dashed var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--s6) var(--s5);
+  text-align: center;
+  margin-top: var(--s4);
+}
+.od-sticker .brand {
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .24em;
+  text-transform: uppercase; color: var(--blue-700);
+}
+.od-sticker h3 { font-size: var(--t-h2); font-weight: 800; letter-spacing: -.01em; }
+.od-sticker img {
+  width: 240px; max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s2);
+}
+.od-sticker .url {
+  font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-3);
+  word-break: break-all;
+}
+.od-sticker .sub { font-size: var(--t-small); color: var(--ink-3); line-height: 1.6; max-width: 34ch; }
+
+/* Sending the shop to somebody: copy, share sheet, save the code. Wraps on a
+   phone; the answer to a press sits under the row rather than moving it. */
+.od-share { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--s4) 0 6px; }
+.od-shared { margin: 0 0 var(--s3); color: var(--ink-2); }
+
+/* ---- the shelf -----------------------------------------------------------
+   What the shop says it can sell, on every card. An item at or under its
+   floor stays on the shelf — a customer should see what the shop carries —
+   greyed, with the button off and a badge saying why. INK, NOT RED OR AMBER:
+   an empty shelf is a fact about stock, and those colours belong to what the
+   money path did. The count under the price is the server's figure, verbatim;
+   "no stock figure" is what a product nobody has counted says, and it is
+   never rewritten as a zero. */
+
+.sf-stock {
+  font-size: var(--t-micro); color: var(--ink-4);
+  font-variant-numeric: tabular-nums; line-height: 1.3;
+}
+.sf-stock.low { color: var(--ink-2); font-weight: 700; }
+
+.sf-card.out { background: var(--surface-2); }
+.sf-card.out:hover { box-shadow: none; border-color: var(--line); }
+.sf-card.out .sf-ph { background: var(--surface-3); }
+.sf-card.out .sf-ph img,
+.sf-card.out .sf-ph .initial { filter: grayscale(1); opacity: .45; }
+.sf-card.out .sf-nm,
+.sf-card.out .sf-price .now { color: var(--ink-4); }
+
+.sf-oos {
+  position: absolute; top: var(--s2); left: var(--s2); z-index: 1;
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .06em;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.sf-add:disabled {
+  cursor: not-allowed; color: var(--ink-4);
+  background: var(--surface-2); border-color: var(--line);
+}
+.sf-add:disabled:hover { background: var(--surface-2); border-color: var(--line); }
+.sf-step button:disabled { color: var(--ink-4); cursor: not-allowed; background: transparent; }
+.sf-step button:disabled:hover { background: transparent; }
+
+/* What the shop cut out of a basket, line by line. Read once, then gone. */
+.sf-fix { margin: var(--s2) 0 0; padding-left: 1.2em; }
+.sf-fix li { margin: 2px 0; }
