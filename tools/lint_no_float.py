@@ -89,6 +89,33 @@ class SemanticV(ast.NodeVisitor):
                 self.bad.append((n.lineno, f"money-named arg '{n.arg}' annotated float"))
         self.generic_visit(n)
 
+    def visit_Call(self, n):
+        """THE INVERTED GUARD: `paise(int(x))`.
+
+        This reads as "assert this is money" and asserts nothing. `int()` is
+        the INNER call, so it truncates before `paise()` is ever reached:
+
+            paise(214.507)       -> MoneyError: float is not money
+            paise(int(214.507))  -> 214        Rs 2.14 for a Rs 214.51 item
+
+        An audit found ~80 sites across 16 modules writing it this way. Every
+        one had a validated door upstream, so none was reachable — but this is
+        the codebase's standard idiom for "this is money", and the idiom was
+        backwards. `paisa.py` gets the order right (`int(paise(v))`).
+
+        Nothing else in this file could see it: the checks above look for float
+        LITERALS, `float()` casts and true division, and `paise(int(x))`
+        contains none of the three.
+        """
+        if isinstance(n.func, ast.Name) and n.func.id == "paise" and n.args:
+            a = n.args[0]
+            if isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "int":
+                self.bad.append((
+                    n.lineno,
+                    "inverted guard `paise(int(x))` — int() truncates before paise() "
+                    "can refuse; write `int(paise(x))`"))
+        self.generic_visit(n)
+
 
 def semantic_scan(root):
     findings = 0

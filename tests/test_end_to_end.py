@@ -61,6 +61,7 @@ import json
 import numpy as np
 import pytest
 
+from gawaah import rzp_sim
 from gawaah.identity import DEFAULT_PHI, DEFAULT_TAU_MM
 from gawaah.kernel import (
     CALLING, ESCALATED, FAILED, INDETERMINATE, SETTLED, idem_key,
@@ -374,7 +375,7 @@ def test_happy_path_webhook_was_green_for_the_right_reasons(happy):
 def test_happy_path_gateway_link_is_a_string_we_only_read(happy):
     """INVARIANT 6: the counter renders a QR from a URL the GATEWAY minted. It
     never constructs a UPI payload, and there is no code here that could."""
-    assert happy.notes["short_url"].startswith("https://rzp.io/i/")
+    assert happy.notes["short_url"].startswith(rzp_sim.SHORT_URL_PREFIX)
     # The URL was never assembled here; it came back off the link entity.
     assert happy.mints[0].short_url == happy.notes["short_url"]
     src = (e2e.ROOT.joinpath(*DRIVER)).read_text()

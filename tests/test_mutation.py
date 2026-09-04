@@ -1868,13 +1868,16 @@ def test_the_three_intent_state_properties_answer_for_every_state(state):
                  amount_paise=1, idem_key="k", payment_id=None, attempts=0,
                  retrieve_attempts=0, needs_human=False, reason=None,
                  created_ts="t", updated_ts="t")
-    assert it.is_terminal is (state in (SETTLED, FAILED))
+    # BOOKED (khata): the debit executed NEVER, by decision — money-decided
+    # for this row, and no sweep may touch it. The debt lives on the book.
+    from gawaah.kernel import BOOKED
+    assert it.is_terminal is (state in (SETTLED, FAILED, BOOKED))
     assert it.is_escalated is (state == ESCALATED)
-    assert it.machine_done is (state in (SETTLED, FAILED, ESCALATED))
+    assert it.machine_done is (state in (SETTLED, FAILED, ESCALATED, BOOKED))
     assert isinstance(it.is_terminal, bool)
     assert isinstance(it.is_escalated, bool)
-    assert TERMINAL == frozenset({SETTLED, FAILED})
-    assert MACHINE_TERMINAL == frozenset({SETTLED, FAILED, ESCALATED})
+    assert TERMINAL == frozenset({SETTLED, FAILED, BOOKED})
+    assert MACHINE_TERMINAL == frozenset({SETTLED, FAILED, ESCALATED, BOOKED})
     assert ESCALATED not in TERMINAL, "ESCALATED must not read as money-decided"
 
 
