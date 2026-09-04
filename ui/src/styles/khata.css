@@ -1,0 +1,159 @@
+/* ===========================================================================
+   Khata — the udhaar book.
+
+   Imported by `routes/Khata.tsx` and by nothing else. Every colour is a token
+   from tokens.css; every rule is prefixed `kh-`.
+
+   THE ONE RULE ABOUT COLOUR: green means webhook-settled paise and nothing
+   else. A balance on the book is ink. A parked capture is ink. A collection
+   link that is open is the machine's blue. Nothing on this screen is amber or
+   red unless the server refused something, and then it says so in the
+   refusal's own words.
+   =========================================================================== */
+
+.kh-page { display: flex; flex-direction: column; gap: var(--s5); }
+.kh-page > .page-head { margin-bottom: 0; }
+.kh-deva { font-weight: 500; color: var(--ink-3); margin-left: var(--s2); font-size: .8em; }
+
+.kh-ink { color: var(--navy-900); }
+.kh-green { color: var(--green); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------ the value -- */
+
+/* Glass, the flute skew on its leading edge: this is the sentence the whole
+   screen exists to say, and it sits where a judge's eye lands first. */
+.kh-value {
+  position: relative;
+  padding: var(--s5) var(--s6);
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--glass-edge);
+  overflow: hidden;
+}
+.kh-value::before {
+  content: "";
+  position: absolute; left: -6px; top: -10%; bottom: -10%; width: 10px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+}
+.kh-value-line {
+  margin: 0 0 var(--s4);
+  font-size: var(--t-h3);
+  line-height: var(--lh-loose);
+  color: var(--ink-2);
+  max-width: 78ch;
+}
+.kh-value-line b { font-weight: 800; font-variant-numeric: tabular-nums; }
+
+.kh-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+}
+@media (max-width: 900px) { .kh-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px) { .kh-tiles { grid-template-columns: 1fr; } }
+.kh-tile {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.kh-tile .lbl {
+  font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--ink-4);
+}
+.kh-tile .val {
+  font-family: var(--font-display, var(--font));
+  font-size: clamp(20px, 2.2vw, 28px); font-weight: 800; line-height: 1.1;
+  color: var(--navy-900); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.kh-tile .val .unit { font-size: .55em; font-weight: 600; color: var(--ink-3); }
+.kh-tile .sub { font-size: var(--t-micro); color: var(--ink-3); }
+/* The one green tile — money a signed webhook stands behind. */
+.kh-tile.green { border-color: var(--green-line); background: var(--green-bg); }
+.kh-tile.green .val { color: var(--green); }
+
+.kh-parked {
+  margin: var(--s4) 0 0;
+  font-size: var(--t-small); color: var(--ink-2);
+  padding: var(--s3) var(--s4);
+  border: 1px dashed var(--line); border-radius: var(--r-md);
+}
+
+/* ------------------------------------------------------------- the grid -- */
+
+.kh-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 5fr) minmax(0, 7fr);
+  gap: var(--s5);
+  align-items: start;
+}
+@media (max-width: 980px) { .kh-grid { grid-template-columns: 1fr; } }
+
+/* A GRID ITEM'S DEFAULT `min-width: auto` IS THE WHOLE BUG. At 320 the card
+   measured 359 px in a 320 px viewport and the BODY scrolled sideways — the
+   ledger inside it has a `.tbl-wrap` that can scroll, but the track holding
+   the card was sized to the table's content, so nothing ever asked the wrap
+   to scroll. `minmax(0, 1fr)` on the track and `min-width: 0` on the item let
+   the card reach 320 and hand the overflow to the scroller that exists for it.
+   Measured at 320: page scrollWidth 359 -> 320. */
+.kh-grid { grid-template-columns: minmax(320px, 5fr) minmax(0, 7fr); }
+@media (max-width: 980px) { .kh-grid { grid-template-columns: minmax(0, 1fr); } }
+.kh-grid > * { min-width: 0; }
+.kh-detail { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+.kh-empty { padding: var(--s5); }
+.kh-chain {
+  margin: 0; padding: var(--s3) var(--s5);
+  font-size: var(--t-micro); color: var(--ink-4);
+  border-top: 1px solid var(--line);
+}
+
+.kh-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kh-who .nm { font-weight: 600; color: var(--navy-900); }
+.kh-who .ph { font-size: var(--t-micro); color: var(--ink-4); }
+
+/* ---------------------------------------------------------- the figures -- */
+
+.kh-figs { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s6); margin-bottom: var(--s4); }
+.kh-figs > div { display: flex; flex-direction: column; gap: 2px; min-width: 120px; }
+.kh-figs .l {
+  font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--ink-4);
+}
+.kh-figs .v { font-size: var(--t-h2); font-weight: 800; font-variant-numeric: tabular-nums; }
+.kh-figs .s { font-size: var(--t-micro); color: var(--ink-4); }
+
+.kh-refusal { margin: var(--s3) 0; }
+
+/* ------------------------------------------------------------- the link -- */
+
+.kh-link {
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: var(--s2);
+}
+.kh-link-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
+.kh-link-amt { font-size: var(--t-small); color: var(--ink-2); }
+
+.kh-qr { margin: var(--s3) 0 0; display: flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+.kh-qr img { border: 1px solid var(--line); border-radius: var(--r-md); background: #fff; }
+.kh-qr figcaption { font-size: var(--t-micro); color: var(--ink-4); word-break: break-all; }
+.kh-qr-refused { margin-top: var(--s3); }
+
+/* --------------------------------------------------------- the simulator -- */
+
+.kh-sim {
+  margin-top: var(--s4);
+  padding: var(--s4);
+  border: 1px dashed var(--blue-200);
+  background: var(--blue-050);
+  border-radius: var(--r-md);
+}
+.kh-sim-row { display: flex; gap: var(--s3); align-items: flex-end; flex-wrap: wrap; }
+.kh-sim-row .field { margin-bottom: 0; max-width: 200px; }
+.kh-sim-note { margin: var(--s3) 0 0; font-size: var(--t-small); color: var(--ink-2); }
