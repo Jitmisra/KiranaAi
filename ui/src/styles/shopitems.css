@@ -1,0 +1,181 @@
+/* ===========================================================================
+   YOUR PRODUCTS — the shopkeeper's own side of the catalogue.
+
+   NOTHING HERE INVENTS A COLOUR. Every value is a token from tokens.css, and
+   the three verdict colours are not among them: green means a webhook settled a
+   payment, amber means the counter abstained, red means it refused, and nothing
+   on this screen is any of those. A product with no photograph is a job still
+   to do, not a warning, so it is drawn QUIET — ink-5 on the glass — and the one
+   accent is the machine's own blue.
+
+   THE ROW IS A BUTTON, AND IT IS A GRID. Six columns on a laptop; on a phone
+   the picture and the name keep their places and the price, the count and the
+   pill fall to a second line under them, because a horizontal scrollbar on a
+   product list is a list a shopkeeper stops reading.
+   =========================================================================== */
+
+/* --- the toolbar above the list ------------------------------------------ */
+
+.si-tools {
+  display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap;
+  padding: var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.si-tools .inp[type='search'] { flex: 1 1 220px; min-width: 0; }
+
+/* A card with `flush` has no body padding, so anything that is NOT the list
+   has to bring its own. */
+.si-pad { padding: var(--s5); }
+.si-pad-t { margin-top: var(--s4); }
+
+/* --- the list ------------------------------------------------------------ */
+
+.si-list { list-style: none; margin: 0; padding: 0; }
+.si-list > li + li { border-top: 1px solid var(--line); }
+
+.si-row {
+  appearance: none; cursor: pointer; text-align: left;
+  width: 100%; padding: var(--s3) var(--s4);
+  background: transparent; border: 0;
+  font: inherit; color: var(--ink);
+  display: grid; align-items: center; gap: var(--s3);
+  grid-template-columns: 44px minmax(0, 1fr) auto auto auto 16px;
+  transition: background var(--fast) var(--ease);
+}
+.si-row:hover { background: rgba(var(--accent-rgb), .05); }
+.si-row:focus-visible {
+  outline: 2px solid var(--accent-500); outline-offset: -2px;
+}
+
+/* THREE FACTS, ONE GROUP. `display: contents` dissolves this wrapper on a
+   laptop so price, count and pill are three real grid columns and the prices
+   line up down the page; the phone rule below turns it back into a box. */
+.si-meta { display: contents; }
+
+.si-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.si-name b {
+  font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.si-sub {
+  font-size: var(--t-micro); color: var(--ink-4);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.si-price { font-weight: 700; font-variant-numeric: tabular-nums; }
+.si-stock {
+  font-variant-numeric: tabular-nums; color: var(--ink-3);
+  font-size: var(--t-small); min-width: 7ch; text-align: right;
+}
+/* "not counted" is a FACT, not an alarm: a zero would be a claim about a
+   shelf nobody has looked at. Quiet, italic, and never a verdict colour. */
+.si-stock em { font-style: normal; color: var(--ink-5); font-size: var(--t-micro); }
+
+.si-go { color: var(--ink-5); display: flex; justify-content: flex-end; }
+
+@media (max-width: 720px) {
+  .si-row {
+    grid-template-columns: 44px minmax(0, 1fr) 16px;
+    grid-template-areas:
+      'pic name go'
+      'pic meta meta';
+    row-gap: var(--s2);
+  }
+  .si-row > .si-thumb { grid-area: pic; }
+  .si-name { grid-area: name; }
+  .si-go { grid-area: go; align-self: center; }
+  /* A REAL BOX AGAIN. Assigning the three children to one grid area drew them
+     on top of each other — a phone screenshot of the running page is the only
+     thing that showed it. As a flex row they read as one line of facts under
+     the name, and wrap to a second line rather than push the page sideways. */
+  .si-meta {
+    grid-area: meta;
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: var(--s2) var(--s3);
+  }
+  .si-stock { min-width: 0; text-align: left; }
+}
+
+/* --- the picture, and the space reserved when there is not one ----------- */
+
+.si-thumb {
+  flex: none; border-radius: var(--r-sm);
+  object-fit: cover; background: var(--glass-thin);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.si-thumb.none {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-5);
+  background:
+    repeating-linear-gradient(135deg,
+      rgba(17, 20, 32, .035) 0 6px, transparent 6px 12px);
+}
+.si-thumb.lg { width: 96px; height: 96px; }
+
+/* --- the forms ----------------------------------------------------------- */
+
+.si-form {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.si-form .field { min-width: 0; }
+
+.si-lead { color: var(--ink-3); max-width: 68ch; line-height: var(--lh-body); }
+
+.si-photo-pick { display: flex; gap: var(--s4); align-items: flex-start; flex-wrap: wrap; }
+.si-photo-pick input[type='file'] {
+  font: var(--t-small)/1.4 var(--font); color: var(--ink-3);
+  max-width: 100%;
+}
+.si-photo-pick > div { display: flex; flex-direction: column; gap: var(--s3); align-items: flex-start; }
+
+.si-inline { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; }
+.si-count { max-width: 8rem; }
+
+/* --- what happened ------------------------------------------------------- */
+
+/* BLUE, NEVER GREEN. A saved name is not a settled payment. */
+.si-did {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(var(--accent-rgb), .22);
+  background: rgba(var(--accent-rgb), .06);
+  color: var(--ink-2);
+  font-size: var(--t-small); line-height: var(--lh-body);
+}
+
+.si-why {
+  display: block; margin-top: var(--s2);
+  color: var(--ink-2); font-size: var(--t-small); line-height: var(--lh-body);
+}
+.si-why .mono { color: var(--accent-700); }
+
+.si-fine {
+  margin-top: var(--s3);
+  color: var(--ink-4); font-size: var(--t-micro); line-height: var(--lh-body);
+  max-width: 72ch;
+}
+
+/* A Verdict renders its children in one <p>; these are separate sentences that
+   need their own lines and cannot be <div>s inside it. */
+.si-block { display: block; }
+.si-block + .si-block { margin-top: var(--s2); }
+
+/* --- the editor ---------------------------------------------------------- */
+
+.si-edit { display: flex; flex-direction: column; gap: var(--s6); }
+.si-edit > section + section { border-top: 1px solid var(--line); padding-top: var(--s5); }
+.si-edit h3 {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-4);
+  margin-bottom: var(--s3);
+}
+
+.si-history { margin-top: var(--s4); border-top: 1px solid var(--line); }
+.si-history-row {
+  display: flex; gap: var(--s4); align-items: baseline;
+  padding: var(--s2) 0; border-bottom: 1px solid var(--line);
+  font-size: var(--t-small); color: var(--ink-2);
+}
+.si-history-row s { color: var(--ink-5); }
+.si-when { color: var(--ink-4); font-size: var(--t-micro); flex: none; min-width: 13ch; }
