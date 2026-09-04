@@ -1,0 +1,110 @@
+/* ===========================================================================
+   WAAPSI — वापसी — a return by camera, refunded by Razorpay.
+
+   Imported by routes/Waapsi.tsx and nothing else. Every colour is a token from
+   tokens.css; every rule is prefixed `wp-`.
+
+   THE ONE RULE ABOUT COLOUR: green means money the gateway's own signed
+   webhook stands behind, and here that is a refund it has PROCESSED — money
+   confirmed back in the customer's hands. A refund merely asked for is neutral
+   ink, because it has not moved yet. A refusal wears the refusal's own words.
+   =========================================================================== */
+
+.wp-page { display: flex; flex-direction: column; gap: var(--s5); }
+.wp-page > .page-head { margin-bottom: 0; }
+.wp-deva { font-weight: 500; color: var(--ink-3); margin-left: var(--s2); font-size: .8em; }
+.wp-green { color: var(--green); }
+.tnum { font-variant-numeric: tabular-nums; }
+.wp-mt { margin-top: var(--s3); }
+
+.wp-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 5fr) minmax(0, 7fr);
+  gap: var(--s5);
+  align-items: start;
+}
+@media (max-width: 980px) { .wp-grid { grid-template-columns: 1fr; } }
+.wp-detail { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+
+/* ------------------------------------------------------------- the camera -- */
+
+.wp-stage { aspect-ratio: 16 / 9; }
+.wp-stage:has(.camgate) { aspect-ratio: auto; min-height: 300px; }
+@media (max-width: 560px) { .wp-stage:has(.camgate) { min-height: 260px; } }
+.wp-stage .btn.ghost.wp-ghost { color: var(--on-dark); border-color: var(--on-dark-3); }
+.wp-stage .btn.ghost.wp-ghost:hover { background: rgba(255, 255, 255, .08); }
+.wp-camerr { color: var(--red-on-dark); margin-top: var(--s3); }
+
+.wp-scanrow {
+  display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap;
+  padding: var(--s4);
+}
+.wp-seen { padding: 0 var(--s4) var(--s4); }
+
+/* -------------------------------------------------------------- the bill -- */
+
+.wp-settled { margin: 0 0 var(--s3); font-size: var(--t-small); color: var(--ink-2); }
+.wp-settled .wp-green { font-weight: 700; }
+
+.wp-billtotal {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: var(--s3) 0; border-top: 1px solid var(--line);
+  font-weight: 700; color: var(--navy-900);
+}
+.wp-billtotal .tnum { font-size: var(--t-h3); }
+
+.wp-refunded-line {
+  margin: 0 0 var(--s3); padding: var(--s3) var(--s4);
+  border: 1px dashed var(--green-line); background: var(--green-bg);
+  border-radius: var(--r-md); font-size: var(--t-small); color: var(--ink-2);
+}
+.wp-refunded-line .wp-green { font-weight: 800; }
+
+/* the line(s) to send back */
+.wp-targets { display: flex; flex-direction: column; gap: var(--s3); margin-top: var(--s3); }
+.wp-target {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.wp-target-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wp-target-what .nm { font-weight: 600; color: var(--navy-900); }
+.wp-offer {
+  font-size: var(--t-micro); color: var(--ink-4);
+  text-transform: uppercase; letter-spacing: var(--tr-caps);
+}
+
+/* the refund, once asked for */
+.wp-refund {
+  margin-top: var(--s4); padding: var(--s4);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.wp-refund.done { border-color: var(--green-line); background: var(--green-bg); }
+.wp-refund-head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s2); }
+.wp-refund-amt { font-weight: 800; font-size: var(--t-h3); color: var(--navy-900); }
+.wp-neutral { margin: var(--s2) 0 0; font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-loose); }
+
+.wp-refunded { text-align: center; padding: var(--s3) 0 0; }
+.wp-refunded p { font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-loose); max-width: 52ch; margin: var(--s2) auto 0; }
+.wp-check { width: 56px; height: 56px; display: block; margin: 0 auto var(--s2); color: var(--green); }
+.wp-check circle { fill: none; stroke: currentColor; stroke-width: 3; opacity: .45; }
+.wp-check path {
+  fill: none; stroke: currentColor; stroke-width: 4;
+  stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 36; stroke-dashoffset: 36;
+  animation: wp-draw .5s var(--ease) .1s forwards;
+}
+@keyframes wp-draw { to { stroke-dashoffset: 0; } }
+.wp-refunded-word {
+  font-size: var(--t-micro); font-weight: 800;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--green);
+}
+
+/* the simulator */
+.wp-sim {
+  margin-top: var(--s4); padding: var(--s4);
+  border: 1px dashed var(--blue-200); background: var(--blue-050);
+  border-radius: var(--r-md);
+}
