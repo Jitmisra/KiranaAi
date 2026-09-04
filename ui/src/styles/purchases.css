@@ -1,0 +1,545 @@
+/* ===========================================================================
+   KHAREED — purchases, suppliers, and the margin that follows.
+
+   Imported by `routes/Purchases.tsx` and by nothing else. Every value is a
+   token from tokens.css; there is no literal colour in this file, so a re-theme
+   reaches this screen too. Every rule is prefixed `pu-` — a bare class name
+   shared with another screen is exactly how one page's tweak silently moves
+   another page's layout, and twenty people are editing this repo.
+
+   THE COLOUR RULE, AND WHY GREEN IS ABSENT.
+   Green, amber and red are reserved on this product for MONEY and RECOGNITION
+   state, and green in particular means a payment actually settled. A healthy
+   margin is money, but it is not settled money — it is an arithmetic claim
+   about a cost somebody typed in — so it is drawn in ink like every other
+   derived figure. What does earn colour here:
+
+     RED   a product selling BELOW what the shop last paid for it. That is a
+           loss happening now and it is the one thing on this screen a
+           shopkeeper must not be able to scroll past.
+     AMBER a margin that is NOT KNOWN, and a day total that covers only part of
+           what sold. Amber is already this counter's colour for abstaining —
+           the item it could see but would not price — and an unknown margin is
+           the same act. It is never zero and never blank.
+
+   The unknown case is the whole point of the screen, so it is styled as
+   deliberately as the known one.
+   =========================================================================== */
+
+.pu-page { display: flex; flex-direction: column; gap: var(--s5); }
+.pu-page > .page-head { margin-bottom: 0; }
+
+/* The three views of one subject. Full width on a phone so a thumb can hit
+   them; the labels are short enough to stay on one line at 390. */
+.pu-switch { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.pu-switch .seg { flex: 1; min-width: 260px; }
+.pu-switch .seg button { flex: 1; }
+
+/* On a narrow phone "RECORD A PURCHASE" wrapped to two lines and made the
+   whole control twice as tall as the cards under it. Tightened rather than
+   shortened: the label is what tells a shopkeeper the difference between
+   reading a margin and entering an invoice. With NEW FROM PHOTO the control
+   is four labels wide, so under 640 px it scrolls sideways (`.seg` already
+   allows that) rather than squeezing four labels into a thumb's width. */
+@media (max-width: 640px) {
+  .pu-switch .seg button { font-size: 10px; letter-spacing: .04em; padding: 0 8px; }
+  .pu-switch .seg { flex: none; width: 100%; }
+}
+
+/* ------------------------------------------------------------ the day bar -- */
+
+/* The day under inspection. Both margin questions are asked about the same
+   date, from one control, because two date fields that can disagree would let
+   a shopkeeper compare a Tuesday's takings against a Friday's costs. */
+.pu-daybar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  font-size: var(--t-small); color: var(--ink-3);
+}
+.pu-daybar input[type='date'] {
+  font: inherit; font-variant-numeric: tabular-nums;
+  padding: 6px var(--s3);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+}
+.pu-daybar input[type='date']:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+
+/* ------------------------------------------------------------- the totals -- */
+
+.pu-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+}
+@media (max-width: 900px) { .pu-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 460px) { .pu-stats { grid-template-columns: 1fr; } }
+
+.pu-stat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+}
+.pu-stat .lbl {
+  font: 600 11px/1.2 var(--font);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.pu-stat .val {
+  font: 700 clamp(21px, 2.3vw, 29px)/1.1 var(--font);
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.pu-stat .sub { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+
+/* Amber: revenue this counter will not put a margin on. Not a warning about
+   the shopkeeper — a statement about what the number above it excludes. */
+.pu-stat.amber { border-color: var(--amber-line); background: var(--amber-bg); }
+.pu-stat.amber .val { color: var(--amber); }
+.pu-stat.amber .lbl, .pu-stat.amber .sub { color: var(--amber); }
+
+/* Red: the day's margin is negative. Money going the wrong way. */
+.pu-stat.red { border-color: var(--red-line); background: var(--red-bg); }
+.pu-stat.red .val { color: var(--red); }
+.pu-stat.red .lbl, .pu-stat.red .sub { color: var(--red); }
+
+/* A skeleton shaped like the tile it stands in for, so the row does not jump
+   by 90 px the moment the first response lands. */
+.pu-stat.skel-tile { box-shadow: none; background: var(--surface-2); }
+.pu-stat.skel-tile .skel { height: 12px; border-radius: var(--r-sm); }
+.pu-stat.skel-tile .skel.big { height: 30px; margin: 4px 0; }
+.pu-stat.skel-tile .skel.short { width: 60%; }
+
+/* ------------------------------------------------------------- the tables -- */
+
+/* `min-width` inside the `.scroll-x` wrapper, and it is load-bearing. Without
+   it, at 390 the browser honoured `width: 100%` by crushing the product column
+   until "Maggi 2-Minute Noodles 70g" stacked five words deep and the sku id
+   broke mid-token. A table that scrolls sideways is readable; a table squeezed
+   into a phone's width is not. */
+.pu-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: var(--t-small); }
+/* Under 560 the row IS the card, so the floor above is exactly what has to go:
+   at 390 it was the whole of the 235 px the table ran past the viewport. */
+@media (max-width: 560px) {
+  .pu-table.tbl-cards { min-width: 0; }
+  .pu-table.tbl-cards th:first-child, .pu-table.tbl-cards td:first-child { min-width: 0; }
+}
+
+/* The product column gets a floor of its own. Without it the min-width above
+   was spent on the number columns and "Maggi 2-Minute Noodles 70g" still
+   stacked three words deep in a 100 px gutter. */
+.pu-table th:first-child, .pu-table td:first-child { min-width: 170px; }
+
+/* WHAT WAS WRONG HERE. This used to be
+       @media (max-width: 760px) { .pu-hide-sm { display: none; } }
+   and it DELETED the "Cost from" column outright. Measured at 390: the price
+   book drew 4 of its 5 columns and which supplier and invoice a cost came from
+   was not on the screen at any scroll position. "A follow-up question" is not
+   a reason to take a fact off a phone — it is the reason a shopkeeper standing
+   at the counter opened the screen. The column now always exists; under 560 it
+   is one more labelled line on the row's card, where there is room for it.
+
+   Between 561 and 760 the table is still a grid and still scrolls, and it
+   carries every column while it does. */
+.pu-hide-sm { display: table-cell; }
+
+/* A table cut off at the right edge of a phone looks broken rather than
+   scrollable, so it says so — but ONLY while it really is a sideways table.
+   Under 560 the rows restack into cards and nothing scrolls sideways any more,
+   so the sentence would be telling the shopkeeper to swipe something that does
+   not move. */
+.pu-scrollhint { display: none; }
+@media (min-width: 561px) and (max-width: 760px) {
+  .pu-scrollhint {
+    display: block;
+    margin-top: var(--s2);
+    /* 12px, not --t-micro's 11: this is the only sentence saying the table has
+       more in it, and 11px on a cheap Android is not a sentence. */
+    font-size: 12px; color: var(--ink-4);
+  }
+}
+.pu-table th {
+  text-align: left;
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.pu-table td {
+  padding: var(--s3);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.pu-table tr:last-child td { border-bottom: 0; }
+.pu-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pu-table td.num { color: var(--navy-900); }
+.pu-table .pu-nm { font-weight: 600; color: var(--navy-900); }
+/* `overflow-wrap: anywhere`, not `word-break: break-all`: a sku id should break
+   only when it genuinely cannot fit, not at whatever character the column
+   happens to end on. */
+.pu-sku { display: block; font-size: var(--t-micro); color: var(--ink-4); margin-top: 2px; overflow-wrap: anywhere; }
+
+/* UNKNOWN with the button that fixes it. A right-aligned table cell keeps them
+   on one line and the button then hangs off the end of the column, so the cell
+   becomes a column of its own, bottom-aligned to the figures beside it. */
+.pu-unknown-cell {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+}
+.pu-unknown-cell .btn { white-space: nowrap; }
+
+/* A row whose product is sold under its cost. The whole row, because the fact
+   belongs to the product and not to one column of it. */
+.pu-table tr.pu-loss td { background: var(--red-bg); }
+.pu-table tr.pu-loss td.num { color: var(--red); }
+
+/* A row with no cost on file, drawn faintly rather than hidden. Hiding it would
+   make an incomplete margin look complete. */
+.pu-table tr.pu-nocost td { background: var(--surface-2); }
+
+/* UNKNOWN, spelled out. Never a dash, never a zero, never 100%. */
+.pu-unknown {
+  display: inline-block;
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .06em;
+  color: var(--amber);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--r-full);
+  padding: 4px var(--s2);
+  white-space: nowrap;
+}
+
+.pu-pct { display: block; font-size: var(--t-micro); color: var(--ink-3); margin-top: 2px; }
+.pu-neg { color: var(--red); }
+.pu-was { color: var(--ink-4); text-decoration: line-through; font-size: var(--t-micro); display: block; }
+
+/* ----------------------------------------------------------- the invoice -- */
+
+/* Line entry. A grid and not a table: at 390 the columns become stacked fields
+   with their own labels, which a table cannot do without duplicating the
+   markup. The label row is hidden below the breakpoint and each field carries
+   its own. */
+.pu-lines { display: flex; flex-direction: column; gap: var(--s3); }
+
+/* Capped, because at 1440 an uncapped 1fr made the product box 870 px wide and
+   left a hand's width of nothing between the cost and the line figure. An
+   invoice line is read left to right in one go; spreading it across the whole
+   window makes that a journey. */
+.pu-lhead, .pu-line { max-width: 980px; }
+
+.pu-lhead, .pu-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 132px 140px 40px;
+  gap: var(--s3);
+  align-items: start;
+}
+.pu-lhead {
+  font: 700 var(--t-micro)/1.4 var(--font);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.pu-lhead .num, .pu-line .num { text-align: right; }
+
+.pu-line input, .pu-line select {
+  width: 100%;
+  font: inherit;
+  padding: 8px var(--s3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  min-width: 0;
+}
+.pu-line input:focus, .pu-line select:focus {
+  outline: none; border-color: var(--blue-500); box-shadow: var(--ring);
+}
+.pu-line input.tnum { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* What this line comes to, read back. It is the browser's own arithmetic and
+   it is labelled as a check, not as the record — the server totals the invoice
+   and refuses this figure if it disagrees. */
+.pu-line .pu-lsum {
+  padding: 8px 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy-900);
+  font-weight: 600;
+  align-self: center;
+}
+.pu-line .pu-lsum.quiet { color: var(--ink-4); font-weight: 400; }
+
+.pu-drop {
+  border: 1px solid transparent; background: transparent;
+  color: var(--ink-4); cursor: pointer;
+  border-radius: var(--r-sm);
+  padding: 8px 0; line-height: 1;
+  font-size: 16px;
+}
+.pu-drop:hover:not(:disabled) { color: var(--red); background: var(--red-bg); border-color: var(--red-line); }
+.pu-drop:disabled { opacity: .35; cursor: not-allowed; }
+
+/* On a phone the row becomes a small card: the product across the top with the
+   remove control beside it, units and cost side by side under it, and the
+   line's own figure across the bottom. The header row is dropped and each
+   field carries its own label — a table cannot restack without a second copy
+   of the markup, which is the whole reason this is a grid. */
+@media (max-width: 760px) {
+  .pu-lhead { display: none; }
+  .pu-line {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px;
+    gap: var(--s3);
+    padding: var(--s3);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+  .pu-line > .pu-cell-sku   { grid-column: 1 / 3; grid-row: 1; }
+  .pu-line > .pu-drop       { grid-column: 3 / 4; grid-row: 1; align-self: start; }
+  .pu-line > .pu-cell-units { grid-column: 1 / 2; grid-row: 2; }
+  .pu-line > .pu-cell-cost  { grid-column: 2 / 3; grid-row: 2; }
+  .pu-line > .pu-lsum       { grid-column: 1 / 4; grid-row: 3; text-align: left; padding: 0; }
+  .pu-line .pu-mini { display: block; }
+}
+
+/* The per-field label, shown only in the stacked layout. */
+.pu-mini {
+  display: none;
+  font: 700 10px/1.4 var(--font);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--ink-4);
+  margin-bottom: 2px;
+}
+
+/* The foot of the invoice: what the lines come to, and the button that sends
+   them. The figure is the shopkeeper's own check against the paper in his
+   hand; the sentence beside it says who actually decides. */
+.pu-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s4); flex-wrap: wrap;
+  margin-top: var(--s5); padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+.pu-foot-sum { min-width: 0; }
+.pu-foot-sum .lbl {
+  font: 700 var(--t-micro)/1.2 var(--font);
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+  display: block;
+}
+.pu-foot-sum .val {
+  font: 800 var(--t-display)/1.05 var(--font);
+  color: var(--navy-900); font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.pu-foot-sum .val.quiet { font-size: var(--t-h2); font-weight: 700; color: var(--ink-4); }
+.pu-foot-sum .sub { display: block; font-size: var(--t-micro); color: var(--ink-3); line-height: 1.6; max-width: 46ch; }
+
+/* --------------------------------------------------------- what was bought -- */
+
+.pu-list { display: flex; flex-direction: column; gap: var(--s3); }
+
+.pu-row {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: var(--s4);
+}
+.pu-row-head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.pu-row-head .pu-when {
+  font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy-900);
+  white-space: nowrap;
+}
+.pu-row-head .pu-who { color: var(--ink-2); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pu-row-head .pu-amt {
+  font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy-900);
+  white-space: nowrap;
+}
+/* On a phone the supplier's name was squeezed between two nowrap figures and
+   broke across three lines. The date and the amount are the pair being scanned
+   down the list, so they keep the top line and the name gets one of its own. */
+@media (max-width: 560px) {
+  .pu-row-head { display: grid; grid-template-columns: 1fr auto; row-gap: 2px; }
+  .pu-row-head .pu-who { grid-column: 1 / 3; }
+}
+
+.pu-row-sub {
+  margin-top: 4px; font-size: var(--t-micro); color: var(--ink-4);
+  display: flex; gap: var(--s3); flex-wrap: wrap;
+}
+.pu-row-acts { display: flex; gap: var(--s2); margin-top: var(--s3); flex-wrap: wrap; }
+
+/* A struck-out purchase is kept and drawn faintly. It counts in nothing and
+   sets no cost price, and the reason it was struck out stays on the screen —
+   a voided record with no reason is indistinguishable from a deleted one. */
+.pu-row.pu-void { background: var(--surface-2); }
+.pu-row.pu-void .pu-when,
+.pu-row.pu-void .pu-amt { color: var(--ink-4); text-decoration: line-through; }
+.pu-row.pu-void .pu-who { color: var(--ink-4); }
+.pu-voidnote {
+  margin-top: var(--s3); padding: var(--s3);
+  border-radius: var(--r-sm);
+  font-size: var(--t-micro); line-height: 1.6;
+  color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber-line);
+}
+
+.pu-sublines {
+  margin-top: var(--s3); padding-top: var(--s3);
+  border-top: 1px dashed var(--line);
+}
+
+/* The void form, inline. No browser prompt: a modal this counter cannot style
+   is a modal that looks like a page hang on a shop's old laptop. */
+.pu-voidform { display: flex; gap: var(--s2); margin-top: var(--s3); flex-wrap: wrap; }
+.pu-voidform input {
+  flex: 1; min-width: 200px;
+  font: inherit; padding: 8px var(--s3);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink);
+}
+.pu-voidform input:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+
+/* ------------------------------------------------------------- suppliers -- */
+
+.pu-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+@media (max-width: 900px) { .pu-grid { grid-template-columns: 1fr; } }
+
+.pu-sup {
+  display: flex; align-items: flex-start; gap: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.pu-sup-main { flex: 1; min-width: 0; }
+.pu-sup-name { font-weight: 700; color: var(--navy-900); overflow-wrap: anywhere; }
+.pu-sup-phone { font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: var(--t-small); margin-top: 2px; }
+.pu-sup-notes { color: var(--ink-3); font-size: var(--t-micro); margin-top: var(--s2); line-height: 1.6; white-space: pre-line; }
+.pu-sup-fig { text-align: right; flex: none; }
+.pu-sup-fig .amt { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--navy-900); white-space: nowrap; }
+.pu-sup-fig .cnt { display: block; font-size: var(--t-micro); color: var(--ink-4); }
+.pu-sup-fig .btn { margin-top: var(--s2); }
+
+@media (max-width: 560px) {
+  .pu-sup { flex-direction: column; }
+  .pu-sup-fig { text-align: left; display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+  .pu-sup-fig .cnt { display: inline; }
+}
+
+/* ------------------------------------------------------------- footnotes -- */
+
+.pu-lede {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  max-width: 72ch;
+  margin-bottom: var(--s4);
+}
+
+.pu-note {
+  margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro); line-height: 1.7; color: var(--ink-3);
+  max-width: 80ch;
+}
+.pu-note b { color: var(--ink-2); }
+
+/* The same footnote standing on the page rather than at the foot of a card.
+   The rule above draws a divider under whatever card it follows, which read as
+   a broken border floating in the gutter. Nothing to divide here. */
+.pu-note.pu-loose { margin-top: 0; padding-top: 0; border-top: 0; }
+
+.pu-chips { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s2); }
+/* Measured at 390: these were 23 px tall, five of them in a row, and every one
+   is a button that files a cost against a product. A row of 23 px chips is a
+   row nobody can press with a thumb — 12 px of type and 10 px of padding gets
+   them to 34, and they are still chips. */
+.pu-chip {
+  display: inline-flex; align-items: center; min-height: 34px;
+  font: 600 12px/1 var(--font);
+  color: var(--ink-2); background: var(--surface-3);
+  border: 1px solid var(--line-2); border-radius: var(--r-full);
+  padding: 5px var(--s3);
+}
+
+/* ================================================== refusals and waiting ==
+
+   TWO GAPS THIS BLOCK CLOSES.
+
+   A refusal now lives under the box it is about. `gawaah/purchases.py` names the
+   state it refused on — `invoice_already_recorded`, `units_not_a_whole_number`,
+   `cost_not_positive_integer_paise` — and a per-line refusal prints the sku it
+   is about, so an invoice with eleven lines on it says which one. The line is
+   the shared `.err` from app.css: the server's own name, then its own sentence,
+   neither rewritten. Red, because the counter refused, which is the one thing
+   red means here.
+
+   And no panel waits behind a bar of arbitrary height. Every skeleton is the
+   same grid and the same row count as the thing that replaces it, in the pale
+   blue of `.skel` — a skeleton is the machine working, and blue is the
+   machine's colour. Green, amber and red are spoken for: settled, abstained,
+   refused.
+*/
+
+/* Why the button beside it will not fire yet. Ink, not red: nothing has been
+   refused — the shopkeeper simply has not finished. */
+.pu-gate { font-size: var(--t-small); color: var(--ink-3); align-self: center; line-height: 1.5; }
+
+/* The refusal on ONE LINE of an invoice, across the whole width of that line so
+   it is a sentence and not a column. */
+.pu-line > .pu-lerr,
+.pu-lerr {
+  display: block;
+  font-size: var(--t-micro); color: var(--red); line-height: 1.5;
+}
+.pu-line > .pu-lerr { grid-column: 1 / -1; margin-top: 2px; }
+.pu-line .mono, .pu-voidwhy .mono { font-size: var(--t-micro); }
+
+/* A box this page will not send, and a line the server named. */
+.pu-line input.bad, .pu-line input.bad:focus,
+.pu-voidform input.bad, .pu-voidform input.bad:focus { border-color: var(--red); }
+.pu-line input.bad:focus, .pu-voidform input.bad:focus { box-shadow: var(--ring-red); }
+.pu-line.bad select { border-color: var(--red); }
+
+/* What striking out will do, under the box that asks why. */
+.pu-voidwhy {
+  display: block; margin-top: var(--s2);
+  font-size: var(--t-micro); color: var(--ink-3); line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  /* The stacked card places every cell explicitly, so the refusal is placed
+     too — an auto-flowed row would land it beside the units box. */
+  .pu-line > .pu-lerr { grid-column: 1 / 4; grid-row: 4; }
+}
+
+/* ----------------------------------------------------------- skeletons -- */
+
+.pu-skel { display: flex; flex-direction: column; gap: var(--s4); }
+.pu-skel-field { display: flex; flex-direction: column; gap: 6px; }
+
+/* A skeleton is a BLOCK, and a block box ignores its parent's `text-align`.
+   Every money column on this screen is right-aligned, so the block that stands
+   in for the figure is pushed to the same edge — a money skeleton on the left
+   teaches the eye the wrong place to look and then moves the number there. */
+.pu-table td.num > .skel { margin-left: auto; }
+
+.pu-skel-row .pu-row-head,
+.pu-skel-sup { align-items: center; }
+.pu-skel-row .pu-row-head > .skel:nth-child(2) { flex: 1; }
+.pu-skel-row .pu-row-head > .pu-skel-amt { margin-left: auto; flex: none; }
+.pu-skel-row .pu-row-sub > .skel { flex: none; }
+.pu-skel-sup .pu-sup-main { display: flex; flex-direction: column; gap: 6px; }
+.pu-skel-sup .pu-sup-fig { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }

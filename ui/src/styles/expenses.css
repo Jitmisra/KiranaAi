@@ -1,0 +1,353 @@
+/* ===========================================================================
+   EXPENSES AND THE CASH DRAWER
+   ---------------------------------------------------------------------------
+   Two panels side by side: what went out, and what should be in the drawer.
+
+   THE COLOUR RULE, WHICH THIS SCREEN IS THE MOST TEMPTED TO BREAK. Green,
+   amber and red belong to money and recognition state — green means a payment
+   actually settled. A drawer that balances has not settled anything, and a
+   drawer that is short has not failed a check; it is a fact about a day, and
+   very often the fact is that an expense has not been entered yet. So the
+   difference figure is set in plain ink at the size of a fact, the category
+   bars are grey, and the only verdict colour on the page is the green pill on
+   money a signature-verified webhook confirmed and the amber on a broken chain.
+
+   Every colour is a token. No literal hex appears below.
+   =========================================================================== */
+
+.exp-page { display: flex; flex-direction: column; gap: var(--s5); }
+/* The page head already has the column gap under it; its own margin as well
+   opened a hole between the lede and the day bar. */
+.exp-page > .page-head { margin-bottom: 0; }
+
+/* -------------------------------------------------------------- the day -- */
+
+.exp-daybar {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+}
+/* The two steppers and the date belong to each other and stay together; the
+   day's name reads after them rather than being pushed between them. */
+/* `flex: none` plus a nowrap button ran 15 px past a 320 px screen and took
+   the page with it. The row may wrap on a narrow phone; the date field and
+   the button are not one indivisible unit. */
+.exp-daypick { display: flex; align-items: center; gap: var(--s2); flex: none; flex-wrap: wrap; min-width: 0; }
+.exp-daypick input[type='date'] {
+  font: 400 var(--t-small)/1.4 var(--font); color: var(--ink);
+  padding: 6px var(--s3); background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+}
+.exp-daypick input[type='date']:focus { outline: none; border-color: var(--blue-500); box-shadow: var(--ring); }
+.exp-dayname { font-size: var(--t-small); color: var(--ink-3); flex: 1; min-width: 0; }
+.exp-dayname b { color: var(--ink); font-weight: 700; }
+
+@media (max-width: 560px) {
+  /* On a phone the date itself comes first and the two steppers sit under it,
+     rather than a stepper being the first thing under the heading. */
+  .exp-daypick { order: -1; flex-basis: 100%; }
+}
+
+/* ------------------------------------------------------------- the grid -- */
+
+.exp-grid {
+  display: grid; gap: var(--s5); align-items: start;
+  grid-template-columns: minmax(0, 1.45fr) minmax(340px, .9fr);
+}
+@media (max-width: 1080px) {
+  .exp-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.exp-skels { display: flex; flex-direction: column; gap: var(--s3); }
+.exp-inline-refusal { display: block; margin-top: var(--s3); }
+
+/* ---------------------------------------------------------- the entry -- */
+
+.exp-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s4); }
+@media (max-width: 560px) { .exp-two { grid-template-columns: minmax(0, 1fr); } }
+
+/* Nine chips, wrapped. A dropdown hides eight of the nine and this is the
+   control a shopkeeper uses twenty times a day. */
+.exp-cats { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.exp-cats button {
+  font: 600 var(--t-small)/1 var(--font); color: var(--ink-2);
+  padding: 8px var(--s4); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+              color var(--fast) var(--ease);
+  /* A THUMB FLOOR, MISSED BY ONE PIXEL. 8px padding on a 13px line-1 font
+     measures 31.0 tall at 390x844 — every one of the nine, one pixel under the
+     32 floor, which is the most annoying way to fail it. The chips already
+     wrap, so a taller row costs nothing but the wrap point; `inline-flex` is
+     needed because min-height on a plain button leaves the label glued to the
+     top. Not 44: these are nine chips in a wrapped block, and 44 would make
+     the category picker taller than the amount field it belongs to. */
+  min-height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.exp-cats button:hover { border-color: var(--blue-400); background: var(--blue-050); color: var(--ink); }
+/* Blue for the chosen one: it is the action colour and the machine's own mark,
+   and it is emphatically not one of the three verdict colours. */
+.exp-cats button[aria-pressed='true'] {
+  background: var(--blue-600); border-color: var(--blue-600); color: var(--on-dark);
+}
+
+.exp-preview {
+  display: block; margin-bottom: var(--s4);
+  padding: var(--s3) var(--s4);
+  font-size: var(--t-small); line-height: var(--lh-body); color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.exp-preview b { color: var(--navy-900); }
+/* Nothing typed yet is a line of guidance, not a filled box — a grey box the
+   size of an input beside three real inputs reads as a fourth, disabled one. */
+.exp-preview.muted {
+  color: var(--ink-4); background: transparent; border-color: transparent;
+  padding-left: 0; padding-top: 0;
+}
+/* A malformed amount is a money state, so red is right here — the same call
+   the offers form makes for the same reason. */
+.exp-preview.bad { color: var(--red); background: var(--red-bg); border-color: var(--red-line); }
+
+/* Not green. Recording an expense settles nothing and moves no money. */
+.exp-saved { font-size: var(--t-small); color: var(--ink-3); align-self: center; }
+
+/* --------------------------------------------------------- the day's list -- */
+
+.exp-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); }
+@media (max-width: 560px) { .exp-tiles { grid-template-columns: minmax(0, 1fr); } }
+
+.exp-tile {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.exp-tile .lbl {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-4);
+}
+.exp-tile .val { font-size: var(--t-h2); font-weight: 800; color: var(--navy-900); }
+.exp-tile .sub { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+.exp-cat-list {
+  display: flex; flex-direction: column; gap: var(--s3);
+  margin: var(--s5) 0; padding: var(--s4) 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.exp-cat-row {
+  display: grid; align-items: center; gap: var(--s3);
+  grid-template-columns: 132px minmax(0, 1fr) 32px 96px;
+  font-size: var(--t-small);
+}
+.exp-cat-row .lbl {
+  color: var(--ink-2); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Grey, and grey on purpose: a proportion of a day's spending is not a verdict
+   on anything, and the three colours that mean something must not be spent on
+   decoration. */
+.exp-cat-row .bar {
+  height: 8px; background: var(--surface-3);
+  border-radius: var(--r-full); overflow: hidden;
+}
+.exp-cat-row .bar i { display: block; height: 100%; background: var(--ink-4); border-radius: var(--r-full); }
+.exp-cat-row .cnt { font-size: var(--t-micro); color: var(--ink-4); text-align: right; }
+.exp-cat-row .amt { text-align: right; font-weight: 600; color: var(--ink); }
+
+@media (max-width: 560px) {
+  .exp-cat-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .exp-cat-row .lbl { grid-row: 1; grid-column: 1; }
+  .exp-cat-row .amt { grid-row: 1; grid-column: 2; }
+  .exp-cat-row .bar { grid-row: 2; grid-column: 1 / -1; }
+  .exp-cat-row .cnt { display: none; }
+}
+
+.exp-rows { display: flex; flex-direction: column; }
+.exp-row {
+  display: grid; gap: var(--s3); align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: var(--s3) 0; border-bottom: 1px dashed var(--line);
+}
+.exp-row:last-child { border-bottom: 0; }
+.exp-row .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.exp-row .cat { font-size: var(--t-small); font-weight: 700; color: var(--navy-900); }
+.exp-row .note { font-size: var(--t-small); color: var(--ink-2); overflow-wrap: anywhere; }
+.exp-row .meta { font-size: var(--t-micro); color: var(--ink-4); }
+.exp-row .amt {
+  font-size: var(--t-h3); font-weight: 700; color: var(--ink);
+  text-align: right; white-space: nowrap;
+}
+/* The column keeps its width when the button is absent, so a voided row's
+   amount stays in the same vertical line as every other amount. */
+.exp-row .act { display: flex; align-items: center; justify-content: flex-end; min-width: 54px; }
+
+/* A voided row is dimmed and struck through, never removed: the most likely
+   reader of one is a shopkeeper working out why the drawer was short. */
+.exp-row.voided .cat { color: var(--ink-3); }
+.exp-row.voided .note { color: var(--ink-4); }
+.exp-row.voided .amt s { color: var(--ink-4); font-weight: 600; }
+.exp-row .voidline { margin-top: 4px; font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+.exp-void {
+  grid-column: 1 / -1; margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.exp-void > label {
+  display: block; margin-bottom: 6px;
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-3);
+}
+.exp-void-in { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.exp-void-in input { flex: 1; min-width: 150px; }
+.exp-void .sub { display: block; margin-top: var(--s2); font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5; }
+
+@media (max-width: 560px) {
+  /* The button goes UNDER THE ENTRY, not under the amount. Parked in the right
+     column it sat below the whole three-line description with a hand's width of
+     nothing above it, and the row grew by that gap on every entry. */
+  .exp-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .exp-row .amt { grid-row: 1; grid-column: 2; }
+  .exp-row .act {
+    grid-row: 2; grid-column: 1; justify-content: flex-start;
+    min-width: 0; margin-left: calc(var(--s3) * -1);
+  }
+}
+
+/* --------------------------------------------------------- the drawer -- */
+
+.exp-ledger { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+
+.lg-row {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: var(--s3); align-items: baseline;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.lg-row:last-child { border-bottom: 0; }
+.lg-row .sign { font-size: var(--t-h3); font-weight: 700; color: var(--ink-4); text-align: center; }
+.lg-row .lbl {
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: var(--t-small); font-weight: 600; color: var(--ink-2);
+}
+.lg-row .lbl em {
+  font-style: normal; font-weight: 500;
+  font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5;
+}
+.lg-row .val { font-size: var(--t-h3); font-weight: 700; color: var(--ink); text-align: right; white-space: nowrap; }
+
+/* The answer of the little sum above it. Ink, not green: nothing has settled. */
+.lg-row.total { background: var(--surface-2); border-top: 1px solid var(--line-2); }
+.lg-row.total .lbl { color: var(--navy-900); font-weight: 700; }
+.lg-row.total .val { font-size: var(--t-h1); font-weight: 800; color: var(--navy-900); }
+
+.lg-since {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  padding: var(--s2) var(--s4) var(--s3);
+  font-size: var(--t-micro); color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.exp-ledger .exp-count {
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+
+.exp-count { display: flex; flex-direction: column; gap: 6px; }
+.exp-count > label {
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-3);
+}
+.exp-count-in { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.exp-count-in input { flex: 1; min-width: 130px; }
+.exp-count .sub { font-size: var(--t-micro); color: var(--ink-4); line-height: 1.5; }
+.exp-count + .field { margin-top: var(--s4); }
+
+.exp-sub { margin-top: var(--s4); border-top: 1px solid var(--line); }
+
+.exp-counted { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.exp-counted .big { font-size: var(--t-h1); font-weight: 800; color: var(--navy-900); }
+
+/* ----------------------------------------------------- the difference -- */
+
+.exp-diff { margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.exp-diff .lbl {
+  display: block;
+  font-size: var(--t-micro); font-weight: 700; letter-spacing: var(--tr-caps);
+  text-transform: uppercase; color: var(--ink-4);
+}
+.exp-diff .fig {
+  display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-top: 6px;
+  font-size: var(--t-h1); font-weight: 800; color: var(--navy-900); letter-spacing: var(--tr-tight);
+}
+.exp-diff .fig em {
+  font-style: normal; font-size: var(--t-small); font-weight: 600;
+  color: var(--ink-3); letter-spacing: normal;
+}
+.exp-diff .none { display: block; margin-top: 6px; font-size: var(--t-h2); font-weight: 600; color: var(--ink-4); }
+.exp-diff p { margin-top: var(--s3); font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-body); }
+
+/* ================================================== refusals and waiting ==
+
+   TWO GAPS THIS BLOCK CLOSES.
+
+   A refusal now lives under the box it is about. `.err` is the shared line from
+   app.css — the server's own name for the state, then its own sentence, neither
+   rewritten — and the boxes that carry it get the same red border every refused
+   field on this counter gets. Red because the counter refused, which is the one
+   thing red means here.
+
+   And no panel waits behind a bar of arbitrary height. Every skeleton below is
+   the same grid and the same row count as the thing that replaces it, in the
+   pale blue of `.skel`: a skeleton is the machine working, and blue is the
+   machine's colour. Green, amber and red are spoken for.
+*/
+
+/* A refusal line inside the blocks that are not `.field`: the count forms, the
+   void box and the category group each hand-roll their label and sub. */
+.exp-count .err,
+.exp-void .err { display: block; font-size: var(--t-micro); color: var(--red); line-height: 1.5; }
+.exp-count .err .mono,
+.exp-void .err .mono,
+.field .err .mono { font-size: var(--t-micro); }
+
+/* Why the button beside it will not fire yet. Ink, not red: nothing has been
+   refused — the shopkeeper simply has not finished. */
+.exp-gate { font-size: var(--t-small); color: var(--ink-3); align-self: center; line-height: 1.5; }
+
+/* ----------------------------------------------------------- skeletons -- */
+
+.exp-skel { display: flex; flex-direction: column; gap: var(--s4); }
+.exp-skel-field { display: flex; flex-direction: column; gap: 6px; }
+.exp-skel-chips { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: 6px; }
+/* A chip is as wide as its word, not as wide as the row. */
+.exp-skel-chips > .skel { flex: none; }
+
+/* A tile keeps its own border and padding, so only its contents change when the
+   figure lands. */
+.exp-skel-tile { gap: var(--s2); box-shadow: none; background: var(--surface-2); }
+
+/* A name and a figure. THE FIGURE'S BLOCK IS HARD RIGHT, at the edge the rupees
+   will occupy: a money column whose skeleton sits on the left teaches the eye
+   the wrong place to look and then moves the number there. */
+.exp-skel-rows { display: flex; flex-direction: column; }
+.exp-skel-row {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: 11px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.exp-skel-row:last-child { border-bottom: 0; }
+.exp-skel-row > .skel:first-child { flex: 0 1 auto; }
+.exp-skel-row > .skel:last-child  { flex: none; margin-left: auto; }
+
+/* The ledger, at the three-column grid its rows land in. `.lg-row .val` is
+   right-aligned text, and a skeleton is a block box that ignores that — so the
+   block is pushed right itself. */
+/* `align-items: baseline` on the real row lines the rupees up with the label.
+   A skeleton block has no text and therefore no baseline, so it would hang off
+   the bottom of the row; centre them instead. */
+.exp-skel-ledger .lg-row { align-items: center; }
+.exp-skel-ledger .lg-row .lbl { gap: 5px; }
+.exp-skel-ledger .lg-row .val > .skel { margin-left: auto; }
