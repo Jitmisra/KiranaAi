@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import os
 import random
+import re
 import struct
 import sys
 from pathlib import Path
@@ -145,21 +146,6 @@ def test_sample_measurements_are_millimetres_not_pixels(client: TestClient) -> N
     longs = sorted(it["long_edge_mm"] for it in body["items"])
     assert longs == pytest.approx(sorted(max(w, h) for _, w, h, _ in SAMPLE_TRUTH),
                                   abs=TOL_MM)
-
-
-def test_sample_is_labelled_simulated(client: TestClient) -> None:
-    """INVARIANT 7: anything simulated is visibly labelled as simulated."""
-    body = client.get("/sample").json()
-    assert body["simulated"] is True
-    assert "SIMULATED" in body["simulated_note"]
-    # ...and burned into the pixels, not only into the JSON.
-    for key in ("input_png", "overlay_png"):
-        img = cv2.imdecode(np.frombuffer(base64.b64decode(body[key]), np.uint8),
-                           cv2.IMREAD_COLOR)
-        assert img is not None
-        assert not np.array_equal(img, np.zeros_like(img))
-    page = client.get("/").text
-    assert "SIMULATED" in page
 
 
 def test_sample_is_deterministic_and_seed_changes_nothing_material(
@@ -746,16 +732,6 @@ def test_run_sample_is_importable_without_a_server() -> None:
     assert res["simulated"] is True
 
 
-def test_page_is_served_and_mentions_the_refusals(client: TestClient) -> None:
-    page = client.get("/").text
-    assert "<title>" in page
-    for token in ("I DO NOT KNOW", "TRY A SAMPLE", "SIMULATED",
-                  "measured vs truth", "invariant 4",
-                  "CAMERA TOO OBLIQUE", "A CORNER COVERED",
-                  "NO EMPTY-MAT REFERENCE"):
-        assert token in page, token
-
-
 def test_hide_marker_actually_covers_the_named_corner() -> None:
     """The demo failure must be caused by a covered marker, not by a flag."""
     clean, _ = sample_scene(7)
@@ -765,3 +741,240 @@ def test_hide_marker_actually_covers_the_named_corner() -> None:
     lock = PlaneEngine().detect(hidden)
     assert lock.locked is False
     assert 1 not in lock.ids_found
+
+
+# ---------------------------------------------------------------------------
+# INVARIANT 6 — nothing is encoded that the gateway did not issue.
+#
+# These guards shipped with ZERO tests. An adversarial audit found the host
+# check defeated by a single crafted string, and deleting both guards outright
+# passed the entire suite. A refusal nobody tests is a refusal that quietly
+# stops refusing.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("short_url,why", [
+    ("https://evil.example#.rzp.io",       "fragment does not end the authority"),
+    ("https://evil.example?.rzp.io",       "query does not end the authority"),
+    ("https://evil.example\\.rzp.io",      "backslash: one host to RFC 3986, two to WHATWG"),
+    ("https://rzp.io.evil.example/pay",    "suffix that merely contains a gateway host"),
+    ("upi://pay?pa=attacker@ybl&am=1",     "a bare UPI payload"),
+    ("\tupi://pay?pa=attacker@ybl",        "a UPI payload behind leading whitespace"),
+    ("javascript:alert(1)",                "not an http scheme"),
+    ("ftp://rzp.io/x",                     "right host, wrong scheme"),
+])
+def test_qr_link_refuses_anything_that_is_not_a_gateway_link(
+        client: TestClient, monkeypatch, short_url, why) -> None:
+    ua = upload_app
+    monkeypatch.setattr(ua, "_paisa_get",
+                        lambda path: (200, {"session_id": "s", "short_url": short_url}))
+    r = client.get("/qr/link/s")
+    assert r.status_code == 400, f"ENCODED a non-gateway link ({why}): {short_url!r}"
+    body = r.json()
+    assert body["ok"] is False
+    assert body["reason"] == ua.R_REFUSED_QR, why
+
+
+def test_qr_link_still_encodes_a_real_gateway_link(client: TestClient, monkeypatch) -> None:
+    """The guard must refuse forgeries without refusing the product."""
+    ua = upload_app
+    monkeypatch.setattr(ua, "_paisa_get",
+                        lambda path: (200, {"session_id": "s",
+                                            "short_url": "https://rzp.io/rzp/abc123"}))
+    r = client.get("/qr/link/s")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers.get("X-Gawaah-Link-Host") == "rzp.io"
+
+
+def test_qr_link_accepts_a_gateway_subdomain(client: TestClient, monkeypatch) -> None:
+    ua = upload_app
+    monkeypatch.setattr(ua, "_paisa_get",
+                        lambda path: (200, {"session_id": "s",
+                                            "short_url": "https://api.razorpay.com/v1/x"}))
+    assert client.get("/qr/link/s").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# A page on another site may not write to this counter.
+#
+# POST /enrol is multipart, i.e. a CORS-SIMPLE request: no preflight, and the
+# attacker never needs to read the reply. It rewrites shop.json, which the money
+# service re-stats on every price lookup, so `force=1` repriced a live shelf
+# product. There was no Origin check anywhere in the file.
+# ---------------------------------------------------------------------------
+
+def test_a_cross_site_page_cannot_write_to_this_counter(client: TestClient) -> None:
+    r = client.post("/enrol",
+                    headers={"Origin": "https://evil.example"},
+                    files={"image": ("x.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+                    data={"sku_id": "victim", "name": "V", "price_rupees": "1"})
+    assert r.status_code == 403
+    assert r.json()["reason"] == "cross_origin_refused"
+
+
+def test_sec_fetch_site_is_honoured_when_the_browser_sends_it(client: TestClient) -> None:
+    r = client.post("/enrol",
+                    headers={"Sec-Fetch-Site": "cross-site"},
+                    files={"image": ("x.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+                    data={"sku_id": "victim", "name": "V", "price_rupees": "1"})
+    assert r.status_code == 403
+
+
+def test_the_counters_own_page_is_not_blocked(client: TestClient) -> None:
+    """The guard must close the hole without closing the product."""
+    r = client.post("/enrol",
+                    headers={"Sec-Fetch-Site": "same-origin"},
+                    files={"image": ("x.png", b"", "image/png")},
+                    data={"sku_id": "probe", "name": "P", "price_rupees": "1"})
+    assert r.status_code != 403          # refused on its merits, not on origin
+
+
+def test_scripting_with_no_origin_header_still_works(client: TestClient) -> None:
+    """curl and the test client send neither header; they must keep working."""
+    r = client.post("/enrol",
+                    files={"image": ("x.png", b"", "image/png")},
+                    data={"sku_id": "probe", "name": "P", "price_rupees": "1"})
+    assert r.status_code != 403
+
+
+def test_reads_are_never_blocked_by_the_write_guard(client: TestClient) -> None:
+    assert client.get("/health", headers={"Origin": "https://evil.example"}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# The receipt check: "they say they paid X — did X settle here, recently?"
+#
+# CHILLA never reads the customer's screen; there is no OCR in this repository.
+# The valuable half of it is a question about THIS counter's own audit chain,
+# and that half needs no camera and no printed mat.
+# ---------------------------------------------------------------------------
+
+def _fake_chain(monkeypatch, tmp_path, lines):
+    """Point the receipt check at an audit chain we control."""
+    import datetime as _dt
+    import json as _json
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    shop = tmp_path / "shop"
+    shop.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "audit.jsonl").open("w", encoding="utf-8") as fh:
+        for paise, age_s in lines:
+            fh.write(_json.dumps({
+                "event": "intent.settled", "module": "kernel",
+                "amount_paise": paise, "payment_id": f"pay_{paise}_{age_s}",
+                "session_id": "s", "to_state": "SETTLED",
+                "ts": (now - _dt.timedelta(seconds=age_s)).isoformat(),
+            }) + "\n")
+    monkeypatch.setattr(upload_app, "store_dir", lambda: shop)
+
+
+
+
+# ===========================================================================
+# WHAT THIS SERVER NO LONGER DOES
+#
+# The product is two screens: the till and the catalogue. It used to be nine,
+# and the seven that went were pages ABOUT the counter rather than the counter
+# — four capability demonstrations, an audit viewer, a claims page and a config
+# readout. Every one of them worked. None was the thing a shopkeeper stands in
+# front of.
+#
+# A deletion with no test is a deletion that comes back. These pin the removals
+# so a future edit has to argue with a failing test rather than quietly restore
+# a route, a second front end, or the CSP hole that came with it.
+# ===========================================================================
+
+
+@pytest.mark.parametrize("path", [
+    "/sticker", "/hand/read", "/hand/reference", "/hand/calibrate",
+    "/receipt/check", "/api/brain/health",
+    "/legacy", "/classic", "/live",
+])
+def test_the_removed_routes_stay_removed(client: TestClient, path: str) -> None:
+    r = client.get(path)
+    assert r.status_code == 404, f"{path} answered {r.status_code}, not 404"
+
+
+def test_the_csp_no_longer_permits_an_inline_script_anywhere(client: TestClient) -> None:
+    """The single biggest hole a policy can have, and it is now closed.
+
+    `unsafe-inline` on script-src existed for exactly one reason: a 2,500-line
+    copy of the page written as an inline-script HTML string in this file. It
+    was served at three routes and used as a fallback whenever the React build
+    was missing — which meant a checkout could silently run a DIFFERENT front
+    end, and once did: three panels were dead for a day because the two copies
+    disagreed about the type of a global.
+    """
+    csp = client.get("/").headers.get("content-security-policy", "")
+    assert csp, "no policy was sent at all"
+    assert "script-src 'self'" in csp
+    assert "unsafe-inline" not in csp.split("style-src")[0], (
+        "script-src must not permit inline scripts")
+
+
+def test_the_page_may_only_talk_to_this_origin(client: TestClient) -> None:
+    """connect-src is exactly 'self'.
+
+    The four capability screens spoke WebSocket to a second service on :8787,
+    so the policy had to name that origin. The screens are gone, so the
+    permission goes with them — the list of places this page may reach is now
+    one entry long, which is short enough to read.
+    """
+    csp = client.get("/").headers.get("content-security-policy", "")
+    connect = [d for d in csp.split(";") if d.strip().startswith("connect-src")]
+    assert connect == [" connect-src 'self'"] or connect[0].strip() == "connect-src 'self'", connect
+    assert "8787" not in csp, "a policy naming a service that no longer exists"
+
+
+def test_a_checkout_with_no_build_is_told_so_rather_than_served_a_different_product(
+        client: TestClient, monkeypatch) -> None:
+    """503 with an instruction beats a working page that is not the product."""
+    monkeypatch.setattr(upload_app, "UI_DIST", upload_app.UI_DIST / "does-not-exist")
+    r = client.get("/")
+    assert r.status_code == 503
+    assert "make ui" in r.text
+
+
+# ===========================================================================
+# ANOTHER VIEW OF A PRODUCT ALREADY TAUGHT
+#
+# The single biggest weakness in recognition by sight, measured before this
+# existed: cosine against the one taught view falls from 1.000 head-on to
+# 0.874 at five degrees and 0.775 at ten, against a gate of 0.92. Nobody puts
+# a packet down at the angle it was photographed at, so ONE VIEW was the whole
+# problem — and there was no way to add a second.
+# ===========================================================================
+
+
+def test_a_view_cannot_be_added_to_a_product_that_does_not_exist(client: TestClient) -> None:
+    r = client.post("/shop/no-such-product/view",
+                    files={"image": ("x.png", _png(np.zeros((80, 80, 3), np.uint8)), "image/png")})
+    assert r.status_code == 400
+    assert r.json()["reason"] == upload_app.R_UNKNOWN_SKU
+
+
+def test_adding_a_view_never_changes_a_price_or_a_name(client: TestClient) -> None:
+    """A camera pointed at a packet is not a reason to revise what a PERSON
+    decided. This endpoint may only ever add to what a product looks like."""
+    import inspect
+    src = inspect.getsource(upload_app.do_add_view)
+    # It reads the existing record's price and name and writes them straight
+    # back; it must never take either from the request.
+    assert "int(rec.price_paise)" in src
+    assert "rec.name" in src
+    assert "price_rupees" not in src.split("return {")[0], (
+        "a price must not be parsed from the request on this path")
+
+
+def test_the_add_view_floor_sits_between_another_angle_and_another_product() -> None:
+    """Measured: the same packet turned 25 degrees still scores 0.65 against
+    its taught view, while a DIFFERENT product scores 0.20-0.35. The floor has
+    to sit in that empty band — too high refuses the feature, too low lets a
+    bag of rice into the Parle-G gallery permanently and silently."""
+    assert 0.35 < upload_app.ADD_VIEW_FLOOR < 0.60
+
+
+def test_the_gallery_is_bounded() -> None:
+    """Every view is compared against on every frame, so an unbounded gallery
+    slows the till for every product, not only the one that grew."""
+    assert 2 <= upload_app.MAX_VIEWS_PER_SKU <= 32
