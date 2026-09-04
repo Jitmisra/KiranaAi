@@ -1,0 +1,272 @@
+/* ===========================================================================
+   GAWAAH — the counter in Devanagari and Bengali
+   ---------------------------------------------------------------------------
+   Two jobs, and they are separate:
+
+     1. THE SCRIPT. Naming faces that are already on the machine, because the
+        CSP allows no external host: `connect-src 'self'` and no font CDN, so a
+        webfont is not a slower option here, it is an impossible one. Every
+        family below ships with an operating system.
+
+     2. THE FITTING. Devanagari and Bengali are not Latin with different
+        glyphs. Two habits of this design system actively break them, and both
+        are undone here for those languages only.
+
+   ---------------------------------------------------------------------------
+   WHICH FACES ARE ACTUALLY THERE
+
+   DEVANAGARI
+     macOS / iOS   Kohinoor Devanagari (10.12+ / iOS 9+), Devanagari Sangam MN
+                   (10.9+), ITF Devanagari, Devanagari MT. Verified on this
+                   machine: /System/Library/Fonts/Kohinoor.ttc and
+                   /System/Library/Fonts/Supplemental/{Devanagari Sangam MN,
+                   ITFDevanagari,DevanagariMT}.ttc.
+     Windows       Nirmala UI (8 and later — the system UI face for every Indic
+                   script), Mangal (XP and later, still present on 10/11).
+     Android       Noto Sans Devanagari, bundled since 4.x. ChromeOS the same.
+     Linux         Noto Sans Devanagari, Lohit Devanagari.
+
+   BENGALI
+     macOS / iOS   Kohinoor Bangla (10.12+), Bangla Sangam MN (10.9+), Bangla
+                   MN. Verified here: /System/Library/Fonts/KohinoorBangla.ttc
+                   and Supplemental/{Bangla Sangam MN,Bangla MN}.ttc.
+     Windows       Nirmala UI (8+), Vrinda (XP+), Shonar Bangla (7+).
+     Android       Noto Sans Bengali, bundled. ChromeOS the same.
+     Linux         Noto Sans Bengali, Lohit Bengali.
+
+   The Latin faces stay at the FRONT of each stack. A stack resolves per glyph,
+   so digits, ₹, "UPI" and "QR" keep coming from the system UI font and match
+   the rest of the counter, while every Devanagari or Bengali glyph falls
+   through to the Indic face behind it. Put the Indic face first and the whole
+   interface silently changes its Latin typeface.
+
+   A browser with none of these still renders: Chrome, Safari and Firefox all
+   fall back to the platform's own Indic font by script. The names buy the
+   RIGHT face — a UI sans rather than whatever serif the fallback picks.
+
+   HOW THE LANGUAGE ARRIVES: lib/i18n.ts writes `<html lang>`. Everything below
+   hangs off `:lang()`, which also catches a single span marked `lang="hi"`
+   inside an English page — the brand's गवाह, and the picker's own endonyms.
+   =========================================================================== */
+
+/* --- 1. the script ------------------------------------------------------- */
+
+/* The whole page in one language. Only the two font TOKENS are redefined, so
+   nothing here competes on specificity with `.mono` or with any screen's own
+   rules: every component already asks for `var(--font)`, and `--mono` is left
+   alone because a session id and a payment link are Latin in every language.
+
+   The Latin head of each list is copied from tokens.css. If that file's stack
+   changes, these two follow — they are the same list plus a script's tail. */
+
+:root:lang(hi) {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text',
+          'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Devanagari',
+          'Nirmala UI', 'Lohit Devanagari', Mangal, Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display',
+          'Segoe UI Variable Display', 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Kohinoor Devanagari', 'Devanagari Sangam MN', 'Noto Sans Devanagari',
+          'Nirmala UI', 'Lohit Devanagari', Mangal, Arial, sans-serif;
+}
+
+:root:lang(bn) {
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text',
+          'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Kohinoor Bangla', 'Bangla Sangam MN', 'Noto Sans Bengali',
+          'Nirmala UI', 'Lohit Bengali', Vrinda, 'Shonar Bangla', Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display',
+          'Segoe UI Variable Display', 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+          'Kohinoor Bangla', 'Bangla Sangam MN', 'Noto Sans Bengali',
+          'Nirmala UI', 'Lohit Bengali', Vrinda, 'Shonar Bangla', Arial, sans-serif;
+}
+
+/* One word in another script inside an otherwise English page. `:not(html)` is
+   what keeps this off the root: at the root the tokens above do the work, and a
+   blanket font-family there would be inherited past every `.mono` in the app. */
+
+[lang='hi']:not(html) { font-family: var(--font-deva); }
+[lang='bn']:not(html) {
+  font-family: 'Kohinoor Bangla', 'Bangla Sangam MN', 'Noto Sans Bengali',
+               'Nirmala UI', 'Lohit Bengali', Vrinda, 'Shonar Bangla', var(--font);
+}
+
+/* --- 2. the fitting ------------------------------------------------------ */
+
+/* TRACKING. This design system tracks small uppercase labels out by .08–.22em,
+   which is what makes 11px Latin caps readable. Devanagari and Bengali have no
+   uppercase, and letter-spacing pushes their clusters apart — the शिरोरेखा of
+   one syllable stops meeting the next, and a Bengali মাত্রা does the same. It
+   reads as a word that has come loose. So the two caps tokens go flat, and the
+   handful of places in the shell and the till that hard-code a value are
+   listed after them.
+
+   These selectors name classes owned by other files on purpose: this is the
+   script layer, it applies only under `:lang(hi)` / `:lang(bn)`, and the
+   English rendering of every one of them is untouched. */
+
+:root:lang(hi), :root:lang(bn) {
+  --tr-caps: 0;
+  --tr-caps-wide: 0;
+  /* Both scripts hang below the line and reach above it; the Latin leading is
+     a shade tight for them. Nothing here changes a control's height. */
+  --lh-body: 1.62;
+  --lh-head: 1.35;
+}
+
+:lang(hi) .btn,          :lang(bn) .btn,
+:lang(hi) .pill,         :lang(bn) .pill,
+:lang(hi) .seg button,   :lang(bn) .seg button,
+:lang(hi) .tabs button,  :lang(bn) .tabs button,
+:lang(hi) .tabset button, :lang(bn) .tabset button,
+:lang(hi) .side-sections button, :lang(bn) .side-sections button,
+:lang(hi) .eyebrow,      :lang(bn) .eyebrow,
+:lang(hi) .bill-total .lbl, :lang(bn) .bill-total .lbl,
+:lang(hi) .till-paid-word,  :lang(bn) .till-paid-word,
+:lang(hi) .stage-bar .sb-item, :lang(bn) .stage-bar .sb-item,
+:lang(hi) .stage-bar .sb-frame, :lang(bn) .stage-bar .sb-frame,
+:lang(hi) .till .btn.pay, :lang(bn) .till .btn.pay {
+  letter-spacing: 0;
+}
+
+/* LEADING INSIDE A CONTROL. `.btn` and the two nav lists set `line-height: 1`
+   in a font shorthand, which is fine for Latin caps and cuts it fine for a
+   matra above the line and a conjunct below it. The controls keep their
+   height — every one of them is a min-height flex box — so this only gives the
+   glyphs room inside it. */
+
+:lang(hi) .btn, :lang(bn) .btn,
+:lang(hi) .seg button, :lang(bn) .seg button,
+:lang(hi) .tabs button, :lang(bn) .tabs button,
+:lang(hi) .side-sections button, :lang(bn) .side-sections button {
+  line-height: 1.35;
+}
+
+/* The sidebar's two-line rows: a Devanagari sub-label at 11px on a 1.35 leading
+   collides with the label above it. */
+:lang(hi) .side nav button .s, :lang(bn) .side nav button .s { line-height: 1.45; }
+
+/* A REFUSAL'S SECOND SENTENCE IS PROSE, NOT A CODE. `Refusal` renders its
+   `detail` inside `.mono`, which is right for the machine's own strings and
+   wrong for a whole sentence: `--mono` names no Indic face, so every Devanagari
+   and Bengali glyph in it falls out to the browser's default and the paragraph
+   arrives in a different typeface at a different width from the heading above
+   it. Seen at 1440 and at 390 in both languages before this rule existed.
+
+   Scoped to a verdict's paragraph, so a `.mono` session id, payment link or
+   barcode — which is Latin in every language — is untouched. */
+:lang(hi) .verdict p .mono, :lang(bn) .verdict p .mono { font-family: var(--font); }
+
+/* THE PAID WORD. 11px, 800 weight and .22em of tracking is a Latin eyebrow;
+   "पैसे मिल गए" and "টাকা এসে গেছে" are sentences. Given the size of the
+   amount underneath, they read better at the small-text size, still uppercase
+   in name only. */
+:lang(hi) .till-paid .till-paid-word,
+:lang(bn) .till-paid .till-paid-word {
+  font-size: var(--t-small);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+/* --- 3. the picker ------------------------------------------------------- */
+
+.langpick { position: relative; flex: none; }
+
+.langpick-btn {
+  appearance: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 28px; padding: 0 var(--s2);
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  background: var(--bar-sunk); color: var(--bar-fg-2);
+  font: 700 var(--t-micro)/1 var(--font);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.langpick-btn:hover { background: var(--bar-hover); color: var(--bar-fg); }
+/* The accent, because choosing a language is the machine's own state and not a
+   verdict about money. Green, amber and red are spoken for. */
+.langpick.open .langpick-btn {
+  background: var(--accent-050); color: var(--accent-700);
+  border-color: var(--accent-200);
+}
+.langpick-now { letter-spacing: .04em; }
+/* …except when the label is itself Devanagari or Bengali, where the same
+   tracking loosens a two-glyph abbreviation into two letters. */
+.langpick-now[lang='hi'], .langpick-now[lang='bn'] { letter-spacing: 0; font-weight: 600; }
+
+.langpick-menu {
+  position: absolute; z-index: 2;
+  top: calc(100% + 6px); right: 0;
+  min-width: 208px; padding: var(--s2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  animation: langpick-in var(--fast) var(--ease-out) both;
+}
+@keyframes langpick-in { from { opacity: 0; transform: translateY(-4px); } }
+
+.langpick-h {
+  padding: var(--s1) var(--s2) var(--s2);
+  font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: var(--tr-caps); text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.langpick-menu button,
+.langpick-row button {
+  appearance: none; cursor: pointer; width: 100%;
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  /* English is the one row with no second line — its endonym IS its English
+     name, and printing "English / English" reads as a stutter. The min-height
+     is what keeps the three rows one size anyway, and it is a thumb's worth of
+     target on a phone. */
+  min-height: 52px;
+  gap: 0 var(--s2); padding: var(--s2) var(--s3);
+  border: 1px solid transparent; border-radius: var(--r-md);
+  background: transparent; text-align: left; color: var(--ink);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.langpick-menu button:hover,
+.langpick-row button:hover { background: var(--surface-3); }
+
+.langpick-menu button .e,
+.langpick-row button .e {
+  grid-column: 1; font-size: var(--t-lead); font-weight: 600;
+  line-height: 1.3; letter-spacing: 0;
+}
+.langpick-menu button .n,
+.langpick-row button .n {
+  grid-column: 1; font-size: var(--t-micro); color: var(--ink-4);
+  line-height: 1.3;
+}
+.langpick-tick { grid-column: 2; grid-row: 1 / span 2; color: var(--accent-600); }
+
+.langpick-menu button[aria-checked='true'],
+.langpick-row button[aria-checked='true'] {
+  background: var(--accent-050);
+  border-color: var(--accent-200);
+  color: var(--accent-800);
+}
+.langpick-menu button[aria-checked='true'] .n,
+.langpick-row button[aria-checked='true'] .n { color: var(--accent-600); }
+
+/* The flat shape, for a settings screen: three options side by side, each wide
+   enough that the endonym is the thing you press rather than a word beside a
+   tiny box. It wraps to one per line on a phone. */
+.langpick-row {
+  display: grid; gap: var(--s2);
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+}
+.langpick-row button {
+  background: var(--surface); border-color: var(--line-2);
+  padding: var(--s3) var(--s4);
+  box-shadow: var(--shadow-0);
+}
+
+@media (max-width: 1000px) {
+  /* The bar is two rows here and the vitals sit in the second. The picker is
+     small enough to stay whole at every width — it is the one control a
+     shopkeeper who cannot read this screen needs to be able to find. */
+  .langpick-menu { min-width: 180px; }
+}
