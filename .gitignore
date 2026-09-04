@@ -6,3 +6,27 @@ parts6/
 __pycache__/
 .env
 *.pyc
+
+# React front end
+ui/node_modules/
+ui/dist/
+ui/test-results/
+ui/playwright-report/
+
+# TypeScript incremental build cache, not source
+*.tsbuildinfo
+
+# Service-account keys. Never committed.
+secrets/
+
+# ---------------------------------------------------------- the shop itself --
+# The counter's own runtime state, and none of it belongs in a public repo:
+#   results/shop/auth_accounts.json     a password hash
+#   results/shop/auth_sessions.json     live session tokens
+#   results/shop/customer_invites.json  live single-use customer credentials
+#   results/shop/orders/                real names and phone numbers
+#   results/scans/                      ~6,000 frames of what the camera saw
+#   results/audit.jsonl                 the money chain, with gateway payment ids
+# All of it is REGENERABLE: `tools/seed_shop.py` builds a whole shop and
+# `tools/real_photos.py` dresses it. A repo carries the counter, not the shop.
+results/
