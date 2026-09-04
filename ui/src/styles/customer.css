@@ -1,0 +1,396 @@
+/* ===========================================================================
+   THE CUSTOMER'S OWN CHROME — components/CustomerShell.tsx and
+   components/CustomerOrders.tsx.
+   ---------------------------------------------------------------------------
+   WHY THIS FILE EXISTS. A stranger who photographs the shutter sticker used to
+   land inside the SHOPKEEPER'S shell: the sidebar offering "Your products",
+   "Customers", "Loyalty", "Your shop", and the COUNTER · SHOP · BOOKS tabs
+   across the top. Every one of those is a 401 on their phone, and the list
+   itself is a map of the shop's admin handed to whoever holds the link. This
+   is the chrome that belongs to the person actually holding the phone: the
+   shop's name, a basket, their orders, and who they are.
+
+   Every class is prefixed `cx-` so nothing collides with app.css (the
+   shopkeeper's shell), storefront.css (`sf-`) or shopface.css (`shf-`), each
+   of which is owned by another screen. Tokens only. Blue is the machine's own
+   mark; green, amber and red stay reserved for what the money path did, so
+   nothing in this chrome — not a tab, not a badge, not the basket count —
+   wears one.
+
+   MOBILE FIRST, and more literally than anywhere else in this product: this
+   page is opened from a sticker on a shutter, one-handed, at 390 px. The
+   desktop layout is the same page given room.
+   =========================================================================== */
+
+.cx {
+  /* THE STICKY RAIL INSIDE THE PAGE HANGS OFF `--topbar-h`. `.sf-search`
+     (storefront.css) pins itself under "the top bar", and in the shopkeeper's
+     shell that token is 82/106 px of floating pill. There is no such pill
+     here, so the token is re-pointed at THIS shell's own bar — custom
+     properties inherit, so the storefront's rule needs no change and cannot
+     drift from the bar it is measured against. */
+  --cx-top-h: 60px;
+  --cx-tabs-h: 62px;
+  --topbar-h: var(--cx-top-h);
+
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------------------- the bar --
+   The shop's own face, compacted: photograph, name, and who this phone is.
+   Full-bleed rather than a floating pill — at 390 px a 12 px margin either
+   side is 6 % of the window, and this bar carries no navigation to justify
+   it. Navigation is at the bottom, under the thumb. */
+
+.cx-top {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: var(--s3);
+  height: var(--cx-top-h);
+  padding: 0 var(--s3);
+  background: var(--glass-thick);
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--glass-edge);
+}
+@supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+  .cx-top {
+    background: var(--bar-glass);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+  }
+}
+
+.cx-face {
+  flex: none;
+  width: 40px; height: 40px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--blue-050);
+  border: 1px solid var(--line);
+  display: grid; place-items: center;
+}
+.cx-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cx-face .initial { font: 800 19px/1 var(--font-display); color: var(--blue-700); }
+
+.cx-name {
+  min-width: 0; flex: 1;
+  display: flex; align-items: center; gap: var(--s2);
+}
+/* The flute, the same skew and gradient as every other mark this product
+   makes. Small: it is a signature on a phone bar, not a title. */
+.cx-name::before {
+  content: '';
+  flex: none; width: 5px; height: 17px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+}
+.cx-name b {
+  min-width: 0;
+  font: 800 var(--t-h3)/1.2 var(--font-display);
+  letter-spacing: -.015em; color: var(--navy-900);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Who this phone is, to the shop. A button, because the one thing it does is
+   open MY ORDERS, which is where identity lives — signing in, signing out and
+   the orders themselves are one place, not three. */
+.cx-who {
+  flex: none;
+  appearance: none; cursor: pointer;
+  min-height: 34px; max-width: 42vw;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 var(--s3);
+  font: 700 var(--t-micro)/1 var(--font); letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--blue-700);
+  background: var(--blue-050);
+  border: 1px solid var(--blue-200);
+  border-radius: var(--r-full);
+}
+.cx-who:hover { background: var(--blue-100); }
+.cx-who .nm {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-transform: none; letter-spacing: 0; font-size: var(--t-small);
+}
+
+/* ------------------------------------------------------------ the page -- */
+
+.cx-main {
+  flex: 1; min-height: 0;
+  width: 100%; max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--s4) var(--s3) 0;
+  display: flex; flex-direction: column; gap: var(--s4);
+}
+@media (min-width: 720px) {
+  .cx-main { padding: var(--s5) var(--s5) 0; }
+}
+
+/* The line under the shop's name on the shelf tab. Says what this page is for
+   in the customer's own terms, once, and never again on the other two tabs. */
+.cx-intro {
+  color: var(--ink-3); font-size: var(--t-small); line-height: 1.55;
+  max-width: 62ch;
+}
+
+/* ROOM FOR TWO FIXED BARS. The tab strip is pinned to the bottom of the
+   window and the storefront's own basket bar sits directly above it, so the
+   page has to clear BOTH or whatever is last on it stays under them. The
+   safe-area inset is counted once — it is already inside the tab strip's own
+   padding.
+
+   THIS SITS ON `.cx-main`, NOT ON `.sf`, and that is the whole fix. It used to
+   be `.cx .sf, .cx-page`, which clears the bottom of the CATALOGUE — but the
+   catalogue is not the bottom of the page. `.cx-main` renders the shelf (or
+   MY ORDERS) and then `.cx-foot` after it, always, on every tab, so the
+   padding was landing in the middle of the scroll and the footer below it had
+   none.
+
+   MEASURED, with a basket open at 390 px and the page scrolled to
+   `document.body.scrollHeight`: the footer's last paragraph ended at y=778.7
+   and the GAWAAH mark at y=822.7, while the basket bar's top edge was at
+   y=709 — so the closing paragraph and the mark were behind the bars with no
+   scroll left to reach them. The last product's ADD was fine, which is why
+   this survived a check that only asked about ADD. */
+.cx-main {
+  padding-bottom: calc(var(--cx-tabs-h) + 108px + env(safe-area-inset-bottom, 0px));
+}
+/* And the catalogue no longer pads itself, or the clearance would be counted
+   twice and open a dead gap between the last row and the footer. `.cx-main`
+   is a flex column with its own `gap`, which is the separation that was
+   actually wanted here. */
+.cx .sf,
+.cx-page {
+  padding-bottom: 0;
+}
+
+/* The storefront's basket bar is portalled onto <body>, OUTSIDE this subtree
+   (see BasketBar in routes/Shop.tsx — an animated ancestor was capturing its
+   `position: fixed`). So it cannot be reached by a `.cx` descendant selector,
+   and the shell marks <body> instead while it is mounted. The literal 62 is
+   `--cx-tabs-h`, which lives on `.cx` and cannot be read from <body>; it is
+   only correct under the same breakpoint that pins the tab strip to the
+   floor, which is why this rule is capped at 719 px. */
+@media (max-width: 719px) {
+  body.cx-shell .sf-bar {
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+  }
+}
+
+/* ------------------------------------------------------------ the tabs --
+   THREE PLACES, and the customer needs no fourth: the shelf, what they have
+   picked up, and what they have already ordered. Pinned to the bottom because
+   this is a phone held in one hand, and the top of a 390 px screen is not
+   where a thumb is. */
+
+.cx-tabs {
+  position: fixed; z-index: 45;
+  left: 0; right: 0; bottom: 0;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  height: calc(var(--cx-tabs-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -6px 24px rgba(var(--shadow-rgb), .07);
+}
+.cx-tabs button {
+  position: relative;
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; min-height: 44px;
+  font: 700 var(--t-micro)/1 var(--font); letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  transition: color var(--fast) var(--ease);
+}
+.cx-tabs button:hover { color: var(--ink-2); }
+.cx-tabs button[aria-current='page'] { color: var(--blue-700); }
+/* The flute over the open tab — the same mark the shopkeeper's own tabs use,
+   flipped to the top edge because this strip is at the foot of the window. */
+.cx-tabs button[aria-current='page']::after {
+  content: '';
+  position: absolute; left: 50%; top: 0;
+  width: 22px; height: 3px; margin-left: -11px;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 0 0 2px 2px;
+  animation: cxFlute var(--med) var(--ease-out) both;
+}
+@keyframes cxFlute {
+  from { opacity: 0; transform: skewX(var(--flute-skew)) scaleX(.2); }
+  to   { opacity: 1; transform: skewX(var(--flute-skew)) scaleX(1); }
+}
+.cx-tabs .ico { position: relative; display: grid; place-items: center; }
+
+/* How many packets are in the basket. BLUE, never green: the three verdict
+   colours belong to what the money path did, and a basket has done nothing
+   with money yet. */
+.cx-badge {
+  position: absolute; top: -5px; left: 11px;
+  min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: var(--r-full);
+  background: var(--blue-600); color: var(--on-dark);
+  font: 800 10px/17px var(--font);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* ---------------------------------------------------------- the footer --
+   Whose shop this is, and what the counter did. Inside the scroll, above the
+   tab strip: a customer reads it once, at the bottom, the way they would read
+   the board over a real shutter. */
+
+.cx-foot {
+  margin-top: var(--s6);
+  padding: var(--s5) var(--s4);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-edge);
+}
+.cx-foot h2 {
+  font: 800 var(--t-h3)/1.25 var(--font-display);
+  letter-spacing: -.01em; color: var(--navy-900);
+}
+.cx-foot address {
+  font-style: normal; white-space: pre-line;
+  margin-top: var(--s2);
+  color: var(--ink-3); font-size: var(--t-small); line-height: 1.55;
+}
+.cx-foot p {
+  margin-top: var(--s3);
+  color: var(--ink-3); font-size: var(--t-small); line-height: 1.6;
+}
+.cx-foot .cx-mark {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  font: 800 var(--t-micro)/1 var(--font); letter-spacing: .22em;
+  text-transform: uppercase; color: var(--blue-700);
+}
+.cx-foot .cx-mark .deva {
+  font-family: var(--font-deva); letter-spacing: 0; text-transform: none;
+  color: var(--ink-4); font-weight: 700;
+}
+
+/* --------------------------------------------------------- MY ORDERS --
+   The one screen in this shell that is not the shop. It is also the only
+   place a customer identifies themselves, so it has to explain a rule rather
+   than enforce it silently: reading back what a number has ordered needs the
+   id of an order that number placed. */
+
+.cx-orders { display: flex; flex-direction: column; gap: var(--s4); }
+
+.cx-head h1 {
+  font-size: var(--t-h1); font-weight: 800; letter-spacing: -.02em;
+  line-height: 1.15;
+}
+.cx-head p { color: var(--ink-3); margin-top: var(--s2); line-height: 1.6; max-width: 62ch; font-size: var(--t-small); }
+
+/* One order, as a row a thumb can hit. The id is mono because it is the thing
+   the customer is asked to type back on this very screen. */
+.cx-order {
+  display: flex; align-items: center; gap: var(--s3);
+  width: 100%; text-align: left;
+  appearance: none; cursor: pointer;
+  padding: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.cx-order:hover { border-color: var(--line-2); box-shadow: var(--shadow-1); }
+.cx-order + .cx-order { margin-top: var(--s2); }
+.cx-order .col { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.cx-order .oid {
+  font-family: var(--mono); font-size: var(--t-micro); color: var(--ink-4);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cx-order .what { font-size: var(--t-small); font-weight: 600; color: var(--ink); line-height: 1.35; }
+.cx-order .when { font-size: var(--t-micro); color: var(--ink-4); }
+.cx-order .right {
+  flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+}
+.cx-order .amt { font-size: var(--t-h3); font-weight: 800; color: var(--navy-900); }
+
+/* The sign-in form. NO PASSWORD, and there must never be one — see the block
+   comment at the head of the customer-identity section in
+   gawaah/storefront.py. A name, a number, and (only to READ orders back) the
+   id of an order that number placed. */
+.cx-form { display: flex; flex-direction: column; gap: var(--s3); }
+.cx-form .btn-row { margin-top: var(--s1); }
+
+/* The rule, said as a rule rather than as a 401. */
+.cx-why {
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue-500);
+  border-radius: var(--r-md);
+  color: var(--ink-2); font-size: var(--t-small); line-height: 1.6;
+}
+.cx-why b { color: var(--navy-900); }
+.cx-why code {
+  font-family: var(--mono); font-size: var(--t-micro);
+  background: var(--surface-3); border-radius: var(--r-xs); padding: 1px 6px;
+}
+
+/* ------------------------------------------------------------- 430 px --
+   The wider phones. Nothing changes but the room the bar's name gets, which
+   is what stops a three-word shop name from being clipped where it need not
+   be. Checked at 390 and 430 with the basket open. */
+@media (min-width: 415px) {
+  .cx { --cx-top-h: 64px; }
+  .cx-face { width: 44px; height: 44px; }
+}
+
+@media (min-width: 720px) {
+  /* GIVEN ROOM, THE TABS COME OFF THE FLOOR. A strip pinned to the bottom of
+     the window is right for a thumb and wrong for a mouse on a 1440 px page,
+     where it is a band of chrome across the foot of everything. Here it
+     un-pins into a normal row under the bar and scrolls with nothing, sticky
+     to the bar's own bottom edge.
+
+     IT STAYS A SIBLING OF `.cx-top` IN THE DOM and is not moved into it,
+     because `.cx-top` carries `backdrop-filter` — which makes it the
+     containing block for any `position: fixed` descendant. A tab strip parked
+     inside it would pin itself to a 60 px bar on the phone rather than to the
+     window. That is the same defect BasketBar in routes/Shop.tsx exists to
+     work around, found the same way: by looking at the running page.
+
+     `--cx-tabs-h` goes to zero because nothing is over the foot of the page
+     any more; the sticky rail inside the storefront gets the bar AND this row
+     as its offset instead. */
+  .cx { --cx-tabs-h: 0px; --cx-top-h: 68px; --topbar-h: calc(var(--cx-top-h) + 49px); }
+  .cx-top { padding: 0 var(--s5); gap: var(--s4); }
+  .cx-name b { font-size: var(--t-h2); }
+  .cx-tabs {
+    position: sticky; top: var(--cx-top-h); z-index: 39;
+    display: flex; gap: 2px;
+    height: 48px; padding: 0 var(--s5);
+    background: var(--glass-thick);
+    border-top: 0; border-bottom: 1px solid var(--line);
+    box-shadow: none;
+  }
+  .cx-tabs button {
+    flex: none; flex-direction: row; gap: var(--s2);
+    height: 40px; padding: 0 var(--s4); align-self: center;
+    border-radius: var(--r-sm);
+    letter-spacing: .04em;
+  }
+  .cx-tabs button:hover { background: var(--bar-hover); }
+  .cx-tabs button[aria-current='page']::after { top: auto; bottom: 2px; border-radius: 2px; }
+  .cx-badge { position: static; box-shadow: none; }
+  /* THE SAME FOOTER BUG LIVED HERE TOO. The tab strip un-pins on a wide
+     screen, but the storefront's basket bar does NOT — the rule that lifts it
+     above the tabs is capped at 719 px, so on desktop it sits at `bottom: 0`
+     and covered the end of the footer exactly as it did on the phone. The
+     clearance moves to `.cx-main` for the same reason as above; it needs no
+     `--cx-tabs-h` term here because that variable is 0 at this width. */
+  .cx .sf, .cx-page { padding-bottom: 0; }
+  .cx-main { padding-bottom: 120px; }
+}
