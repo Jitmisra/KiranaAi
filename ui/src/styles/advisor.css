@@ -1,0 +1,1092 @@
+/* ===========================================================================
+   The advisor — SALAAHKAAR.
+
+   Imported by `routes/Salaahkaar.tsx` and by the modal behind the round
+   button (`components/SalaahkaarPanel.tsx`), which draw the same call at two
+   sizes — `salaahkaar.css` carries the modal's overrides and what the merge
+   added. Every rule here is prefixed `adv-` or scoped under `.adv`, because a
+   shared bare class name is exactly how one screen's tweak silently moves
+   another screen's layout. The prefix outlived the screen's old name on
+   purpose: the tile, the presenter and the pulse are unchanged by the merge.
+
+   The shape is a CALL: a dark tile on the left where the presenter sits, the
+   transcript beside it, the microphone under the tile. The presenter is DRAWN,
+   never photographed — a vector illustration of nobody, animated in the page —
+   because a stock face on a kirana counter would be a person who is not there,
+   and a photograph of a real one would be a claim this product cannot back.
+   The tile says so on itself, permanently, in `.adv-synth`.
+
+   COLOUR. Every colour is a token. The tile is the darkest ink; the marks on
+   it use the accent and the on-dark text scale. GREEN, AMBER AND RED are
+   reserved for money and recognition: the only green here is a settled figure
+   in a takings answer, the only amber is a refusal or a partial margin, and
+   the microphone is ACCENT while it listens, never red — red means a payment
+   or a packet the counter would not name.
+   =========================================================================== */
+
+.adv {
+  display: flex;
+  flex-direction: column;
+
+  /* THE COUNTER IS INDIAN, AND THIS ONE SCREEN SAYS SO. Two colours, scoped
+     here and nowhere else, the way `.pp` scopes its plate samples: marigold
+     for the hairline and the kolam dots, and a clay-plum for the warm end of
+     the tile's vignette. They are ornament — no state, no verdict, no money
+     is ever drawn in them, so the reservation of green, amber and red above
+     is untouched. They are literals because they are not part of the palette
+     and must not leak into it. */
+  --adv-marigold: #E4A340;
+  --adv-marigold-rgb: 228, 163, 64;
+  --adv-plum-rgb: 58, 22, 30;
+}
+.adv > .page-head { margin-bottom: var(--s5); }
+
+/* ------------------------------------------------------------- the call --- */
+
+/* THREE PARTS, TWO ORDERS.
+   `stage` is the face and the one control that opens the line; `prose` is the
+   promise and the folded settings; `side` is the shop and the conversation.
+   On two columns the first two stack in the left column exactly as they read —
+   the prose is the caption to the face above it. On ONE column the areas put
+   the SHOP between them, because a phone that opens on a face, a paragraph and
+   a disclosure has buried the figures a screen and a half down. */
+.adv-call {
+  display: grid;
+  grid-template-columns: minmax(300px, .85fr) minmax(0, 1.15fr);
+  grid-template-areas:
+    "stage side"
+    "prose side";
+  grid-template-rows: auto 1fr;
+  gap: var(--s5);
+  align-items: stretch;
+  margin-bottom: var(--s5);
+}
+.adv-stage { grid-area: stage; }
+.adv-prose { grid-area: prose; }
+/* CONTENT-HEIGHT, NOT STRETCHED. Stretched, the card grew to whatever the
+   left column happened to be — and with the disclosure open that is twice its
+   height, so the pulse floated in the middle of a lake of white with the
+   composer pinned far below it. Measured at 1440 with the fold open: 595px of
+   empty card above the takings tile stretched, 17px with this rule. */
+.adv-side  { grid-area: side; align-self: start; }
+@media (max-width: 1080px) {
+  .adv-call {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "stage" "side" "prose";
+    grid-template-rows: auto;
+  }
+}
+
+.adv-stage, .adv-prose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+  align-content: start;
+}
+
+/* The tile. A call window: 4:3, dark, the presenter filling it. `data-state`
+   on this element drives the chrome; the presenter's own frame loop drives the
+   face, so React sets one attribute here and never touches the drawing. */
+.adv-tile {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  min-height: 260px;
+  border-radius: var(--r-lg);
+  /* The plate's own background, so the tile and the picture are one surface
+     even in the instant before the image decodes. */
+  background: #0C1B3A;
+  color: var(--on-dark);
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+  display: grid;
+  place-items: stretch;
+}
+.adv-tile::after {
+  /* A vignette over everything, so the presenter sits IN the room rather than
+     on top of it, and so the chrome at the corners stays legible over a face. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Cool at the top, WARM at the bottom: a dusk rather than a server room.
+     The plum is under the navy, not instead of it, so the face's own colour
+     is not shifted — only the room around it. */
+  background:
+    linear-gradient(to bottom, rgba(var(--navy-rgb), .34) 0%, transparent 22%,
+                    transparent 56%, rgba(var(--adv-plum-rgb), .38) 82%, rgba(var(--navy-rgb), .70) 100%),
+    radial-gradient(ellipse at 50% 36%, transparent 46%, rgba(var(--navy-rgb), .40) 100%);
+  pointer-events: none;
+}
+
+/* A hairline of marigold along the bottom edge of the tile, and a corner of
+   kolam dots fading out of it. Both sit under the badge, the timer and the
+   caption (z-index 1 against their 2), and neither reacts to anything. */
+.adv-ornament {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(var(--adv-marigold-rgb), 0) 0%, rgba(var(--adv-marigold-rgb), .85) 18%,
+                    rgba(var(--adv-marigold-rgb), .85) 82%, rgba(var(--adv-marigold-rgb), 0) 100%),
+    radial-gradient(circle, rgba(var(--adv-marigold-rgb), .55) 1.1px, transparent 1.7px);
+  background-size: 100% 2px, 13px 13px;
+  background-position: 0 100%, 6px 6px;
+  background-repeat: no-repeat, repeat;
+  /* The dot lattice lives in the bottom-left corner and nowhere else. */
+  -webkit-mask-image:
+    linear-gradient(#000, #000),
+    radial-gradient(circle at 0% 100%, #000 0%, rgba(0, 0, 0, .55) 14%, transparent 32%);
+  -webkit-mask-size: 100% 2px, 100% 100%;
+  -webkit-mask-position: 0 100%, 0 0;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-over;
+  mask-image:
+    linear-gradient(#000, #000),
+    radial-gradient(circle at 0% 100%, #000 0%, rgba(0, 0, 0, .55) 14%, transparent 32%);
+  mask-size: 100% 2px, 100% 100%;
+  mask-position: 0 100%, 0 0;
+  mask-repeat: no-repeat;
+  mask-composite: add;
+  opacity: .9;
+}
+
+/* While it speaks the tile is lit, softly, in the same marigold — the one
+   state change the ornament makes. Listening and thinking keep the accent. */
+.adv-tile[data-state="speaking"] {
+  box-shadow: 0 0 0 2px rgba(var(--adv-marigold-rgb), .55), 0 0 28px rgba(var(--adv-marigold-rgb), .28), var(--shadow-2);
+}
+/* Everything the component draws on the tile sits above the vignette. */
+.adv-tile > *:not(.pp) { z-index: 2; }
+.adv-tile-wait { place-self: center; width: 62%; }
+
+.adv-tile-top {
+  position: absolute;
+  top: var(--s4);
+  left: var(--s4);
+  right: var(--s4);
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+.adv-tile-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.adv-tile-name b {
+  font-size: var(--t-h3);
+  font-weight: 700;
+  color: var(--on-dark);
+  letter-spacing: var(--tr-flat);
+}
+.adv-tile-name b .deva { font-family: var(--font-deva); font-weight: 600; margin-left: 6px; color: var(--on-dark-2); }
+.adv-tile-name span {
+  font-size: var(--t-micro);
+  color: var(--on-dark-2);
+  /* It sits on hair, which is nearly the same value as the type. */
+  text-shadow: 0 1px 3px rgba(var(--navy-rgb), .9);
+}
+
+/* The state chip on the tile. Not a verdict pill: a call state is neither
+   money nor recognition, so it wears the on-dark scale and the accent only. */
+.adv-state {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-full);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--on-dark-2);
+  background: rgba(var(--accent-rgb), .0);
+  border: 1px solid var(--on-dark-3);
+}
+.adv-state i {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--on-dark-3);
+}
+.adv-tile[data-state="listening"] .adv-state,
+.adv-tile[data-state="speaking"] .adv-state,
+.adv-tile[data-state="thinking"] .adv-state {
+  color: var(--on-dark);
+  border-color: var(--accent-400);
+}
+.adv-tile[data-state="listening"] .adv-state i,
+.adv-tile[data-state="speaking"] .adv-state i,
+.adv-tile[data-state="thinking"] .adv-state i {
+  background: var(--accent-400);
+  animation: adv-blink 1.4s var(--ease) infinite;
+}
+@keyframes adv-blink { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* The call timer, bottom-left of the tile. Tabular so it does not jitter. */
+.adv-timer {
+  position: absolute;
+  left: var(--s4);
+  bottom: var(--s4);
+  z-index: 1;
+  font-size: var(--t-small);
+  font-weight: 600;
+  color: var(--on-dark-2);
+}
+.adv-tile[data-state="off"] .adv-timer { display: none; }
+
+/* THE CAPTION. Two kinds and never both: what the microphone is hearing, or
+   what the voice is saying with the word it is on lit.
+
+   The lit word is the lip sync written down. It is driven by the same
+   `boundary` events and the same word spans that shape the mouth, so a
+   shopkeeper can check one against the other without being told how, and so a
+   mouth that has drifted out of time is VISIBLE rather than merely felt. */
+.adv-cap {
+  position: absolute;
+  left: var(--s3);
+  right: var(--s3);
+  bottom: calc(var(--s4) + 26px);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-md);
+  background: rgba(var(--navy-rgb), .74);
+  border: 1px solid rgba(255, 255, 255, .10);
+  text-align: center;
+  font-size: var(--t-body);
+  line-height: 1.55;
+  color: var(--on-dark-2);
+  overflow-wrap: anywhere;
+  /* Exactly three lines of text under the label, and it SCROLLS: the component
+     keeps the word being spoken in the middle of the window, so the caption
+     follows the voice instead of clipping the sentence and hiding it. */
+  max-height: calc(1.4em + 3 * 1.55em);
+  overflow-y: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+.adv-cap::-webkit-scrollbar { display: none; }
+.adv-cap > b { position: sticky; top: 0; background: inherit; }
+.adv-cap > b {
+  display: block;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--on-dark-3);
+  margin-bottom: 1px;
+}
+.adv-cap.heard { color: var(--on-dark); }
+/* Said already, saying now, not yet said. The accent is the machine's own
+   mark on this product, and this is the machine speaking. */
+.adv-cap.said .was { color: var(--on-dark-3); }
+.adv-cap.said .now {
+  color: var(--on-dark);
+  background: rgba(var(--accent-rgb), .62);
+  border-radius: 3px;
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .62);
+}
+
+/* THE LABEL THAT NEVER LEAVES. On the picture, at every size, in every state:
+   what a shopkeeper is looking at, in three words, without scrolling to the
+   rail to find out. */
+.adv-synth {
+  position: absolute;
+  right: var(--s3);
+  bottom: var(--s3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: rgba(var(--navy-rgb), .72);
+  border: 1px solid var(--on-dark-3);
+  color: var(--on-dark-2);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.adv-synth svg { flex: none; opacity: .85; }
+
+/* The same sentence again, in full, under the tile — because the badge is
+   three words and this one is the promise. */
+.adv-honest {
+  font-size: var(--t-small);
+  line-height: 1.65;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s3) var(--s4);
+}
+.adv-honest b { color: var(--navy-900); }
+.adv-honest { border-top: 2px solid var(--adv-marigold); }
+
+/* ---------------------------------------------------------- the choices ---
+   ALSO GONE. `.adv-choices` / `.adv-choice` centred the natural-voice picker
+   and its caption in the middle of the screen. The picker moved into the fold
+   as `.sk-setting`, with the same caption under it and the same words.
+   ------------------------------------------------------------------------- */
+
+/* --------------------------------------------------------- the presenter -- */
+/*
+   A still plate with a live mouth drawn into it.
+
+   `components/Presenter.tsx` owns every geometry: the paths are rewritten by a
+   frame loop in that file, and nothing here animates a shape. What lives here
+   is COLOUR — sampled off the plate itself so the drawn mouth belongs to the
+   painted face rather than sitting on it — and the two state changes that are
+   the tile's business rather than the face's.
+
+   The values are literals and that is deliberate. They are not part of this
+   product's palette and they must never be reused: they are measurements of one
+   picture, and if the picture is ever replaced they are wrong. Everything that
+   IS part of the palette on this screen — the accent, the ink, the on-dark
+   scale — still comes from a token, as it does everywhere else. */
+
+.pp {
+  --pp-lip:     #AF5745;
+  --pp-lip-hi:  #BE6653;   /* the lit top of the lower lip */
+  --pp-lip-lo:  #90463A;   /* the shadowed underside */
+  --pp-gap:     #34140F;   /* the inside of an open mouth */
+  --pp-tongue:  #A8474A;
+  --pp-lid:     #A96A44;   /* the eyelid, sampled just above the eye */
+  --pp-lash:    #110D0C;
+  --pp-shade:   #6E3A22;   /* the shadow an open jaw casts under the mouth */
+
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+
+.pp-plate { image-rendering: auto; }
+
+/* NOT ON A CALL. The presenter is still there — a person waiting is not a
+   person deleted — but the room is dark and nothing is being said. */
+.pp[data-state="off"] { opacity: .72; }
+
+.pp-lips { fill: url(#pp-lip); }
+.pp-gap { fill: var(--pp-gap); }
+.pp-teeth-u, .pp-teeth-l { fill: url(#pp-teeth); }
+.pp-tongue { fill: var(--pp-tongue); }
+.pp-jaw { fill: url(#pp-jaw); }
+/* The seam where the lips meet. Drawn only when they are nearly closed: an open
+   mouth has no seam, and one drawn there reads as a scar. */
+.pp-seam { fill: none; stroke: var(--pp-lip-lo); stroke-width: 1.4; stroke-linecap: round; }
+
+.pp-lid { fill: var(--pp-lid); }
+.pp-lash { fill: none; stroke: var(--pp-lash); stroke-width: 5; stroke-linecap: round; }
+
+
+/* ------------------------------------------------------------ controls ----
+   GONE, ON PURPOSE. `.adv-controls`, `.adv-mic` and `.adv-ctl-group` drew a
+   68px round microphone and two labelled button groups under the presenter —
+   a second microphone (the composer already has one), a second START CALL
+   (the pulse's header had the other) and a speaker toggle. The page now has
+   ONE of each: the call control is `.sk-callbar` against the tile, the
+   microphone and the language are in `.sk-composer`, and the speaker toggle
+   is a setting inside the fold. Nothing referenced these rules any more; a
+   dead 68px button is not a style, it is a trap for the next reader.
+   ------------------------------------------------------------------------- */
+
+/* The line under the controls: which voice this browser found. A statement,
+   not a setting. */
+.adv-voice {
+  font-size: var(--t-micro);
+  color: var(--ink-3);
+  text-align: center;
+  line-height: 1.6;
+  padding: 0 var(--s3);
+}
+.adv-voice .mono { color: var(--ink-4); }
+
+/* ----------------------------------------------------------- the thread --- */
+
+.adv-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 420px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.adv-thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s4);
+  overflow-y: auto;
+  max-height: 560px;
+  min-width: 0;
+  scroll-behavior: smooth;
+}
+@media (max-width: 1080px) {
+  /* Bounded, not unbounded. On one column an unbounded thread makes the PAGE
+     the scroller, and then keeping the newest turn in view means scrolling the
+     presenter off the top of the phone. */
+  .adv-thread { max-height: 58vh; }
+}
+/* CENTRED WITH AUTO MARGINS, NOT `justify-content: center`. A flex column
+   that centres content taller than itself clips the TOP of it and the
+   scroll cannot reach it — measured: the pulse's kicker and half the START
+   CALL button were cut off at 1440 once the top-sellers bars made it taller
+   than the thread. Auto margins centre when there is room and yield when
+   there is not. */
+.adv-thread.empty { justify-content: flex-start; }
+.adv-thread.empty > .adv-pulse, .adv-thread.empty > .adv-cold, .adv-thread.empty > .sk-cold { margin-top: auto; margin-bottom: auto; }
+
+.adv-turn { display: flex; gap: var(--s3); align-items: flex-start; min-width: 0; }
+.adv-turn.you { justify-content: flex-end; }
+.adv-turn.sys { justify-content: center; }
+
+/* What the shopkeeper said. A tinted panel, not a chat bubble with a tail. */
+.adv-said {
+  max-width: min(84%, 46ch);
+  background: var(--accent-050);
+  border: 1px solid var(--accent-100);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg);
+  padding: var(--s3) var(--s4);
+}
+.adv-said p {
+  font-size: var(--t-h3);
+  line-height: 1.5;
+  color: var(--navy-900);
+  overflow-wrap: anywhere;
+}
+.adv-stamp {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+}
+
+/* A line the page itself wrote: the call started, the call ended, the voice
+   it found. Quiet, centred, not from either party. */
+.adv-sys {
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  text-align: center;
+  max-width: 60ch;
+  line-height: 1.6;
+}
+
+/* The advisor's mark beside its turns: the same core as the tile, small. */
+.adv-mark {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--navy-900);
+  display: grid;
+  place-items: center;
+  margin-top: 2px;
+}
+.adv-mark::before {
+  content: '';
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent-400);
+  box-shadow: inset 0 0 0 3px var(--navy-900), 0 0 0 1px var(--accent-300);
+}
+
+.adv-reply {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs) var(--r-lg) var(--r-lg) var(--r-lg);
+  padding: var(--s4);
+}
+
+/* What was said aloud. Set at the lead size because this is the line a
+   shopkeeper hears and then reads back. */
+.adv-spoken {
+  font-size: var(--t-lead);
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  max-width: 68ch;
+}
+/* The counter's own sentence, when a model phrased over it. Smaller and
+   labelled, so the two are never confused. */
+.adv-counter-said {
+  margin-top: var(--s3);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--line-2);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.adv-counter-said b {
+  display: block;
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 2px;
+}
+
+/* A TURN THAT CAME BACK HOLLOW. `Empty` is a card-body object — centred, with
+   a card's worth of padding — and inside a transcript bubble that reads as a
+   hole. Ranged left and pulled in, it reads as what it is: a state. */
+.adv-reply .empty { padding: var(--s2) 0 0; text-align: left; }
+.adv-reply .empty .empty-title { font-size: var(--t-h3); }
+.adv-reply .empty .empty-body { margin: 0; max-width: none; }
+.adv-reply .empty .btn-row { justify-content: flex-start; }
+
+/* A refusal, in the server's own words. Amber, like every other abstention on
+   this product. The reason is never paraphrased. */
+.adv-refusal {
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--r-md);
+  padding: var(--s3) var(--s4);
+}
+.adv-refusal > header { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.adv-refusal > header .mono {
+  font-size: var(--t-small);
+  font-weight: 700;
+  color: var(--amber);
+  overflow-wrap: anywhere;
+}
+.adv-refusal p { margin-top: var(--s2); font-size: var(--t-small); line-height: 1.6; color: var(--ink-2); }
+/* What to do next, under the server's own words rather than mixed into them. */
+.adv-refusal p.adv-refusal-hint { color: var(--ink-3); font-size: var(--t-micro); }
+
+/* NOTHING IS LOST WHEN A TURN FAILS. Two ways back — the same sentence again,
+   or the same sentence in the box with a word changed. They wrap rather than
+   overflow at 390px, where this panel is the full width of the phone. */
+.adv-again-row { margin-top: var(--s3); flex-wrap: wrap; }
+.adv-again-row .btn { min-width: 0; }
+
+/* --------------------------------------------------------- who answered --- */
+
+.adv-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.adv-foot .adv-stamp { margin-top: 0; margin-left: auto; }
+
+/* Small tags. Quiet: which brain answered matters and it is not the answer. */
+.adv-tag {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: .04em;
+  border-radius: var(--r-full);
+  padding: 3px var(--s2);
+  border: 1px solid var(--line-2);
+  background: var(--surface-3);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+/* NOBODY ANSWERED. A turn the network killed carries no brain, and this says so
+   rather than borrowing one. Plain ink: an unreached model is not an abstention
+   and not a refusal, so it wears neither of those colours. */
+.adv-tag.none { font-style: italic; color: var(--ink-4); }
+.adv-tag.grok { border-color: var(--accent-200); background: var(--accent-050); color: var(--accent-700); }
+.adv-tag.reasoned { border-color: var(--accent-300); background: var(--accent-100); color: var(--accent-700); }
+.adv-tag.general { border-color: var(--line-3); background: var(--surface); color: var(--ink-2); }
+/* Which voice read the answer. The one that left the machine is the marigold
+   one, so the disclosure is visible without being read. */
+.adv-tag.voice.browser { color: var(--ink-3); }
+.adv-tag.voice.natural-cached { border-color: rgba(var(--adv-marigold-rgb), .45); color: var(--ink-2); }
+.adv-tag.voice.natural { border-color: rgba(var(--adv-marigold-rgb), .8); background: rgba(var(--adv-marigold-rgb), .12); color: #7A4E0E; }
+
+.adv-why {
+  margin-top: var(--s3);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.adv-why b { color: var(--ink-2); }
+.adv-why .mono { font-size: var(--t-micro); color: var(--ink-4); }
+
+/* What left the machine for this turn, as a disclosure. The summary is the
+   count; the field names are one click away, every time. */
+.adv-left { margin-top: var(--s3); }
+.adv-left > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--t-micro);
+  color: var(--ink-3);
+  padding: 2px 0;
+}
+.adv-left > summary::-webkit-details-marker { display: none; }
+.adv-left > summary::before { content: '▸ '; color: var(--accent-500); }
+.adv-left[open] > summary::before { content: '▾ '; }
+.adv-left-fields {
+  margin-top: var(--s2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.adv-left-fields span {
+  font: 400 var(--t-micro)/1.4 var(--mono);
+  color: var(--ink-3);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
+}
+.adv-left-none {
+  margin-top: var(--s3);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+}
+
+/* ------------------------------------------------------------- the facts -- */
+
+.adv-facts {
+  margin-top: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s3) var(--s4);
+}
+.adv-facts > .verdict { margin-top: var(--s3); }
+.adv-note { margin-top: var(--s2); font-size: var(--t-micro); line-height: 1.6; color: var(--ink-3); }
+
+.adv-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--s3);
+}
+.adv-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.adv-stat .l {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.adv-stat .v { font-size: var(--t-h2); font-weight: 700; color: var(--navy-900); }
+.adv-stat .s { font-size: var(--t-micro); color: var(--ink-4); }
+/* The ONE green on this screen: money the gateway actually settled. */
+.adv-stat.green .v { color: var(--green); }
+/* A figure the counter abstained on. Plain ink, an em dash, and a reason. */
+.adv-stat.unknown .v { color: var(--ink-4); }
+
+.adv-rows { display: flex; flex-direction: column; }
+.adv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-small);
+}
+.adv-row:last-child { border-bottom: 0; }
+.adv-row .nm { min-width: 0; color: var(--ink); font-weight: 600; }
+.adv-row .nm .mono { display: block; font-size: var(--t-micro); font-weight: 400; color: var(--ink-4); word-break: break-all; }
+.adv-row .st { font-size: var(--t-micro); color: var(--ink-3); text-align: right; }
+.adv-row .tnum { color: var(--navy-900); font-weight: 600; white-space: nowrap; }
+.adv-row .tnum.unknown { color: var(--ink-4); font-weight: 500; }
+
+.adv-product { display: flex; align-items: center; gap: var(--s4); }
+.adv-product-main { flex: 1; min-width: 0; }
+.adv-product-main b { display: block; color: var(--navy-900); font-size: var(--t-h3); }
+.adv-product-main .mono { font-size: var(--t-micro); color: var(--ink-4); word-break: break-all; }
+.adv-price { font-size: var(--t-h2); font-weight: 700; color: var(--navy-900); white-space: nowrap; }
+.adv-price s { color: var(--ink-4); font-weight: 500; font-size: var(--t-small); margin-right: 8px; }
+
+/* ------------------------------------------------------------ cold start -- */
+
+.adv-cold {
+  text-align: center;
+  padding: var(--s6) var(--s4);
+}
+.adv-cold h2 { font-size: var(--t-h2); margin-bottom: var(--s2); }
+.adv-cold p {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  line-height: 1.65;
+  max-width: 52ch;
+  margin: 0 auto var(--s4);
+}
+.adv-cold .btn-row { justify-content: center; margin-bottom: var(--s4); }
+/* The call button's own place and the chips' own places, held while the health
+   check is in flight. A panel that is blank while it waits and full a moment
+   later moves the thing a thumb is already travelling towards. */
+.adv-cold-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s4);
+}
+/* The sentence's own three lines.
+   A DEFINITE WIDTH, and it has to be one. This started as `align-self: stretch`
+   with `margin: 0 auto`, and an auto margin in the cross axis cancels stretch —
+   so the block resolved to the width of its own children, which are percentages
+   OF it, which is zero. The waiting state shipped as one bar and a gap where
+   three lines should have been, and only looking at the PNG showed it. */
+.adv-cold-wait-lines {
+  width: min(100%, 46ch);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+.adv-cold-refusal { margin-top: var(--s4); text-align: left; }
+
+.adv-chips { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; }
+.adv-chip {
+  font: 500 var(--t-small)/1 var(--font);
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  /* 8px of padding put these at 27 px tall — under a thumb's 32. These are
+     the fastest way to ask a question on a phone, so they were the worst
+     place to be unpressable. */
+  padding: 9px var(--s4);
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.adv-chip:hover:not(:disabled) { background: var(--accent-050); border-color: var(--accent-400); color: var(--accent-700); }
+.adv-chip:disabled { opacity: .5; cursor: not-allowed; }
+.adv-chip.sm { padding: 5px var(--s3); font-size: var(--t-micro); font-weight: 600; }
+
+/* The same suggestions, kept within reach once the call is running. A shopkeeper
+   who has asked one thing usually wants the next one, and remembering the exact
+   sentence is not part of the job. Scrolls sideways rather than wrapping into a
+   second row that would push the composer off a phone. */
+.adv-quick {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3) var(--s3) 0;
+  border-top: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.adv-quick::-webkit-scrollbar { display: none; }
+.adv-quick .adv-chip { flex: none; }
+
+/* Read that answer out again. Quiet, because it is a convenience and not a
+   verdict — and because it re-speaks a sentence this machine already has, so
+   nothing is re-asked and nothing leaves. */
+.adv-again {
+  font: 700 var(--t-micro)/1 var(--font);
+  letter-spacing: .04em;
+  border-radius: var(--r-full);
+  padding: 4px var(--s2);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.adv-again:hover { border-color: var(--accent-400); color: var(--accent-600); }
+
+/* -------------------------------------------------------------- composer -- */
+/*
+   Typing is the second way in, under the transcript. A counter with a broken
+   microphone is still a counter. */
+
+/* THE COMPOSER, as its own object.
+   It was a strip welded to the bottom edge of the thread with a hairline over
+   it. In the reference it is a rounded card that SITS in the space under the
+   conversation, with the field on top and its controls inside the same box —
+   which is also what makes the send button reachable with a thumb rather than
+   parked in a corner. */
+.adv-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s2);
+  margin: var(--s3);
+  padding: var(--s2) var(--s2) var(--s2) var(--s3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1), var(--glass-edge);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.adv-composer:focus-within {
+  border-color: var(--accent-400);
+  box-shadow: var(--ring), var(--glass-edge);
+}
+/* A circle, not a rectangle with a word in it. */
+.adv-composer .adv-send.btn {
+  flex: none; width: 38px; min-height: 38px; padding: 0;
+  border-radius: var(--r-full);
+  font-size: 0;
+}
+.adv-composer .adv-send.btn::after {
+  content: '';
+  width: 9px; height: 9px;
+  border-top: 2px solid currentColor; border-right: 2px solid currentColor;
+  transform: rotate(45deg) translate(-1px, 1px);
+}
+.adv-box { flex: 1; min-width: 0; padding: 0 var(--s2); }
+.adv-box textarea {
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: 400 var(--t-h3)/1.5 var(--font);
+  color: var(--ink);
+  padding: 9px 0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.adv-box textarea::placeholder { color: var(--ink-5); }
+.adv-send { flex: none; }
+
+/* -------------------------------------------------------------- the rail -- */
+
+.adv-rail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s5);
+  align-items: start;
+}
+
+.adv-lede { font-size: var(--t-small); line-height: 1.65; color: var(--ink-2); margin-bottom: var(--s3); }
+.adv-lede:last-child { margin-bottom: 0; }
+.adv-limits { margin: 0; padding-left: 18px; }
+.adv-limits li { font-size: var(--t-small); line-height: 1.65; color: var(--ink-2); margin-bottom: var(--s3); }
+.adv-limits li:last-child { margin-bottom: 0; }
+.adv-limits b { color: var(--navy-900); }
+.adv-code {
+  display: block;
+  margin-top: var(--s2);
+  padding: var(--s3);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font: 400 var(--t-micro)/1.7 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ----------------------------------------------------------------- phone -- */
+
+@media (max-width: 560px) {
+  .adv-tile { min-height: 220px; aspect-ratio: 4 / 3; }
+  .adv-tile-top { top: var(--s3); left: var(--s3); right: var(--s3); }
+  .adv-tile-name span { display: none; }
+  /* The badge stays. It is the one thing on this tile that is not allowed to be
+     dropped for space, so at this width the timer moves out of its way instead. */
+  .adv-synth { font-size: 9px; letter-spacing: .05em; padding: 3px 7px; }
+  /* The dot corner would sit under the timer on a phone; keep the hairline. */
+  .adv-ornament { -webkit-mask-size: 100% 2px, 0 0; mask-size: 100% 2px, 0 0; }
+  .adv-timer { font-size: var(--t-micro); }
+  .adv-cap {
+    font-size: var(--t-small);
+    bottom: calc(var(--s3) + 24px);
+    max-height: calc(1.4em + 2 * 1.55em);
+  }
+  .adv-side { min-height: 360px; }
+  .adv-thread { padding: var(--s3); gap: var(--s3); }
+  .adv-said { max-width: 100%; }
+  .adv-reply { padding: var(--s3); }
+  .adv-spoken { font-size: var(--t-h3); }
+  .adv-cold { padding: var(--s4) var(--s2); }
+  .adv-cold h2 { font-size: var(--t-h3); }
+  .adv-chip { padding: 7px var(--s3); font-size: var(--t-micro); }
+  .adv-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .adv-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .adv-row .st { display: none; }
+}
+
+/* ==========================================================================
+   THE PRESENTER, ALIVE — the voice's level as light and motion
+   --------------------------------------------------------------------------
+   `--amp` is set on `.adv-tile` once a frame by the presenter's own loop: the
+   measured RMS of the natural voice, or the mouth's openness when the browser
+   is the one talking. Nothing here is animated by CSS on a timer while a
+   sentence is being said; it is all driven by that one number, so what the
+   eye sees pulsing is the voice, not a decoration keeping time near it.
+   ========================================================================== */
+.adv-tile { --amp: 0; }
+
+/* The ring. Marigold, and its alpha is the level. The shadow stack keeps the
+   base shadow so the tile never loses its depth between words. */
+.adv-tile[data-state="speaking"] {
+  box-shadow:
+    0 0 0 2px rgba(var(--adv-marigold-rgb), calc(.35 + var(--amp) * .55)),
+    0 0 calc(18px + var(--amp) * 34px) rgba(var(--adv-marigold-rgb), calc(.18 + var(--amp) * .40)),
+    var(--shadow-2);
+}
+/* Listening is the machine's own colour, breathing slowly: the microphone is
+   open and nothing is being said yet. */
+.adv-tile[data-state="listening"] {
+  box-shadow: 0 0 0 2px rgba(43, 132, 234, .55), 0 0 26px rgba(43, 132, 234, .30), var(--shadow-2);
+  animation: adv-listen 2.6s ease-in-out infinite;
+}
+@keyframes adv-listen {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(43, 132, 234, .45), 0 0 18px rgba(43, 132, 234, .22), var(--shadow-2); }
+  50%      { box-shadow: 0 0 0 2px rgba(43, 132, 234, .75), 0 0 34px rgba(43, 132, 234, .42), var(--shadow-2); }
+}
+/* Thinking: a slow sweep of light across the tile, once every two seconds. */
+.adv-tile[data-state="thinking"]::before {
+  content: '';
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .10) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: adv-think 2.1s ease-in-out infinite;
+}
+@keyframes adv-think { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .adv-tile[data-state="listening"] { animation: none; }
+  .adv-tile[data-state="thinking"]::before { animation: none; }
+}
+.pp { --pp-halo: var(--adv-marigold); }
+
+/* The wave. Fourteen bars along the foot of the tile, each a different
+   fraction of `--amp` so the row never moves as one block; `sin()` of the
+   bar's index gives the fractions without a table. */
+/* TOP RIGHT, UNDER THE STATE PILL — not along the foot. It was placed at the
+   bottom first, where the caption also lives, and the caption sat on top of
+   it: fourteen bars nobody could see, animating under a sentence. A meter
+   beside the word SPEAKING is where a meter reads as one. */
+.adv-wave {
+  position: absolute; right: 18px; top: 56px;
+  z-index: 2; pointer-events: none;
+  display: flex; align-items: center; gap: 3px; height: 28px;
+}
+.adv-wave i {
+  display: block; width: 3px; border-radius: 2px;
+  background: rgba(var(--adv-marigold-rgb), .92);
+  box-shadow: 0 0 8px rgba(var(--adv-marigold-rgb), .55);
+  height: calc(3px + var(--amp) * (8px + 22px * (0.5 + 0.5 * sin(var(--k) * 1.9))));
+  transition: height 60ms linear;
+}
+.adv-wave.listening i {
+  background: rgba(43, 132, 234, .85);
+  box-shadow: 0 0 8px rgba(43, 132, 234, .45);
+  height: 4px;
+  animation: adv-wave-idle 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--k) * -110ms);
+}
+@keyframes adv-wave-idle { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+@media (prefers-reduced-motion: reduce) { .adv-wave.listening i { animation: none; height: 6px; } }
+@media (max-width: 560px) { .adv-wave { top: 50px; right: 12px; height: 22px; gap: 2px; } }
+
+/* ==========================================================================
+   THE PULSE — the shop, before anybody talks
+   ========================================================================== */
+.adv-pulse { padding: var(--s4) var(--s3) var(--s3); }
+.adv-pulse-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+.adv-pulse-kicker {
+  display: block; font-size: var(--t-micro); font-weight: 800; letter-spacing: .14em;
+  color: var(--blue-700); margin-bottom: 4px;
+}
+.adv-pulse-head h2 { font-size: var(--t-h2); letter-spacing: -.01em; margin: 0 0 4px; }
+.adv-pulse-head p { color: var(--ink-3); font-size: var(--t-small); line-height: 1.55; max-width: 48ch; margin: 0; }
+/* `.adv-pulse-call` was the second START CALL on this screen. It is gone;
+   the one that is left is `.sk-callbtn`, against the tile. */
+@media (max-width: 720px) { .adv-pulse-head { flex-direction: column; } }
+
+.adv-tiles {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3);
+  margin-bottom: var(--s4);
+}
+@media (min-width: 900px) and (max-width: 1080px), (min-width: 1240px) {
+  .adv-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* A tile is a question wearing a number. Glass, the flute sheen on hover, and
+   the "ask →" that lights when the hand is on it. */
+.adv-tile-q {
+  position: relative; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px; min-height: 108px;
+  padding: 12px 14px 30px;
+  border-radius: var(--r-md);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .86), rgba(255, 255, 255, .58));
+  border: 1px solid rgba(43, 132, 234, .14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(var(--navy-rgb), .04);
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease), border-color var(--fast) var(--ease);
+  overflow: hidden; text-decoration: none;
+}
+.adv-tile-q.wide { grid-column: 1 / -1; min-height: 132px; }
+/* TWO OF THE FOUR COLUMNS. The top sellers need a track wide enough for a
+   product's real name — at one column of four it measured 0px and rendered a
+   single letter — and expiring joins it so the second row fills the grid
+   instead of leaving two empty cells beside two half-empty tiles. */
+.adv-tile-q.two { grid-column: 1 / -1; }
+@media (min-width: 900px) and (max-width: 1080px), (min-width: 1240px) {
+  .adv-tile-q.wide, .adv-tile-q.two { grid-column: span 2; }
+}
+.adv-tile-q::after {
+  /* The flute, off-stage until hover. */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(var(--flute-skew), transparent 40%, rgba(43, 132, 234, .07) 50%, transparent 60%);
+  transform: translateX(-60%); transition: transform 520ms var(--ease); opacity: 0;
+}
+.adv-tile-q:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(43, 132, 234, .32); box-shadow: inset 0 1px 0 #fff, 0 8px 22px rgba(43, 132, 234, .14); }
+.adv-tile-q:hover:not(:disabled)::after { transform: translateX(60%); opacity: 1; }
+.adv-tile-q:disabled { cursor: progress; }
+.adv-tile-q .q-label { font-size: var(--t-micro); font-weight: 800; letter-spacing: .10em; text-transform: uppercase; color: var(--ink-4); }
+.adv-tile-q .q-big { font-size: clamp(22px, 2.2vw, 30px); font-weight: 800; letter-spacing: -.02em; color: var(--navy-900); line-height: 1.05; }
+.adv-tile-q .q-big.amb { color: var(--amber-700, #8a5a00); }
+.adv-tile-q .q-sub { font-size: var(--t-small); color: var(--ink-3); line-height: 1.4; }
+.adv-tile-q .q-none { font-size: var(--t-small); color: var(--ink-4); font-style: italic; margin-top: 6px; }
+.adv-tile-q .q-ask {
+  position: absolute; right: 12px; bottom: 9px;
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .08em; color: var(--blue-700);
+  opacity: .55; transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.adv-tile-q:hover:not(:disabled) .q-ask { opacity: 1; transform: translateX(2px); }
+/* Settled against billed. The bar is the fact; the colours are reserved. */
+.adv-tile-q .q-bar { display: block; height: 6px; border-radius: 3px; background: rgba(var(--amber-rgb), .28); overflow: hidden; margin-top: 8px; }
+.adv-tile-q .q-bar i { display: block; height: 100%; background: var(--green); border-radius: 3px; transition: width 700ms var(--ease); }
+.adv-tile-q .q-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--t-micro); color: var(--ink-3); margin-top: 4px; }
+.adv-tile-q .q-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.dot.ok { background: var(--green); } .dot.amb { background: var(--amber); }
+.adv-pulse-note {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0 0 var(--s4);
+  font-size: var(--t-small); color: var(--ink-3); line-height: 1.5;
+}
+.adv-pulse-note .dot { margin-top: 6px; flex: none; }
+
+/* ==========================================================================
+   THE RAIL, FOLDED
+   ========================================================================== */
+.adv-how {
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+  overflow: hidden;
+}
+.adv-how > summary {
+  list-style: none; cursor: pointer; padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.adv-how > summary::-webkit-details-marker { display: none; }
+.adv-how > summary::after {
+  content: 'READ'; position: absolute; right: 18px; top: 16px;
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .12em; color: var(--blue-700);
+}
+.adv-how { position: relative; }
+.adv-how[open] > summary::after { content: 'FOLD'; }
+.adv-how-t { font-weight: 700; color: var(--ink); padding-right: 60px; }
+.adv-how-s { font-size: var(--t-small); color: var(--ink-3); }
+.adv-how[open] > summary { border-bottom: 1px solid var(--line); }
+.adv-how > .card { border: 0; border-radius: 0; box-shadow: none; }
+.adv-how > .card + .card { border-top: 1px solid var(--line); }

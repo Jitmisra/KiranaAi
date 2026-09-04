@@ -1,0 +1,64 @@
+advisor.webp — the Advisor screen's presenter plate
+===================================================
+
+WHAT IT IS
+    A head-and-shoulders portrait of a fictional character, used as the still
+    plate that the Advisor's lip-sync rig draws a live mouth onto. It is a flat
+    vector-style ILLUSTRATION. It is not a photograph, it is not a likeness of
+    any real person, and it is not intended to be mistaken for one. The screen
+    that shows it says so on the tile, under the tile, and in the limits card.
+
+WHERE IT CAME FROM
+    Generated once, on 2026-09-03, with xAI `grok-imagine-image-2.0` via
+    POST https://api.x.ai/v1/images/generations. Three candidates were
+    generated at $0.04 each ($0.12 total); this is the chosen one. No further
+    API calls are made at any point — see CSP below.
+
+    The prompt, verbatim:
+
+      Flat vector illustration, clean cel-shaded 2D character art, bold clean
+      shapes, smooth flat colour fills, soft simple shading, editorial
+      app-illustration style. NOT a photograph, no photorealism, no skin
+      texture, no pores, no film grain. Head-and-shoulders front-facing
+      portrait of a friendly young South Asian woman who advises a small shop.
+      Dark hair tied back, simple indigo kurta with a plain collar. Symmetrical,
+      facing the viewer straight on, calm neutral expression, LIPS CLOSED and
+      relaxed, eyes open looking at the viewer. Centred, whole head inside the
+      frame with clear space above the hair, shoulders visible at the bottom
+      edge. Plain flat dark navy background, one solid colour, no pattern, no
+      text, no logo.
+
+    No real person was named, described or referenced in the prompt, and no
+    reference image was supplied.
+
+WHAT WAS DONE TO IT
+    1. Cropped from 912x1136 to 912x684 (4:3, the shape of the call tile),
+       taking rows 44..728.
+    2. The painted mouth was removed — an ellipse at (459, 487) r=(78, 40) in
+       source coordinates, filled by OpenCV's Telea inpainting and feathered —
+       so that the rig's own mouth is the only mouth on the face. Without this
+       there would be a live mouth drawn on top of a permanent painted one.
+    3. Encoded as WebP at quality 86.
+    Nothing else was retouched. The eyes, brows, hair and clothing are as
+    generated.
+
+LICENCE
+    Output of the xAI image API. Under the xAI Terms of Service, xAI assigns to
+    the user all of its right, title and interest in output generated for that
+    user, including for commercial use. The character is fictional and no
+    third-party material is incorporated. No stock library, no scraped
+    photograph, and no other party's asset is present in this file.
+
+WHY THERE IS A SECOND COPY
+    `ui/src/lib/presenter/advisor.webp` is byte-identical to this file. The till
+    (`tools/upload_app.py`) mounts only `/assets` from the built site, so a file
+    served from the public directory would 404 in production. The copy under
+    `src/` is imported by `components/Presenter.tsx`, which makes Vite emit it
+    into `dist/assets/` with a content hash — the one path this server actually
+    serves. This file is the canonical vendored original and the record of where
+    it came from.
+
+CONTENT SECURITY POLICY
+    The page is served under `connect-src 'self'` and `img-src 'self' data:
+    blob:`. This image is loaded from this origin and nothing else is fetched.
+    No request is made to xAI, or to any other host, at runtime.
