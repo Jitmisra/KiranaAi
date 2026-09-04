@@ -1,0 +1,588 @@
+/* ===========================================================================
+   GAWAAH — the Shelf screen (routes/Shelf.tsx).
+   ---------------------------------------------------------------------------
+   Imported by that one route. Everything is prefixed `sh-` so it cannot
+   collide with the till's classes in app.css or with the Stock screen's `st-`.
+
+   WHAT IS NOT HERE. The stage, the camera gate, the stage bar, the cards, the
+   stat tiles, the buttons, the fields, the skeletons and the empty states are
+   the shared layer in app.css and components/ui.tsx. This sheet holds only
+   what the screen genuinely has of its own: the annotated frame inside the
+   stage, the facing row, the could-not-name row with its crop, the earlier
+   read line, and the teach dialog's crop.
+
+   NO LITERAL COLOUR. Every value is a token from tokens.css, referenced by
+   name. The palette is being rebuilt while this is written; nothing here
+   assumes what a token holds.
+
+   COLOUR DISCIPLINE. Green and amber are recognition state on this product —
+   named, not named — and that is exactly what they mark here: the pill on a
+   facing found by sight, the tile counting what could not be named. The stock
+   gap is a fact about a shop, not a verdict; it is set in ink, and the one
+   decisive case (more visible than the figure) is set in a heavier ink, not a
+   colour.
+   =========================================================================== */
+
+:root {
+  --shelf-dim:   var(--ink-4);
+  --shelf-quiet: var(--surface-2);
+  --shelf-rule:  var(--line-2);
+}
+
+.sh-band { margin-bottom: var(--s5); }
+.sh-band.top { margin-top: var(--s4); margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- the grid --
+   FIVE CHILDREN, TWO COLUMNS. The picture and the region list share the left
+   column, because the list is a legend for the picture and reading one means
+   glancing at the other; the facings, what is NOT on the shelf, and the
+   earlier reads stack down the right. Placed rather than left to flow, so the
+   region list sits under the frame its numbers are drawn on. Below 1080 px the
+   grid is one column and the source order — shelf, facings, regions, missing,
+   earlier — is the reading order. */
+.sh-grid { grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); align-items: start; }
+@media (min-width: 1081px) {
+  .sh-grid > :nth-child(1) { grid-column: 1; grid-row: 1; }
+  .sh-grid > :nth-child(2) { grid-column: 2; grid-row: 1; }
+  .sh-grid > :nth-child(3) { grid-column: 1; grid-row: 2 / span 2; }
+  .sh-grid > :nth-child(4) { grid-column: 2; grid-row: 2; }
+  .sh-grid > :nth-child(5) { grid-column: 2; grid-row: 3; }
+}
+@media (max-width: 1080px) { .sh-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* --------------------------------------------------------------- the stage --
+   The annotated frame REPLACES the live video in the same box, so the boxes
+   land where the shopkeeper was just looking. `contain`, not `cover`: a box
+   drawn by the server on a 16:9 frame must not be cropped by a 16:10 stage. */
+.sh-stage { aspect-ratio: 16 / 9; }
+
+/* THE GATE MUST NOT BE CUT OFF, AND THIS ONE WAS.
+   `.stage` in app.css is `overflow: hidden` and this sheet pinned it to 16:9.
+   At 390 px that is a 316x178 box, and the camera gate inside it — a two-line
+   heading, a three-line sentence and the two buttons — measures 269 px. The
+   overflow was clipped, so START CAMERA and USE A PHOTO were simply not on the
+   screen: on the one device this screen exists for, there was no way to start
+   the camera. The stage bar, absolutely positioned at the bottom on a higher
+   layer, printed "camera off" across the sentence that survived.
+   So while the gate is what is in the box, the box is sized by the gate: the
+   ratio becomes a floor rather than a cap. Nothing changes once the video or
+   the annotated frame is in there — both of those want the ratio. */
+.sh-stage.sh-gated { aspect-ratio: auto; min-height: 300px; }
+/* Clear of the stage bar, which sits on top of everything in the stage. */
+.sh-stage.sh-gated .camgate { padding-bottom: var(--s9); }
+@media (max-width: 560px) {
+  .sh-stage.sh-gated { min-height: 260px; }
+  .sh-stage.sh-gated .camgate { padding-left: var(--s4); padding-right: var(--s4); }
+}
+
+/* ------------------------------------------------------- the read frame --
+   THE PICTURE IS THE SERVER'S; ONLY THE HIT TARGETS ARE THE BROWSER'S.
+   This wrapper carries the PHOTOGRAPH's aspect ratio (set inline from
+   `frame_px`), not the stage's, so a percentage of it is a percentage of the
+   frame exactly and a box can be positioned from the same numbers the server
+   drew from. Against an `object-fit: contain` letterbox instead, every box
+   would need the fitted size recomputed on resize and would be a pixel or two
+   out forever. `.stage` is a centring grid, so max-width and max-height are
+   all this needs to sit in the middle whatever shape the photo is. */
+.sh-frame {
+  position: relative;
+  max-width: 100%; max-height: 100%;
+  margin: auto;
+}
+.sh-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+/* A transparent target over every box the server drew. It carries no colour of
+   its own at rest — the drawn box is the picture — and lights up in that
+   region's own state colour when the hand or the keyboard is on it. */
+.sh-hit {
+  position: absolute; padding: 0; margin: 0; cursor: pointer;
+  background: transparent; border: 2px solid transparent; border-radius: 3px;
+}
+.sh-hit:hover, .sh-hit:focus-visible, .sh-hit.on {
+  outline: none;
+  border-color: var(--surface);
+  box-shadow: 0 0 0 2px var(--navy-900), 0 0 22px 4px rgba(255, 255, 255, .35);
+}
+.sh-hit.named.on, .sh-hit.named:hover { box-shadow: 0 0 0 2px var(--green), 0 0 22px 4px rgba(var(--green-rgb), .45); }
+.sh-hit.unnamed.on, .sh-hit.unnamed:hover { box-shadow: 0 0 0 2px var(--amber), 0 0 22px 4px rgba(var(--amber-rgb), .45); }
+.sh-hit.rejected.on, .sh-hit.rejected:hover { box-shadow: 0 0 0 2px var(--ink-4), 0 0 18px 3px rgba(var(--navy-rgb), .35); }
+
+/* The picture, big, in a dialog. On the dark ground the drawn boxes read the
+   way they do on the stage, and the same hit targets are live over them. */
+.sh-bigframe {
+  display: grid; place-items: center;
+  background: var(--navy-900); border-radius: var(--r-md);
+  padding: var(--s2); min-height: 200px;
+}
+.sh-bigframe .sh-frame { width: 100%; }
+
+/* ON A PHONE THE DIALOG BUYS ALMOST NOTHING, so the picture is allowed to be
+   wider than the screen and the box scrolls.
+   Measured: at 390 px the card holds the frame at 316 px and the dialog at
+   332 px — sixteen pixels, for a tap. A shelf of a dozen packets has boxes
+   four millimetres wide at that size and the drawn names are unreadable, which
+   defeats the point of drawing them. At 760 px they are legible and the shelf
+   is two swipes long, which is how a person looks at a shelf anyway.
+   `overflow-x` is on THIS box and never on the page: the body must not scroll
+   sideways, and it does not. */
+@media (max-width: 720px) {
+  .sh-bigframe { overflow-x: auto; place-items: center start; padding: var(--s2) 0; }
+  .sh-bigframe .sh-frame { width: 760px; max-width: none; }
+}
+
+.sh-stagetools { display: inline-flex; align-items: center; gap: var(--s2); }
+
+/* The shelf's own name, on the bar under the picture that was just counted. */
+.sh-stagelbl {
+  margin-left: auto; font-weight: 700; letter-spacing: .03em;
+  color: var(--on-dark);
+}
+
+.sh-stage .camgate .btn-row { margin-bottom: 0; }
+/* A ghost button on the dark stage: the shared ghost is ink on paper. */
+.sh-stage .btn.ghost.sh-ghost { color: var(--on-dark); border-color: var(--on-dark-3); }
+.sh-stage .btn.ghost.sh-ghost:hover { background: rgba(255, 255, 255, .08); }
+.sh-camerr { color: var(--amber-on-dark); font-size: var(--t-small); margin-top: var(--s4); }
+
+.sh-actions { display: flex; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s4); }
+.sh-actions .btn { min-height: 44px; }
+@media (max-width: 560px) {
+  /* FULL WIDTH, STACKED. Two across put "Count the shelf" in a 150 px box and
+     broke the label over two lines, which on the one control this screen is
+     about reads as a squeezed page. Stacked, each is a whole thumb wide. */
+  .sh-actions { flex-direction: column; align-items: stretch; }
+  .sh-actions .btn { width: 100%; }
+}
+
+/* ------------------------------------------------------------- the results -- */
+
+.sh-results { display: flex; flex-direction: column; gap: var(--s5); }
+/* AUTO-FIT AGAINST THE CARD, NOT A MEDIA QUERY AGAINST THE WINDOW.
+   This was `repeat(2)` under 1400 px and `repeat(4)` over it — but the window
+   is not this card. At 1440 px the card is about 430 px wide inside the
+   two-column grid, so the four-column rule fired and set four 100 px tracks
+   with the qualifying sentence wrapping one word per line. `auto-fit` measures
+   the container it is actually in and needs no breakpoint at all. */
+.sh-results .statgrid { grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); }
+
+.sh-facings { display: flex; flex-direction: column; }
+.sh-facing {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s4) 0;
+  border-bottom: 1px dashed var(--line);
+}
+.sh-facing:first-child { padding-top: 0; }
+.sh-facing:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.sh-facing-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); }
+.sh-name { display: flex; flex-direction: column; min-width: 0; }
+.sh-name { font-weight: 700; color: var(--navy-900); font-size: var(--t-h3); line-height: 1.3; }
+/* `sh-sku`, NOT `sku`. `.sku` in app.css is the Products screen's product
+   CARD — a bordered, shadowed panel that lifts on hover — so this sku string
+   was rendering inside a little glass box that followed the pointer. The
+   Expiry screen documents the same trap in its own table and dodged it. */
+.sh-name .sh-sku { font-weight: 400; font-size: var(--t-micro); color: var(--shelf-dim); overflow-wrap: anywhere; }
+
+/* The facing count is the figure the screen exists for and is set large. It is
+   NOT a verdict colour: a count is not a judgement. */
+.sh-count { display: inline-flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
+.sh-count b { font-size: var(--t-display); font-weight: 800; letter-spacing: var(--tr-display); line-height: 1; color: var(--navy-900); }
+.sh-count .l { font-size: var(--t-small); color: var(--ink-3); }
+
+.sh-facing-mid { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; }
+.sh-how { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.sh-regions { font-size: var(--t-micro); color: var(--shelf-dim); }
+.sh-fig { display: inline-flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
+.sh-fig .l { font-size: var(--t-micro); color: var(--shelf-dim); text-transform: uppercase; letter-spacing: var(--tr-caps); }
+.sh-fig b { font-size: var(--t-h2); color: var(--ink); }
+
+/* An absence, never a zero. */
+.sh-absent { font-size: var(--t-small); color: var(--shelf-dim); }
+
+/* The server's sentence about the gap. The decisive case — more visible than
+   the figure — is a heavier ink with a rule, not a colour. */
+.sh-gap {
+  font-size: var(--t-small); color: var(--ink-2); line-height: var(--lh-loose);
+  border-left: 2px solid var(--shelf-rule); padding-left: var(--s3);
+  max-width: 64ch;
+}
+.sh-gap.decisive { color: var(--ink); font-weight: 600; border-left-color: var(--ink); }
+
+.sh-note { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.5; }
+
+.sh-facts .kv { padding: var(--s2) 0; }
+.sh-limit { font-size: var(--t-micro); color: var(--shelf-dim); line-height: 1.5; max-width: 64ch; }
+
+/* ---------------------------------------------------------- every region --
+   ONE LIST, NOT TWO. Facings and could-not-name used to be separate cards, so
+   a region that moved between them looked like two different objects and the
+   numbers drawn on the picture matched only half of what was listed. A shelf
+   read is a list of positions, each of which is named or is not, so the state
+   is a property of the row.
+
+   COLOUR IS RECOGNITION STATE AND NOTHING ELSE. Green: the camera named it.
+   Amber: it would not. Ink: a person named it — neither of the above, and it
+   may not borrow the colour of a figure the camera stands behind. Grey and
+   struck: the shopkeeper says it is not a product. */
+
+.sh-region-list { display: flex; flex-direction: column; }
+.sh-region {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--s4); align-items: center;
+  padding: var(--s3) var(--s3) var(--s3) 0;
+  border-bottom: 1px dashed var(--line);
+  border-left: 3px solid transparent;
+  border-radius: var(--r-sm);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.sh-region:last-of-type { border-bottom: 0; }
+.sh-region.named    { border-left-color: rgba(var(--green-rgb), .45); }
+.sh-region.unnamed  { border-left-color: rgba(var(--amber-rgb), .55); }
+.sh-region.by_hand  { border-left-color: var(--ink-3); }
+.sh-region.rejected { border-left-color: var(--line-2); opacity: .62; }
+/* The row and its box on the picture light together, so "region 4" is one
+   thing and not two answers that have to be matched by eye. */
+.sh-region.on { background: var(--shelf-quiet); border-left-width: 3px; }
+.sh-region.on.named    { border-left-color: var(--green); }
+.sh-region.on.unnamed  { border-left-color: var(--amber); }
+.sh-region.on.by_hand  { border-left-color: var(--ink); }
+.sh-region .sh-acts { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+
+/* The crop is the thing the shopkeeper looks at. The number on it is the same
+   number drawn on the picture, so "3" on the shelf is this row. */
+.sh-thumb {
+  position: relative; width: 64px; height: 64px;
+  border-radius: var(--r-md); overflow: hidden;
+  background: var(--surface-3); border: 1px dashed var(--amber-line);
+  display: grid; place-items: center;
+}
+.sh-thumb.named    { border-style: solid; border-color: var(--green-line); }
+.sh-thumb.by_hand  { border-style: solid; border-color: var(--line-3); }
+.sh-thumb.rejected { border-style: solid; border-color: var(--line-2); filter: grayscale(1); }
+.sh-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sh-nothumb { font-size: var(--t-h3); font-weight: 700; color: var(--shelf-dim); }
+.sh-badge {
+  position: absolute; left: 4px; top: 4px;
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  color: var(--surface); background: var(--amber);
+  border-radius: var(--r-xs); padding: 1px 5px;
+}
+.sh-thumb.named .sh-badge    { background: var(--green); }
+.sh-thumb.by_hand .sh-badge  { background: var(--ink-2); }
+.sh-thumb.rejected .sh-badge { background: var(--ink-5); }
+
+.sh-what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sh-what .nm { font-size: var(--t-small); font-weight: 700; color: var(--navy-900); display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.sh-what .rs { font-size: var(--t-micro); color: var(--ink-3); line-height: 1.45; overflow-wrap: anywhere; }
+.sh-what .dt { font-size: var(--t-micro); color: var(--shelf-dim); line-height: 1.45; }
+.sh-region.rejected .sh-what .nm { text-decoration: line-through; color: var(--ink-4); }
+
+/* The state, in words, because a colour alone is not a statement — and this
+   screen's whole argument is that an abstention says so out loud. */
+.sh-state { font-weight: 700; letter-spacing: .02em; }
+.sh-state.named    { color: var(--green); }
+.sh-state.unnamed  { color: var(--amber); }
+.sh-state.by_hand  { color: var(--ink-2); }
+.sh-state.rejected { color: var(--ink-4); }
+.sh-samepacket { color: var(--ink-3); }
+
+/* The same packet twice: folded behind one tap, never dropped. */
+.sh-same-block {
+  margin-top: var(--s3); padding-top: var(--s3);
+  border-top: 1px solid var(--line-2);
+  display: flex; flex-direction: column; gap: var(--s2);
+}
+.sh-same-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  width: 100%; min-height: 40px; padding: var(--s2) var(--s3);
+  background: var(--shelf-quiet); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); cursor: pointer; text-align: left;
+  font-size: var(--t-micro);
+}
+.sh-same-toggle:hover { border-color: var(--line-3); }
+.sh-same-toggle .sh-chev { color: var(--blue-600); font-weight: 700; }
+
+@media (max-width: 560px) {
+  .sh-region { grid-template-columns: 56px minmax(0, 1fr); }
+  .sh-thumb { width: 56px; height: 56px; }
+  .sh-region .sh-acts { grid-column: 2; justify-self: start; justify-content: flex-start; }
+}
+
+/* -------------------------------------------------- not on this shelf -- */
+
+.sh-missing-list { display: flex; flex-direction: column; }
+.sh-missing {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s4); align-items: center;
+  padding: var(--s3) 0 var(--s3) var(--s3);
+  border-bottom: 1px dashed var(--line);
+  border-left: 3px solid transparent;
+}
+.sh-missing:last-of-type { border-bottom: 0; }
+/* Only the case a photograph gives real evidence for is marked. "Taught, and
+   not in this frame" is not an emptiness and must not look like one. */
+.sh-missing.was_here { border-left-color: rgba(var(--amber-rgb), .55); }
+.sh-missing.cannot_be_seen { opacity: .72; }
+.sh-was { display: inline-flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
+.sh-was b { font-size: var(--t-h3); color: var(--ink); }
+.sh-was .l { font-size: var(--t-micro); color: var(--shelf-dim); }
+
+/* ------------------------------------------------ against the last read -- */
+
+/* INK, NOT COLOUR. Fewer facings than last time is a shelf that has been
+   selling, not a failure, and green-and-red on it would be this screen
+   passing judgement on a shop's week. */
+.sh-change { display: inline-flex; align-items: baseline; gap: var(--s2); }
+.sh-change b { font-size: var(--t-h3); color: var(--navy-900); font-variant-numeric: tabular-nums; }
+.sh-change .l { font-size: var(--t-micro); color: var(--shelf-dim); }
+.sh-same { font-size: var(--t-micro); color: var(--shelf-dim); }
+
+/* Which shelf this is. A plain field, but load-bearing: without it the
+   comparison with the last read is two aisles subtracted from each other. */
+.sh-label { margin-top: var(--s4); }
+.sh-label .field { margin-bottom: 0; }
+
+/* ---------------------------------------------------------- earlier reads -- */
+
+.sh-earlier-list { display: flex; flex-direction: column; }
+.sh-earlier {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--s4); align-items: baseline;
+  padding: var(--s3) 0;
+  border-bottom: 1px dashed var(--line);
+}
+.sh-earlier:last-child { border-bottom: 0; }
+.sh-earlier .tm { font-size: var(--t-micro); color: var(--shelf-dim); }
+.sh-earlier .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sh-earlier .nm { font-size: var(--t-small); font-weight: 600; color: var(--ink); }
+.sh-earlier .rs { font-size: var(--t-micro); color: var(--ink-3); overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------ the dialog -- */
+
+.sh-teach { display: flex; flex-direction: column; gap: var(--s4); }
+.sh-teach .field { margin-bottom: 0; }
+.sh-teach-crop {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3); background: var(--shelf-quiet); border-radius: var(--r-md);
+}
+.sh-teach-crop img {
+  width: 96px; height: 96px; object-fit: cover; display: block;
+  border-radius: var(--r-sm); background: var(--surface-3);
+}
+.sh-teach-why { font-size: var(--t-small); color: var(--ink-2); line-height: 1.5; }
+
+/* What the counter saw when it refused to count: the objects that told it this
+   was a person holding stock, not a shelf face. Evidence for a refusal.
+   A SPAN, not a div: `Verdict` renders its children inside a <p>, and a block
+   there is closed early by the parser and lifted clean out of the amber box. */
+.sh-abstain-saw { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: var(--s3); }
+.sh-abstain-saw .mono { color: var(--ink-4); font-size: 11px; }
+
+/* The sku beside a name, wherever a row prints one. */
+.sh-what .nm .sh-sku {
+  font-family: var(--mono); font-weight: 400;
+  font-size: var(--t-micro); color: var(--shelf-dim); overflow-wrap: anywhere;
+}
+
+/* The shelf's own name on an earlier-read row, so a list of five counts of
+   three different aisles reads as three shelves rather than one confusing one. */
+.sh-earlier .sh-lbl { color: var(--navy-900); margin-right: var(--s2); }
+
+/* ------------------------------------------------------ a dead control's why --
+   A disabled button on a counter is a question. This is the answer, in the
+   place the hand already is. Not a verdict colour: a control that is simply
+   not applicable yet is not a refusal. */
+.sh-whydead {
+  margin-top: var(--s3);
+  font-size: var(--t-small); color: var(--ink-3); line-height: var(--lh-loose);
+  max-width: 64ch;
+}
+.sh-whydead + .sh-whydead { margin-top: var(--s1); }
+
+/* The limits, waiting. Three bars at the metrics of the three lines of prose
+   they become, so the card does not grow taller under the thumb. */
+.sh-limitskel > .skel + .skel { margin-top: 5px; }
+
+/* An anchor styled as a button. `.btn` in app.css does not clear the
+   underline — only `a.btn.pay.big` does — so every link-button on this screen
+   carried a stray rule through the middle of its label. Scoped to this
+   screen's own class rather than `a.btn`, because this stylesheet stays in
+   the document once the route has been visited and must not restyle the
+   nineteen screens it does not own. */
+a.btn.sh-linkbtn { text-decoration: none; }
+
+/* ==========================================================================
+   THE SHELF, MADE VISIBLE
+   ========================================================================== */
+
+/* The stage: the same room the till stands in. Blooms, the flute, the machine
+   grid — scoped to this stage, and all of it off the instant a frame is live,
+   because texture over the one photograph the count is read from is noise. */
+.sh-stage {
+  background:
+    radial-gradient(58% 76% at 16% 14%, rgba(51, 149, 255, .28), transparent 62%),
+    radial-gradient(52% 66% at 88% 24%, rgba(96, 165, 250, .18), transparent 60%),
+    radial-gradient(86% 62% at 50% 112%, rgba(51, 149, 255, .24), transparent 66%),
+    radial-gradient(130% 96% at 50% 44%, transparent 38%, rgba(0, 0, 0, .50) 100%),
+    var(--navy-900);
+}
+.sh-stage::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(51, 149, 255, .06) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(0deg,  rgba(51, 149, 255, .06) 0 1px, transparent 1px 28px);
+  -webkit-mask-image: radial-gradient(96% 84% at 50% 50%, #000 22%, transparent 78%);
+          mask-image: radial-gradient(96% 84% at 50% 50%, #000 22%, transparent 78%);
+}
+.sh-stage:has(video[style*="block"])::before,
+.sh-stage:has(.sh-frame)::before { opacity: 0; }
+
+/* THE LOCK-ON. When a read lands, every box the server drew is traced in,
+   one after another in reading order, 70 ms apart — the counter showing its
+   work rather than a picture appearing already annotated. The colour is the
+   region's own state, so a run of green with one amber in it reads as what it
+   is. Once drawn they go transparent again and the PNG's own lines are the
+   picture; hover lights them as before. */
+.sh-hit {
+  animation: sh-lock 560ms cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@keyframes sh-lock {
+  0%   { border-color: transparent; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); transform: scale(1.12); opacity: 0; }
+  35%  { opacity: 1; }
+  60%  { border-color: rgba(255, 255, 255, .95); box-shadow: 0 0 0 2px var(--navy-900), 0 0 26px 6px rgba(255, 255, 255, .45); transform: scale(1); }
+  100% { border-color: transparent; box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); transform: scale(1); opacity: 1; }
+}
+.sh-hit.named   { animation-name: sh-lock-named; }
+.sh-hit.unnamed { animation-name: sh-lock-unnamed; }
+@keyframes sh-lock-named {
+  0%   { border-color: transparent; transform: scale(1.12); opacity: 0; }
+  60%  { border-color: rgba(255, 255, 255, .95); box-shadow: 0 0 0 2px var(--green), 0 0 26px 6px rgba(var(--green-rgb), .5); transform: scale(1); opacity: 1; }
+  100% { border-color: transparent; box-shadow: none; transform: scale(1); opacity: 1; }
+}
+@keyframes sh-lock-unnamed {
+  0%   { border-color: transparent; transform: scale(1.12); opacity: 0; }
+  60%  { border-color: rgba(255, 255, 255, .95); box-shadow: 0 0 0 2px var(--amber), 0 0 26px 6px rgba(var(--amber-rgb), .5); transform: scale(1); opacity: 1; }
+  100% { border-color: transparent; box-shadow: none; transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .sh-hit { animation: none; } }
+
+/* -------------------------------------------------------------- the hero -- */
+.sh-hero {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s5); align-items: center;
+  padding: var(--s4) var(--s4) var(--s4) var(--s5);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(120deg, rgba(51, 149, 255, .10), rgba(51, 149, 255, .02)),
+    var(--surface);
+  border: 1px solid rgba(51, 149, 255, .18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+@media (max-width: 560px) { .sh-hero { grid-template-columns: minmax(0, 1fr); } }
+.sh-hero-n { display: flex; flex-direction: column; gap: 2px; }
+.sh-hero-n .big { font-size: clamp(40px, 5vw, 64px); font-weight: 800; letter-spacing: -.03em; line-height: .95; color: var(--navy-900); }
+.sh-hero-n .l { font-size: var(--t-small); color: var(--ink-3); }
+.sh-hero-delta { font-size: var(--t-micro); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-4); margin-top: 4px; }
+.sh-hero-delta.up { color: var(--blue-700); }
+.sh-hero-delta.down { color: var(--amber-700, #8a5a00); }
+.sh-hero-bar { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sh-seg { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.sh-seg i { display: block; height: 100%; transition: width 700ms var(--ease); }
+.sh-seg i.named, .sh-seg-legend b.named { background: var(--green); }
+.sh-seg i.by_hand, .sh-seg-legend b.by_hand { background: var(--navy-900); }
+.sh-seg i.unnamed, .sh-seg-legend b.unnamed { background: var(--amber); }
+.sh-seg i.rejected, .sh-seg-legend b.rejected { background: var(--ink-4); }
+.sh-seg i + i { border-left: 2px solid var(--surface); }
+.sh-seg-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--t-micro); color: var(--ink-3); }
+.sh-seg-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.sh-seg-legend b { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.sh-seg-legend .ms { margin-left: auto; color: var(--ink-4); }
+
+/* ------------------------------------------------------------ the thumbs -- */
+.sh-facing-id { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.sh-thumb {
+  flex: none; width: 44px; height: 44px; border-radius: 8px; overflow: hidden;
+  background: #fff; border: 1px solid var(--line);
+  display: grid; place-items: center;
+}
+.sh-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; padding: 2px; }
+.sh-thumb em { font: 800 12px/1 var(--font); font-style: normal; color: var(--ink-4); letter-spacing: .04em; }
+.sh-thumb.gone { filter: grayscale(1); opacity: .7; }
+.sh-missing { grid-template-columns: auto minmax(0, 1fr) auto; }
+
+/* -------------------------------------------------------------- the map -- */
+.sh-map {
+  margin: 0 0 var(--s5);
+  padding: var(--s5);
+  border-radius: var(--r-xl);
+  background:
+    radial-gradient(70% 90% at 0% 0%, rgba(51, 149, 255, .12), transparent 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, .92), rgba(255, 255, 255, .70));
+  border: 1px solid rgba(51, 149, 255, .16);
+  box-shadow: inset 0 1px 0 #fff, var(--shadow-1, 0 1px 2px rgba(2, 4, 43, .06));
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+}
+.sh-map-head { margin-bottom: var(--s4); }
+.sh-map-kicker { display: block; font-size: var(--t-micro); font-weight: 800; letter-spacing: .14em; color: var(--blue-700); margin-bottom: 4px; }
+.sh-map-head h2 { font-size: var(--t-h2); letter-spacing: -.01em; margin: 0 0 4px; }
+.sh-map-head p { margin: 0; font-size: var(--t-small); color: var(--ink-3); max-width: 62ch; }
+
+.sh-racks { display: flex; flex-direction: column; gap: var(--s4); }
+.sh-rack { position: relative; padding: 0 0 10px; }
+.sh-rack-h { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: 8px; }
+.sh-rack-h b { font-size: var(--t-small); color: var(--navy-900); letter-spacing: .01em; }
+.sh-rack-h span { font-size: var(--t-micro); color: var(--ink-4); }
+.sh-rack-h i.amb { font-style: normal; color: var(--amber-700, #8a5a00); font-weight: 700; }
+
+/* The row of packets, and the shelf they stand on. The lip is a real bar with
+   a shadow under it so the tiles read as standing on something rather than
+   floating in a grid. */
+.sh-rack-row {
+  display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap;
+  min-height: 64px; padding: 0 8px 4px;
+}
+.sh-rack-lip {
+  height: 8px; border-radius: 3px;
+  background: linear-gradient(180deg, #e9eef7, #cbd5e6);
+  box-shadow: 0 6px 12px -4px rgba(2, 4, 43, .28), inset 0 1px 0 #fff;
+}
+.sh-rack.empty .sh-rack-lip { background: repeating-linear-gradient(90deg, #e3e8f2 0 10px, transparent 10px 16px); box-shadow: none; }
+.sh-slot {
+  width: 56px; height: 60px; border-radius: 7px; overflow: hidden;
+  background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(2, 4, 43, .08);
+  display: grid; place-items: center;
+  animation: sh-slot-in 420ms var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.sh-slot:hover { transform: translateY(-3px); box-shadow: 0 8px 18px rgba(2, 4, 43, .16); z-index: 1; }
+.sh-slot img { width: 100%; height: 100%; object-fit: contain; padding: 3px; display: block; }
+.sh-slot em { font: 800 13px/1 var(--font); font-style: normal; color: var(--ink-4); }
+.sh-slot.more { background: var(--surface-2); color: var(--ink-3); font: 800 13px/1 var(--font); border-style: dashed; }
+.sh-slot.none {
+  width: auto; height: 40px; padding: 0 14px; border: 1px dashed rgba(var(--amber-rgb), .6);
+  background: rgba(var(--amber-rgb), .06); color: var(--amber-700, #8a5a00);
+  font: 700 var(--t-micro)/1 var(--font); letter-spacing: .06em; text-transform: uppercase;
+  animation: none;
+}
+@keyframes sh-slot-in { from { opacity: 0; transform: translateY(8px) scale(.94); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .sh-slot { animation: none; } }
+@media (max-width: 560px) { .sh-slot { width: 46px; height: 50px; } .sh-map { padding: var(--s4); } }
+
+/* The plan against the camera. A ghost slot is the shopkeeper's own tag
+   saying "this lives here" on a shelf where the camera did not find it —
+   faded and dashed, never amber, because an unseen product is not yet an
+   empty facing and must not wear the colour of one. */
+.sh-slot.ghost { opacity: .55; border-style: dashed; border-color: rgba(51, 149, 255, .45); background: rgba(51, 149, 255, .05); filter: grayscale(.35); }
+.sh-slot.ghost:hover { opacity: .9; filter: none; }
+.sh-map-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: var(--t-micro); color: var(--ink-3); }
+.sh-map-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.sh-map-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); background: #fff; }
+.sh-map-legend i.ghost { border-style: dashed; border-color: rgba(51, 149, 255, .45); background: rgba(51, 149, 255, .05); opacity: .7; }
+.sh-map-legend i.none { border-style: dashed; border-color: rgba(var(--amber-rgb), .6); background: rgba(var(--amber-rgb), .06); }
+/* Two racks abreast on a wide screen. Nine racks in one column is a scroll;
+   the rows wrap inside their half and a shelf is still read left to right. */
+@media (min-width: 1240px) {
+  .sh-racks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4) var(--s6); }
+}
