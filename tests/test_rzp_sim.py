@@ -978,3 +978,42 @@ def test_serialize_body_is_stable_and_compact():
     assert out == b'{"b":1,"a":2,"z":{"y":3}}'          # insertion order, no spaces
     assert out != canonical(obj)
     assert serialize_body(obj) == out
+
+
+# ---------------------------------------------- the simulator's own domain --
+
+def test_a_simulated_link_is_never_on_a_domain_the_gateway_owns() -> None:
+    """The regression that cost a real customer a real payment page.
+
+    `SHORT_URL_PREFIX` was `https://rzp.io/i/` — Razorpay's own short-link host
+    — and this module minted seven-character codes on it that Razorpay had
+    never issued. One reached a live order and rendered under a green
+    PAY Rs 1,600.00 button; pressing it fetched `404 {}` from the real gateway.
+
+    A simulated address must fail as a NAME, not as a lie, so it is minted on a
+    reserved `.invalid` host (RFC 2606) that can never resolve and can never be
+    mistaken for the gateway.
+    """
+    import re
+
+    sim, _ = make_sim()
+    link = mint(sim, 160000, "sess_derma")
+    short = link["short_url"]
+
+    assert short.startswith(SHORT_URL_PREFIX)
+    host = re.sub(r"^https?://", "", short).split("/", 1)[0].lower()
+    assert host.endswith(".invalid"), f"simulated link minted on {host!r}"
+    for owned in ("rzp.io", "razorpay.com", "rzp.link"):
+        assert owned not in short, f"simulated link sits on the gateway's domain: {short}"
+
+
+def test_a_simulated_link_says_it_is_simulated() -> None:
+    """`_gawaah_sim` on the one body that gets written onto an order.
+
+    Without it a simulated link and a real one are byte-indistinguishable once
+    stored, which is how a forged URL survived long enough to be pressed.
+    """
+    sim, _ = make_sim()
+    link = mint(sim, 160000, "sess_derma")
+    assert link.get(SIM_BODY_MARKER) is True
+    assert sim.fetch_payment_link(link["id"]).get(SIM_BODY_MARKER) is True

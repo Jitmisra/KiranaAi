@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from gawaah.clock import VirtualClock
 from gawaah.kernel import CALLING, NEW, SETTLED, Kernel
 from gawaah.ledger import Ledger, verify
+from gawaah import paisa
 from gawaah.money import MoneyError
 from gawaah.paisa import (
     PII_DROPPED_KEY,
@@ -45,6 +46,7 @@ from gawaah.paisa import (
     strip_pii,
 )
 from gawaah.rzp_sim import (
+    SHORT_URL_PREFIX,
     SIM_CONTACT,
     SIM_EMAIL,
     SIM_VPA,
@@ -418,7 +420,7 @@ def test_happy_path_intent_pay_webhook_session_paid(rig):
     minted = r.json()
     assert minted["amount_paise"] == expected
     assert minted["amount_rupees"] == "313.50"
-    assert minted["short_url"].startswith("https://rzp.io/i/")
+    assert minted["short_url"].startswith(SHORT_URL_PREFIX)
     assert minted["state"] == CALLING
     assert minted["session_state"] == "AWAITING_SETTLEMENT"
     assert minted["geometry"]["agrees"] is True
@@ -1216,3 +1218,257 @@ def test_an_escalated_intent_becomes_visible_to_a_human_on_health(rig):
     assert view["intents"][0]["needs_human"] is True
     ok, _, _, err = verify(rig.ledger_path)
     assert ok, err
+
+
+# --------------------------------------------------------------------------
+# THE CODE PATH REACHES THE MONEY.
+#
+# Until this existed, `IntentRequest.geometry` was REQUIRED, so a basket of
+# barcodes could not become a payable link at all — no page in this program had
+# ever posted a mint. A scan witness is now a second kind of evidence, and it
+# is subject to the same rule as the first: paisa re-derives every rupee from
+# ITS OWN tables before the kernel is touched. The client sends an id and an
+# amount and is given no field in which to assert a payload, a sku or a price.
+# --------------------------------------------------------------------------
+
+def _write_witness(tmp_path, lines, *, scan_id="scn_abcdef012345", age_s=0,
+                   omit_timestamp=False):
+    """Write a witness the way the COUNTER writes one.
+
+    This helper used to inject an `age_s` field and no timestamp at all. paisa
+    read `age_s`, so the staleness test passed — against a document shape the
+    counter never produces. The real witness carries `at` and nothing else, and
+    the only writer of `age_s` set it to a literal 0, which meant the staleness
+    gate had never fired in production and the test could not have noticed.
+
+    `age_s` here now moves the REAL timestamp backwards, so a test asking for a
+    16-minute-old scan gets a document that is genuinely 16 minutes old.
+    """
+    import json as _json
+    import datetime as _dt
+
+    scans = tmp_path / "scans"
+    scans.mkdir(parents=True, exist_ok=True)
+    at = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=age_s)
+    doc = {
+        "scan_id": scan_id,
+        "codes_found": len(lines), "distinct_codes": len({l["code"] for l in lines}),
+        "lines": lines,
+    }
+    if not omit_timestamp:
+        doc["at"] = at.isoformat()
+    (scans / f"{scan_id}.json").write_text(_json.dumps(doc), encoding="utf-8")
+    return scan_id
+
+
+def _write_bindings(tmp_path, mapping):
+    import json as _json
+
+    shop = tmp_path / "shop"
+    shop.mkdir(parents=True, exist_ok=True)
+    (shop / "product_codes.json").write_text(
+        _json.dumps({"format": 1, "codes": mapping}), encoding="utf-8")
+
+
+def _scan_req(scan_id, amount, session="s1"):
+    return paisa.IntentRequest(
+        session_id=session, amount_paise=amount,
+        scan=paisa.ScanRef(scan_id=scan_id))
+
+
+def test_a_scan_witness_is_repriced_from_the_servers_own_book(tmp_path) -> None:
+    """The witness names a sku; the price book decides what it costs."""
+    _write_bindings(tmp_path, {"111": "parle", "222": "soap"})
+    sid = _write_witness(tmp_path, [
+        {"code": "111", "sku_id": "parle"},
+        {"code": "222", "sku_id": "soap"},
+    ])
+    book = paisa.DictPriceBook({"parle": 1000, "soap": 3500})
+    v = paisa.rerun_scan(_scan_req(sid, 4500), book, data_dir=str(tmp_path))
+    assert v.agrees is True, v.detail
+    assert v.server_total_paise == 4500
+    assert v.witnessed_paise == 4500
+    assert set(v.priced_items) == {"parle", "soap"}
+
+
+def test_a_witness_that_names_the_wrong_sku_is_refused_not_believed(tmp_path) -> None:
+    """The till's claim is COMPARED against this counter's table, never trusted."""
+    _write_bindings(tmp_path, {"111": "soap"})           # the table says soap
+    sid = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}])  # till said parle
+    book = paisa.DictPriceBook({"parle": 1000, "soap": 3500})
+    v = paisa.rerun_scan(_scan_req(sid, 1000), book, data_dir=str(tmp_path))
+    assert v.agrees is False
+    assert v.reason == "code_names_a_different_product"
+
+
+def test_an_unpriceable_line_blocks_the_mint_and_is_never_dropped(tmp_path) -> None:
+    """A bill that is short by silence looks exactly like a complete one.
+
+    This is the single most valuable refusal in the code path: the amber line
+    must not quietly fall out of the total leaving a smaller, plausible bill.
+    """
+    _write_bindings(tmp_path, {"111": "parle"})          # 222 is bound to nothing
+    sid = _write_witness(tmp_path, [
+        {"code": "111", "sku_id": "parle"},
+        {"code": "222", "sku_id": None},
+    ])
+    book = paisa.DictPriceBook({"parle": 1000})
+    v = paisa.rerun_scan(_scan_req(sid, 1000), book, data_dir=str(tmp_path))
+    assert v.agrees is False
+    assert v.reason == "amber_in_basket"
+    assert "222" in v.detail
+
+
+def test_a_one_paisa_disagreement_refuses(tmp_path) -> None:
+    _write_bindings(tmp_path, {"111": "parle"})
+    sid = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}])
+    book = paisa.DictPriceBook({"parle": 1000})
+    v = paisa.rerun_scan(_scan_req(sid, 1001), book, data_dir=str(tmp_path))
+    assert v.agrees is False
+    assert v.reason == "scan_total_disagreement"
+    assert v.server_total_paise == 1000
+
+
+def test_a_missing_witness_is_refused_by_name(tmp_path) -> None:
+    _write_bindings(tmp_path, {})
+    book = paisa.DictPriceBook({})
+    v = paisa.rerun_scan(_scan_req("scn_notarealscanid1", 1000), book,
+                         data_dir=str(tmp_path))
+    assert v.agrees is False and v.reason == "scan_not_found"
+
+
+def test_a_stale_witness_is_refused(tmp_path) -> None:
+    """A basket seen twenty minutes ago is not the basket on the counter."""
+    _write_bindings(tmp_path, {"111": "parle"})
+    sid = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}], age_s=99999)
+    book = paisa.DictPriceBook({"parle": 1000})
+    v = paisa.rerun_scan(_scan_req(sid, 1000), book, data_dir=str(tmp_path))
+    assert v.agrees is False and v.reason == "stale_witness"
+
+
+def test_a_scan_id_cannot_walk_out_of_the_scan_directory(tmp_path) -> None:
+    """The id is a filename component and is checked before it is joined."""
+    assert paisa.load_scan_witness("../../etc/passwd", str(tmp_path)) is None
+    assert paisa.load_scan_witness("..", str(tmp_path)) is None
+    assert paisa.load_scan_witness("a/b", str(tmp_path)) is None
+    assert paisa.load_scan_witness("", str(tmp_path)) is None
+
+
+def test_an_intent_with_no_evidence_is_refused_at_the_mint(tmp_path) -> None:
+    """Neither means nothing was witnessed; both means two stories, one basket.
+
+    The model ALLOWS both fields to be absent — the refusal lives in
+    create_intent, before the kernel is touched, so that it can be audited and
+    named rather than raised as a validation error nobody records.
+    """
+    req = paisa.IntentRequest(session_id="s", amount_paise=100)
+    assert req.geometry is None and req.scan is None
+
+
+def test_a_witness_with_no_timestamp_is_stale_not_fresh(tmp_path):
+    """FAIL CLOSED. An age that cannot be established is not an age of zero.
+
+    The old code read a field the counter wrote as a literal 0, so a witness of
+    any age minted. A document whose age is unknowable must be refused, because
+    "we could not tell" and "it is fresh" are different answers and only one of
+    them is safe on a money path.
+    """
+    _write_bindings(tmp_path, {"111": "parle"})
+    sid = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}],
+                         omit_timestamp=True)
+    v = paisa.rerun_scan(_scan_req(sid, 1000),
+                         paisa.DictPriceBook({"parle": 1000}), data_dir=str(tmp_path))
+    assert v.agrees is False
+    assert v.reason == "stale_witness"
+
+
+def test_the_staleness_window_is_enforced_at_its_stated_edge(tmp_path):
+    """A scan just inside the window mints; one just outside does not.
+
+    Pinning both sides matters here because the gate spent its whole life
+    unreachable while a test asserted it worked.
+    """
+    _write_bindings(tmp_path, {"111": "parle"})
+    book = paisa.DictPriceBook({"parle": 1000})
+
+    inside = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}],
+                            scan_id="scn_inside_window", age_s=880)
+    v = paisa.rerun_scan(_scan_req(inside, 1000), book, data_dir=str(tmp_path))
+    assert v.reason != "stale_witness", "a 880s-old scan was called stale inside a 900s window"
+
+    outside = _write_witness(tmp_path, [{"code": "111", "sku_id": "parle"}],
+                             scan_id="scn_outside_window", age_s=920)
+    v = paisa.rerun_scan(_scan_req(outside, 1000), book, data_dir=str(tmp_path))
+    assert v.agrees is False
+    assert v.reason == "stale_witness"
+
+
+# ---------------------------------------------------------------------------
+# WEBHOOK LIVENESS — can anything reach this counter at all?
+#
+# A pay screen that knows only "not green yet" shows the identical spinner for
+# a customer who has not paid and for a tunnel that has been dead since
+# Saturday. Both happened: cloudflared's quick tunnel was revoked and looped on
+# "Unauthorized: Tunnel not found" for hours, so a payment that HAD settled at
+# the gateway left the till spinning "AWAITING_SETTLEMENT — 78s".
+#
+# So the service records when it last heard from the gateway AT ALL. This is a
+# reachability fact and never an authorisation: a forged POST proves the path is
+# open exactly as well as a genuine one, and neither can turn anything green.
+# ---------------------------------------------------------------------------
+
+
+def test_a_counter_that_has_never_heard_a_webhook_says_so(rig):
+    h = rig.svc.health()
+    assert h["webhooks_seen"] == 0
+    assert h["last_webhook_at"] is None
+    assert h["last_green_webhook_at"] is None
+
+
+def test_a_webhook_rejected_for_a_bad_signature_still_proves_reachability(rig):
+    # THE WHOLE POINT. The question this answers is "can anything get here",
+    # not "was that payment real" — so a refusal must still move the counter,
+    # or a dead tunnel and a hostile POST would look identical from the outside.
+    status, _body = rig.svc.handle_webhook(
+        b'{"event":"payment_link.paid"}', "not-a-valid-signature"
+    )
+    assert status != 200
+    h = rig.svc.health()
+    assert h["webhooks_seen"] == 1
+    assert h["last_webhook_at"] is not None
+    # ...and it authorised nothing.
+    assert h["last_green_webhook_at"] is None
+
+
+def test_reachability_is_never_mistaken_for_settlement(rig):
+    for _ in range(5):
+        rig.svc.handle_webhook(b"{}", "garbage")
+    h = rig.svc.health()
+    assert h["webhooks_seen"] == 5
+    assert h["last_green_webhook_at"] is None
+    assert h["intents_by_state"].get("SETTLED", 0) == 0
+
+
+def test_the_session_view_carries_the_liveness_fact_the_pay_screen_polls(rig):
+    # The pay screen polls /session/{id}, not /health. A liveness fact that only
+    # exists on /health cannot be shown where the person is actually looking —
+    # and "where the person is looking" is the entire fix.
+    body = two_item_body()
+    assert rig.client.post("/intent", json=body).status_code == 200
+
+    view = rig.client.get("/session/sess-happy").json()
+    assert view["paid"] is False
+    assert view["webhooks_seen"] == 0
+    assert view["last_webhook_at"] is None
+
+    # A callback arrives and is REFUSED. The session must not move — and the
+    # liveness fact must, because the tunnel is demonstrably up.
+    rig.client.post(
+        "/webhook",
+        content=b'{"event":"payment_link.paid"}',
+        headers={"X-Razorpay-Signature": "wrong"},
+    )
+    after = rig.client.get("/session/sess-happy").json()
+    assert after["paid"] is False, "a refused webhook must never settle a session"
+    assert after["webhooks_seen"] == 1
+    assert after["last_webhook_at"] is not None

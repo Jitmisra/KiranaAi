@@ -9,7 +9,7 @@ pushes one at a `cloudflared` tunnel.
 
 What is deliberately faithful
 -----------------------------
-* `create_payment_link` returns `{id: "plink_...", short_url: "https://rzp.io/i/...",
+* `create_payment_link` returns `{id: "plink_...", short_url: "<simulated host>/l/...",
   status: "created"}`. `short_url` is a **string**, which is the whole reason
   Payment Links beat `qr_codes` for us (PRD 10.1): the QR is rendered locally on
   the counter plane from that string, with no remote image fetch.
@@ -33,16 +33,22 @@ What is deliberately faithful
 
 What is deliberately *not* faithful, and is labelled
 ----------------------------------------------------
-Every body this module emits carries a top-level `"_gawaah_sim": true` key.
-Real Razorpay bodies do not have it. So a simulated green can always be told
-apart from a real one in the ledger, and no fixture produced here can be passed
-off as a genuine event. Invariant: honesty over convenience.
+Webhook bodies and payment links carry a top-level `"_gawaah_sim": true` key.
+Real Razorpay bodies do not have it, so a simulated green can be told apart
+from a real one in the ledger and no fixture produced here can be passed off as
+a genuine event. (Payment *views* do not carry it: `_payment_view` strips every
+`_`-prefixed key. This paragraph used to say "every body", which was not true
+of either payments or links — the link is now fixed, the payment view is a
+deliberate exception, and saying so is cheaper than a reader discovering it.)
 
 INVARIANT 6 — NO FORGERY PRIMITIVES. This module never constructs, parses or
-regenerates a UPI payload. `short_url` is an opaque token *we* mint under
-`https://rzp.io/i/`; nothing here can produce a `upi://` intent string, and
-`test_no_upi_payload_is_ever_constructed` asserts that over every byte the
-module emits.
+regenerates a UPI payload, and `test_no_upi_payload_is_ever_constructed`
+asserts that over every byte it emits.
+
+It also must never mint an address on a domain the gateway owns, which it did
+for most of this project's life — see `SHORT_URL_PREFIX`. A forged short_url is
+not a lesser sin than a forged UPI string: it is the same sin with a longer
+fuse, because it looks right until a customer presses it.
 
 INVARIANT 1 — money is integer paise. There is no float, no `float()` and no
 `/` in this file; `test_rzp_sim_is_float_free` runs `tools/lint_no_float.py`'s
@@ -74,7 +80,19 @@ from gawaah.money import paise
 #: Events this simulator can emit. The *green set* is deliberately not defined
 #: here — it belongs to `paisa`, the only holder of secrets, which re-runs the
 #: predicate server-side.
-EVENTS: tuple[str, ...] = ("payment_link.paid", "payment.captured")
+EVENTS: tuple[str, ...] = (
+    "payment_link.paid", "payment.captured", "payment_link.partially_paid",
+    # WAAPSI. The refund lifecycle as the real gateway reports it: created
+    # when the request is taken, processed when the money has gone back,
+    # failed when it could not. Only `refund.processed` moves a refund in the
+    # kernel; the other two are acknowledged and recorded.
+    "refund.created", "refund.processed", "refund.failed",
+)
+
+#: WAAPSI. The `speed` values the Refunds API accepts. `optimum` asks for an
+#: instant refund where the rails allow and falls back to normal; the entity
+#: reports which one it got in `speed_processed`.
+REFUND_SPEEDS: tuple[str, ...] = ("normal", "optimum")
 
 #: Failure injections. "normal" is the absence of injection.
 MODES: tuple[str, ...] = (
@@ -86,8 +104,26 @@ MODES: tuple[str, ...] = (
     "wrong_amount",
 )
 
-SHORT_URL_PREFIX = "https://rzp.io/i/"
-SHORT_URL_LEN = 7          # real ones look like https://rzp.io/i/nxrHnLJ
+#: THIS MUST NEVER BE A DOMAIN THE GATEWAY OWNS, AND IT USED TO BE.
+#:
+#: It was `https://rzp.io/i/`. That is Razorpay's real short-link host, and this
+#: module was minting seven-character codes on it that Razorpay had never
+#: issued. One of them — `https://rzp.io/i/BjQNyPd` — was stored on a real
+#: customer order, rendered under a green PAY Rs 1,600.00 button, and pressed.
+#: The gateway answered `404 {}` because it had never heard of the code. The
+#: customer was shown an empty page where a payment should have been.
+#:
+#: The old docstring argued this was fine because a short_url is not a `upi://`
+#: string. That reasoning is wrong. Composing a payment address on the payment
+#: processor's own domain and putting it in front of a customer is forgery of
+#: exactly the kind invariant 6 exists to forbid; the UPI payload is one
+#: instance of the class, not the definition of it.
+#:
+#: `.invalid` is reserved by RFC 2606 and can never resolve, so a simulated link
+#: now fails as a name rather than as a lie, and `storefront._link_health`'s
+#: shape gate refuses it before anything is fetched.
+SHORT_URL_PREFIX = "https://pay.gawaah-sim.invalid/l/"
+SHORT_URL_LEN = 7          # real Razorpay ones look like https://rzp.io/i/nxrHnLJ
 ID_LEN = 14                # real ones look like plink_ExjpAUN3gVHrPJ
 
 MIN_AMOUNT_PAISE = 100     # Payment Links floor: Rs 1
@@ -101,6 +137,27 @@ MAX_NOTE_LEN = 256         # ... 256 chars each
 FEE_BPS = 200              # 2% platform fee, in basis points
 GST_BPS = 1800             # 18% GST on the fee, in basis points
 BPS_DEN = 10000
+
+# --------------------------------------------------------------- MILAN
+#
+# SETTLEMENT. Razorpay pays a captured UPI payment into the merchant's bank
+# on the next settlement cycle — T+1 by default — and files the rows under
+# the day the batch went out, in IST. The simulator derives the same report
+# from the payments it already holds: a payment captured at unix `t` is due
+# in the batch of IST day `ist_day(t) + SETTLEMENT_T_PLUS_DAYS`, filed at
+# 00:00 IST of that day, with the fee and tax `pay_link` already computed in
+# basis points. Nothing below is typed in by hand; every figure is a fold
+# over `_payments`, which is what lets `tests/test_milan.py` check the report
+# against the payments collection row by row.
+#
+# The on-demand batch (`create_ondemand_settlement`) is the simulator's
+# analogue of Razorpay's `POST /v1/settlements/ondemand`: everything captured
+# and not yet settled goes out NOW. It exists because this process holds its
+# payments in memory and a demo cannot wait a calendar day for a T+1 batch.
+SETTLEMENT_T_PLUS_DAYS = 1
+IST_OFFSET_S = 5 * 3600 + 30 * 60      # the gateway's clock is Asia/Kolkata
+_DAY_S = 86400
+_UNIX_EPOCH_ORDINAL = _dt.date(1970, 1, 1).toordinal()
 
 #: Present on every body this module emits. Real Razorpay bodies lack it.
 SIM_BODY_MARKER = "_gawaah_sim"
@@ -300,6 +357,16 @@ class PayResult:
     deliveries: tuple[Delivery, ...]
 
 
+@dataclass(frozen=True)
+class RefundResult:
+    """WAAPSI. What `process_refund` / `fail_refund` produced: the refund
+    entity as the server now holds it, plus what went on the wire."""
+
+    refund: dict
+    payment: dict
+    deliveries: tuple[Delivery, ...]
+
+
 # --------------------------------------------------------------------------
 # config — the "swap in real keys is a config change" seam
 # --------------------------------------------------------------------------
@@ -420,6 +487,14 @@ class RazorpaySim:
         self._orders: dict[str, dict] = {}
         self._by_reference: dict[str, str] = {}
         self._deliveries: list[Delivery] = []
+        #: MILAN. payment id -> {settlement_id, settled_at} for payments swept
+        #: into an on-demand batch ahead of their T+1 day. A payment not in
+        #: here settles on its scheduled day; see `_settlement_of`.
+        self._ondemand: dict[str, dict] = {}
+        #: WAAPSI. refund id -> the refund entity, by the real entity's field
+        #: names (`id`, `payment_id`, `amount`, `status`, `created_at`), which
+        #: is the shape MILAN's `_refund_rows_of` reads for the recon report.
+        self._refunds: dict[str, dict] = {}
 
     # -- never leak the secret ------------------------------------------
     def __repr__(self) -> str:
@@ -521,6 +596,11 @@ class RazorpaySim:
         currency: str = "INR",
         upi_link: bool = True,
         idempotent: bool = False,
+        accept_partial: bool = False,
+        first_min_partial_amount: int | None = None,
+        reminder_enable: bool = False,
+        notify: Mapping[str, Any] | None = None,
+        customer: Mapping[str, Any] | None = None,
     ) -> dict:
         """POST /v1/payment_links.
 
@@ -532,6 +612,14 @@ class RazorpaySim:
         the same `reference_id` yields the existing link instead of an error.
         Default is False because the real API errors, and a simulator that is
         kinder than production is a trap.
+
+        KHATA fields, faithful to the real API's names: `accept_partial` lets
+        the customer pay in instalments and `first_min_partial_amount` floors
+        the first one; `reminder_enable` with `notify.sms` and a `customer.
+        contact` is what makes RAZORPAY send the reminders — this counter
+        sends no message of its own, ever. The simulator records them on the
+        entity and enforces the partial rules in `pay_link`; it sends nothing,
+        because it is a simulator.
         """
         self._api_gate("create_payment_link")
 
@@ -546,6 +634,46 @@ class RazorpaySim:
                 "BAD_REQUEST_ERROR", f"only INR is supported, got {currency!r}"
             )
         clean_notes = _validate_notes(notes)
+        if not isinstance(accept_partial, bool):
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR", "accept_partial must be a boolean")
+        min_partial = 0
+        if first_min_partial_amount is not None:
+            min_partial = int(paise(first_min_partial_amount))
+            if not accept_partial:
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    "first_min_partial_amount needs accept_partial to be true")
+            if min_partial < MIN_AMOUNT_PAISE or min_partial > amt:
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    f"first_min_partial_amount must be between {MIN_AMOUNT_PAISE} "
+                    f"and the amount ({amt}), got {min_partial}")
+        clean_notify = {"sms": False, "email": False}
+        if notify is not None:
+            if not isinstance(notify, Mapping):
+                raise RazorpaySimError("BAD_REQUEST_ERROR", "notify must be an object")
+            for k, v in notify.items():
+                if k not in clean_notify or not isinstance(v, bool):
+                    raise RazorpaySimError(
+                        "BAD_REQUEST_ERROR", f"notify.{k} must be a boolean sms/email flag")
+                clean_notify[k] = v
+        clean_customer: dict[str, str] = {}
+        if customer is not None:
+            if not isinstance(customer, Mapping):
+                raise RazorpaySimError("BAD_REQUEST_ERROR", "customer must be an object")
+            for k in ("name", "contact", "email"):
+                v = customer.get(k)
+                if v is None:
+                    continue
+                if not isinstance(v, str):
+                    raise RazorpaySimError(
+                        "BAD_REQUEST_ERROR", f"customer.{k} must be a string")
+                clean_customer[k] = v
+        if clean_notify["sms"] and not clean_customer.get("contact"):
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                "notify.sms needs customer.contact: there is nobody to send it to")
 
         if reference_id is not None:
             if not isinstance(reference_id, str) or not reference_id:
@@ -580,13 +708,15 @@ class RazorpaySim:
             "amount": amt,
             "amount_paid": 0,
             "currency": currency,
-            "accept_partial": False,
-            "first_min_partial_amount": 0,
+            "accept_partial": accept_partial,
+            "first_min_partial_amount": min_partial,
             "description": description,
             "reference_id": reference_id or "",
             "expire_by": expire_by if expire_by is not None else now + DEFAULT_EXPIRY_S,
             "expired_at": 0,
-            "reminder_enable": False,
+            "reminder_enable": bool(reminder_enable),
+            "notify": clean_notify,
+            "customer": clean_customer,
             "status": "created",
             "short_url": short,
             "upi_link": bool(upi_link),
@@ -595,6 +725,12 @@ class RazorpaySim:
             "payments": [],
             "created_at": now,
             "updated_at": now,
+            # THE MARKER, ON THE ONE BODY THAT GETS STORED. The module docstring
+            # has always promised this key on every body it emits; the payment
+            # link — the only body that is written onto an order and shown to a
+            # customer — was the one that did not carry it, so a simulated link
+            # and a real one were byte-indistinguishable once saved.
+            SIM_BODY_MARKER: True,
         }
         self._links[link_id] = link
         if reference_id:
@@ -654,11 +790,256 @@ class RazorpaySim:
         return {"entity": "collection", "count": len(items), "items": items}
 
     # ------------------------------------------------------------------
+    # MILAN — settlements, derived from the payments above
+    # ------------------------------------------------------------------
+    #
+    # Every method here is a READ over `_payments` except the on-demand batch,
+    # which records WHEN a payment went out and never changes an amount. No
+    # method here can capture, refund or mint anything.
+
+    @staticmethod
+    def _ist_day_index(unix: int) -> int:
+        """Days since the epoch, counted on the gateway's IST calendar."""
+        return (int(unix) + IST_OFFSET_S) // _DAY_S
+
+    @staticmethod
+    def _day_index_of(year: int, month: int, day: int) -> int:
+        return _dt.date(int(year), int(month), int(day)).toordinal() - _UNIX_EPOCH_ORDINAL
+
+    @staticmethod
+    def _day_label(day_index: int) -> str:
+        return _dt.date.fromordinal(int(day_index) + _UNIX_EPOCH_ORDINAL).isoformat()
+
+    def _settlement_of(self, payment: dict) -> dict | None:
+        """Where and when this payment settles, or None if it never will.
+
+        Scheduled: the IST day it was captured plus T+1, filed at 00:00 IST,
+        under a settlement id that is a pure function of that day (two runs of
+        one script file identical batches, like every other id here). An
+        on-demand sweep overrides the schedule for the payments it swept.
+        """
+        if payment.get("status") != "captured":
+            return None
+        pid = str(payment["id"])
+        swept = self._ondemand.get(pid)
+        if swept is not None:
+            return dict(swept)
+        due_index = self._ist_day_index(int(payment["created_at"])) + SETTLEMENT_T_PLUS_DAYS
+        return {
+            "settlement_id": "setl_" + self._token("settlement_day", due_index, ID_LEN),
+            "settled_at": due_index * _DAY_S - IST_OFFSET_S,
+            "day_index": due_index,
+            "ondemand": False,
+        }
+
+    def _utr_of(self, settlement_id: str) -> str:
+        digest = hashlib.sha256(settlement_id.encode("utf-8")).hexdigest()
+        return "UTRSIM" + digest[:10].upper()
+
+    def _refund_rows_of(self, payment: dict) -> list[dict]:
+        """Refund rows for one payment, from whatever refund state exists.
+
+        WAAPSI is adding refund entities to this simulator in the same build.
+        If a `_refunds` table is present its entries are read by the real
+        entity's field names (`id`, `payment_id`, `amount`, `created_at`);
+        otherwise the payment's own `amount_refunded` — a field every payment
+        here has carried from the start — is reported as one debit. Either
+        way the figure is the simulator's, not this method's.
+        """
+        refunds = getattr(self, "_refunds", None)
+        rows: list[dict] = []
+        if isinstance(refunds, dict):
+            for ref in refunds.values():
+                if not isinstance(ref, dict) or ref.get("payment_id") != payment["id"]:
+                    continue
+                amt = ref.get("amount")
+                if not isinstance(amt, int) or isinstance(amt, bool):
+                    continue
+                rows.append({
+                    "entity_id": str(ref.get("id")),
+                    "amount": int(amt),
+                    "created_at": int(ref.get("created_at") or payment["created_at"]),
+                })
+            if rows:
+                return rows
+        refunded = payment.get("amount_refunded")
+        if isinstance(refunded, int) and not isinstance(refunded, bool) and refunded > 0:
+            rows.append({
+                "entity_id": "rfnd_" + self._token("refund_of", int.from_bytes(
+                    hashlib.sha256(str(payment["id"]).encode("utf-8")).digest()[:6], "big"),
+                    ID_LEN),
+                "amount": int(refunded),
+                "created_at": int(payment["created_at"]),
+            })
+        return rows
+
+    def _recon_rows(self) -> list[dict]:
+        """Every settlement row this simulator can stand behind, undated."""
+        out: list[dict] = []
+        for pay in self._payments.values():
+            setl = self._settlement_of(pay)
+            if setl is None:
+                continue
+            amount = int(pay["amount"])
+            fee = int(pay["fee"])
+            tax = int(pay["tax"])
+            base = {
+                "settlement_id": setl["settlement_id"],
+                "settled_at": int(setl["settled_at"]),
+                "_day_index": int(setl["day_index"]),
+                "settlement_utr": self._utr_of(setl["settlement_id"]),
+                "settled": True,
+                "on_hold": False,
+                "currency": pay["currency"],
+                "method": pay["method"],
+                "order_id": pay["order_id"],
+                "order_receipt": (self._links.get(pay["_link_id"]) or {}).get("reference_id"),
+                "description": pay["description"],
+                "notes": dict(pay["notes"]),
+            }
+            out.append({
+                "entity_id": pay["id"],
+                "type": "payment",
+                "debit": 0,
+                # The simulator's own convention: `fee` is the platform fee and
+                # `tax` the GST on it, so both come off the top. (The real
+                # entity folds tax INTO fee; `milan` therefore reads `credit`
+                # rather than re-deriving it from either convention.)
+                "credit": amount - fee - tax,
+                "amount": amount,
+                "fee": fee,
+                "tax": tax,
+                "created_at": int(pay["created_at"]),
+                "payment_id": None,
+                SIM_BODY_MARKER: True,
+                **base,
+            })
+            for ref in self._refund_rows_of(pay):
+                out.append({
+                    "entity_id": ref["entity_id"],
+                    "type": "refund",
+                    "debit": int(ref["amount"]),
+                    "credit": 0,
+                    "amount": int(ref["amount"]),
+                    "fee": 0,
+                    "tax": 0,
+                    "created_at": int(ref["created_at"]),
+                    "payment_id": pay["id"],
+                    SIM_BODY_MARKER: True,
+                    **base,
+                })
+        return out
+
+    def settlements_recon(self, *, year: int, month: int, day: int,
+                          count: int = 1000, skip: int = 0) -> dict:
+        """GET /v1/settlements/recon/combined?year&month&day — one IST day.
+
+        Only batches that have GONE OUT by the simulator's clock are reported:
+        a payment captured today is due tomorrow and is in nobody's report
+        yet, which is exactly the T+1 gap `milan` names as
+        `settled_not_yet_in_recon`.
+        """
+        self._api_gate("settlements_recon")
+        wanted = self._day_index_of(year, month, day)
+        now_index = self._ist_day_index(self._now_unix())
+        items = []
+        for row in self._recon_rows():
+            if row["_day_index"] != wanted or row["_day_index"] > now_index:
+                continue
+            items.append({k: copy.deepcopy(v) for k, v in row.items() if k != "_day_index"})
+        items.sort(key=lambda r: (r["settled_at"], r["entity_id"]))
+        page = items[int(skip):int(skip) + int(count)]
+        return {"entity": "collection", "count": len(page), "items": page}
+
+    def fetch_settlements(self, *, count: int = 100, skip: int = 0) -> dict:
+        """GET /v1/settlements — one entity per batch that has gone out."""
+        self._api_gate("fetch_settlements")
+        now_index = self._ist_day_index(self._now_unix())
+        batches: dict[str, dict] = {}
+        for row in self._recon_rows():
+            if row["_day_index"] > now_index:
+                continue
+            b = batches.get(row["settlement_id"])
+            if b is None:
+                b = batches[row["settlement_id"]] = {
+                    "id": row["settlement_id"],
+                    "entity": "settlement",
+                    "amount": 0,
+                    "status": "processed",
+                    "fees": 0,
+                    "tax": 0,
+                    "utr": row["settlement_utr"],
+                    "created_at": int(row["settled_at"]),
+                    SIM_BODY_MARKER: True,
+                }
+            b["amount"] += int(row["credit"]) - int(row["debit"])
+            b["fees"] += int(row["fee"])
+            b["tax"] += int(row["tax"])
+        items = sorted(batches.values(), key=lambda b: (b["created_at"], b["id"]))
+        page = items[int(skip):int(skip) + int(count)]
+        return {"entity": "collection", "count": len(page), "items": page}
+
+    def fetch_settlement(self, settlement_id: str) -> dict:
+        """GET /v1/settlements/{id}."""
+        self._api_gate("fetch_settlement")
+        for b in self.fetch_settlements(count=10 ** 6)["items"]:
+            if b["id"] == settlement_id:
+                return b
+        raise RazorpaySimError("BAD_REQUEST_ERROR",
+                               f"settlement {settlement_id!r} does not exist")
+
+    def create_ondemand_settlement(self, *, settle_full_balance: bool = True) -> dict:
+        """POST /v1/settlements/ondemand — sweep what is captured and unsettled.
+
+        Amounts are never touched: the sweep only moves the batch a payment
+        belongs to from its T+1 day to now. Payments already in a batch that
+        has gone out stay where they are; a sweep with nothing to sweep is an
+        empty settlement, reported as such rather than refused.
+        """
+        self._api_gate("create_ondemand_settlement")
+        if not settle_full_balance:
+            raise RazorpaySimError("BAD_REQUEST_ERROR",
+                                   "this simulator settles the full balance only")
+        now = self._now_unix()
+        now_index = self._ist_day_index(now)
+        setl_id = self._mint_id("settlement", "setl_")
+        swept: list[str] = []
+        amount = fees = tax = 0
+        for pay in self._payments.values():
+            setl = self._settlement_of(pay)
+            if setl is None or setl["day_index"] <= now_index:
+                continue
+            self._ondemand[str(pay["id"])] = {
+                "settlement_id": setl_id, "settled_at": now,
+                "day_index": now_index, "ondemand": True,
+            }
+            swept.append(str(pay["id"]))
+            amount += int(pay["amount"]) - int(pay["fee"]) - int(pay["tax"])
+            fees += int(pay["fee"])
+            tax += int(pay["tax"])
+        return {
+            "id": setl_id,
+            "entity": "settlement.ondemand",
+            "amount_requested": amount,
+            "amount_settled": amount,
+            "amount_pending": 0,
+            "fees": fees,
+            "tax": tax,
+            "currency": "INR",
+            "settle_full_balance": True,
+            "status": "processed",
+            "created_at": now,
+            "payment_ids": swept,
+            SIM_BODY_MARKER: True,
+        }
+
+    # ------------------------------------------------------------------
     # the customer pays
     # ------------------------------------------------------------------
 
     def pay_link(
-        self, link_id: str, *, method: str = "upi", emit_captured: bool = False
+        self, link_id: str, *, method: str = "upi", emit_captured: bool = False,
+        amount_paise: int | None = None,
     ) -> PayResult:
         """Simulate the customer paying, then emit the webhook(s).
 
@@ -669,19 +1050,52 @@ class RazorpaySim:
         By default exactly ONE webhook goes out — `payment_link.paid`, the event
         the green state depends on. Pass `emit_captured=True` for the fuller
         real sequence (`payment.captured` then `payment_link.paid`).
+
+        `amount_paise` is a PARTIAL payment, allowed only on a link minted with
+        `accept_partial`, floored on the first instalment by
+        `first_min_partial_amount` and capped at what is still due — the real
+        API's rules. It emits `payment_link.partially_paid` while something
+        remains and `payment_link.paid` on the instalment that clears it. As on
+        the real entity, `amount` on the link is the ask for ever and
+        `amount_paid` is the running total; the PAYMENT entity carries only
+        what this instalment moved.
         """
         link = self._require_link(link_id)
-        if link["status"] != "created":
+        if link["status"] not in ("created", "partially_paid"):
             raise RazorpaySimError(
                 "BAD_REQUEST_ERROR",
                 f"Payment link in {link['status']} state is not payable",
             )
 
         now = self._now_unix()
-        amt = int(link["amount"])
+        ask = int(link["amount"])
+        already = int(link["amount_paid"])
+        due = ask - already
+        if amount_paise is None:
+            amt = due
+        else:
+            amt = int(paise(amount_paise))
+            if amt < MIN_AMOUNT_PAISE:
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    f"amount must be at least {MIN_AMOUNT_PAISE} paise, got {amt}")
+            if amt > due:
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    f"amount {amt} exceeds the {due} paise still due on this link")
+            if amt != due and not link["accept_partial"]:
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    "This payment link does not accept partial payments")
+            if already == 0 and amt < int(link["first_min_partial_amount"]):
+                raise RazorpaySimError(
+                    "BAD_REQUEST_ERROR",
+                    f"the first payment must be at least "
+                    f"{link['first_min_partial_amount']} paise, got {amt}")
         order_id = self._mint_id("order", "order_")
         pay_id = self._mint_id("payment", "pay_")
         failed = self._mode == "error"
+        paid_after = already if failed else already + amt
 
         fee = amt * FEE_BPS // BPS_DEN
         tax = fee * GST_BPS // BPS_DEN
@@ -694,12 +1108,12 @@ class RazorpaySim:
         order = {
             "id": order_id,
             "entity": "order",
-            "amount": amt,
-            "amount_paid": 0 if failed else amt,
-            "amount_due": amt if failed else 0,
+            "amount": ask,
+            "amount_paid": paid_after,
+            "amount_due": ask - paid_after,
             "currency": link["currency"],
             "receipt": link["reference_id"],
-            "status": "attempted" if failed else "paid",
+            "status": "attempted" if failed else ("paid" if paid_after == ask else "attempted"),
             "attempts": 1,
             "notes": dict(link["notes"]),
             "created_at": now,
@@ -740,8 +1154,8 @@ class RazorpaySim:
             # link stays payable; nothing goes on the wire
             return PayResult(self._payment_view(payment), self._link_view(link), ())
 
-        link["status"] = "paid"
-        link["amount_paid"] = amt
+        link["amount_paid"] = paid_after
+        link["status"] = "paid" if paid_after == ask else "partially_paid"
         link["updated_at"] = now
         link["payments"].append(
             {
@@ -753,9 +1167,10 @@ class RazorpaySim:
             }
         )
 
-        events = ["payment_link.paid"]
+        link_event = "payment_link.paid" if link["status"] == "paid" else "payment_link.partially_paid"
+        events = [link_event]
         if emit_captured or self._mode == "out_of_order":
-            events = ["payment.captured", "payment_link.paid"]
+            events = ["payment.captured", link_event]
         if self._mode == "out_of_order":
             events.reverse()
 
@@ -767,6 +1182,187 @@ class RazorpaySim:
 
         sent = tuple(self._push(s) for s in specs)
         return PayResult(self._payment_view(payment), self._link_view(link), sent)
+
+    # ------------------------------------------------------------------
+    # WAAPSI: refunds
+    # ------------------------------------------------------------------
+    #
+    # `refund` is the API call — POST /v1/payments/{id}/refund — and, like
+    # `create_payment_link`, it emits NOTHING: the entity comes back
+    # `pending` and the money is not shown to have moved. `process_refund`
+    # is the far side doing the work minutes later and pushing the signed
+    # `refund.processed` at the sink; `fail_refund` is the other outcome.
+    # Splitting them is what lets the demo show a refund sitting in
+    # "requested" — the state a real test-mode refund sits in for minutes —
+    # and then turning REFUNDED on the callback and on nothing else.
+
+    def refund(
+        self, payment_id: str, amount_paise: int | None = None, *,
+        speed: str = "normal", receipt: str | None = None,
+        notes: Mapping[str, str] | None = None,
+    ) -> dict:
+        """POST /v1/payments/{id}/refund. Returns the refund entity, `pending`.
+
+        The real API's rules: the payment must be captured; the amount is
+        integer paise, at least Rs 1, and no more than what is still
+        refundable on the payment (`amount - amount_refunded`); `speed` is
+        `normal` or `optimum`; `notes` is capped like every other notes
+        object. The payment's own `amount_refunded` / `refund_status` move
+        HERE, at request time, exactly as the real entity's do.
+        """
+        self._api_gate("refund")
+        pay = self._payments.get(payment_id)
+        if pay is None:
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR", f"The id provided does not exist: {payment_id!r}")
+        if pay["status"] != "captured":
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                f"payment {payment_id} is {pay['status']!r}; only a captured "
+                "payment can be refunded")
+        refundable = int(pay["amount"]) - int(pay["amount_refunded"])
+        amt = refundable if amount_paise is None else int(paise(amount_paise))
+        if amt < MIN_AMOUNT_PAISE:
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                f"amount must be at least {MIN_AMOUNT_PAISE} paise, got {amt}")
+        if amt > refundable:
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                f"The refund amount provided ({amt}) is greater than the amount "
+                f"still refundable on this payment ({refundable})")
+        if speed not in REFUND_SPEEDS:
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR", f"speed must be one of {REFUND_SPEEDS}, got {speed!r}")
+        if receipt is not None and (not isinstance(receipt, str) or len(receipt) > 40):
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR", "receipt must be a string of at most 40 characters")
+        clean_notes = _validate_notes(notes or {})
+
+        now = self._now_unix()
+        rid = self._mint_id("refund", "rfnd_")
+        refund = {
+            "id": rid,
+            "entity": "refund",
+            "amount": amt,
+            "currency": pay["currency"],
+            "payment_id": payment_id,
+            "notes": clean_notes,
+            "receipt": receipt,
+            "acquirer_data": {"arn": None},
+            "created_at": now,
+            "batch_id": None,
+            "status": "pending",
+            "speed_processed": None,
+            "speed_requested": speed,
+            SIM_BODY_MARKER: True,
+        }
+        pay["amount_refunded"] = int(pay["amount_refunded"]) + amt
+        pay["refund_status"] = (
+            "full" if pay["amount_refunded"] == int(pay["amount"]) else "partial")
+        self._refunds[rid] = refund
+        return self._refund_view(refund)
+
+    def fetch_refund(self, refund_id: str) -> dict:
+        """GET /v1/refunds/{id}."""
+        self._api_gate("fetch_refund")
+        return self._refund_view(self._require_refund(refund_id))
+
+    def fetch_refunds(self, *, payment_id: str | None = None) -> dict:
+        """GET /v1/refunds, or /v1/payments/{id}/refunds when narrowed."""
+        self._api_gate("fetch_refunds")
+        items = [self._refund_view(r) for r in self._refunds.values()
+                 if payment_id is None or r["payment_id"] == payment_id]
+        return {"entity": "collection", "count": len(items), "items": items}
+
+    def process_refund(self, refund_id: str, *, emit_created: bool = False
+                       ) -> RefundResult:
+        """The far side does the refund and pushes the SIGNED `refund.processed`.
+
+        Deliberately NOT gated by `_api_gate`: the gateway's back office is
+        not our HTTP client. `wrong_amount` mode puts the delta on the refund
+        entity's amount so only the kernel's amount gate can catch it;
+        `duplicate_webhook` pushes the same signed bytes twice.
+        """
+        ref = self._require_refund(refund_id)
+        if ref["status"] != "pending":
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                f"refund {refund_id} is {ref['status']!r}, not pending")
+        now = self._now_unix()
+        ref["status"] = "processed"
+        ref["speed_processed"] = "instant" if ref["speed_requested"] == "optimum" else "normal"
+        ref["processed_at"] = now
+        pay = self._payments[ref["payment_id"]]
+        events = ["refund.created", "refund.processed"] if emit_created else ["refund.processed"]
+        specs = [self._build_refund(ev, ref, pay, now) for ev in events]
+        if self._mode == "duplicate_webhook":
+            specs = [s for s in specs for _ in (0, 1)]
+        sent = tuple(self._push(s) for s in specs)
+        return RefundResult(self._refund_view(ref), self._payment_view(pay), sent)
+
+    def fail_refund(self, refund_id: str) -> RefundResult:
+        """The far side could not refund: the money stays with us and the
+        payment's `amount_refunded` is given back, then a SIGNED
+        `refund.failed` goes out."""
+        ref = self._require_refund(refund_id)
+        if ref["status"] != "pending":
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR",
+                f"refund {refund_id} is {ref['status']!r}, not pending")
+        now = self._now_unix()
+        ref["status"] = "failed"
+        pay = self._payments[ref["payment_id"]]
+        pay["amount_refunded"] = int(pay["amount_refunded"]) - int(ref["amount"])
+        pay["refund_status"] = (
+            None if pay["amount_refunded"] == 0
+            else "full" if pay["amount_refunded"] == int(pay["amount"]) else "partial")
+        spec = self._build_refund("refund.failed", ref, pay, now)
+        sent = (self._push(spec),)
+        return RefundResult(self._refund_view(ref), self._payment_view(pay), sent)
+
+    def _build_refund(self, event: str, refund: dict, payment: dict, now: int
+                      ) -> "_Spec":
+        """A signed refund event, in the real envelope: `contains` names the
+        refund and the payment, `payload.refund.entity` is the refund."""
+        if event not in EVENTS or not event.startswith("refund."):
+            raise ValueError(f"{event!r} is not a refund event this simulator emits")
+        delta = self._wrong_amount_delta if self._mode == "wrong_amount" else 0
+        ref_body = {k: v for k, v in refund.items() if not k.startswith("_")}
+        ref_body["amount"] = int(ref_body["amount"]) + delta
+        pay_body = {k: v for k, v in payment.items() if not k.startswith("_")}
+        body_obj = {
+            "entity": "event",
+            "account_id": self._account_id,
+            "event": event,
+            "contains": ["refund", "payment"],
+            "payload": {
+                "refund": {"entity": ref_body},
+                "payment": {"entity": pay_body},
+            },
+            "created_at": now,
+            SIM_BODY_MARKER: True,
+        }
+        body = serialize_body(body_obj)
+        event_id = self._token("event", self._next("event"), ID_LEN)
+        headers = MappingProxyType(
+            {
+                "Content-Type": "application/json",
+                "X-Razorpay-Event-Id": event_id,
+                "X-Razorpay-Signature": sign_body(body, self._secret),
+            }
+        )
+        return _Spec(event=event, event_id=event_id, headers=headers, body=body)
+
+    def _require_refund(self, refund_id: str) -> dict:
+        ref = self._refunds.get(refund_id)
+        if ref is None:
+            raise RazorpaySimError(
+                "BAD_REQUEST_ERROR", f"refund {refund_id!r} does not exist")
+        return ref
+
+    def _refund_view(self, refund: dict) -> dict:
+        return {k: copy.deepcopy(v) for k, v in refund.items() if not k.startswith("_")}
 
     # ------------------------------------------------------------------
     # webhook construction

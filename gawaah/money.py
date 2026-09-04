@@ -51,9 +51,26 @@ def from_rupees_str(s: str) -> Paise:
         whole, _, frac = s.partition(".")
     else:
         whole, frac = s, ""
-    if not whole.isdigit() and whole != "":
+    # `isdecimal`, NOT `isdigit`. `isdigit()` is True for characters `int()`
+    # then refuses — superscripts, most obviously: '4820²'.isdigit() is True
+    # and int('4820²') raises a bare ValueError. And because MoneyError
+    # subclasses ValueError, that bare one is NOT caught by any caller's
+    # `except MoneyError` — so a stray character from an OCR paste or a phone
+    # keyboard produced an unnamed crash in the day-close cash count, in a
+    # product where every other refusal has a name.
+    #
+    # `isdecimal()` is exactly the set `int()` accepts, so the ValueError
+    # becomes unreachable rather than merely unlikely.
+    #
+    # It still accepts non-ASCII decimal digits — '٥٠' and '५०' are decimal and
+    # int() reads them as 50. That is deliberate on a counter that already
+    # transliterates Devanagari and Bengali digits in the assistant. The
+    # browser's own field is stricter (ASCII only), so the client refuses first
+    # and the server is the more permissive of the two, which is the safe
+    # direction for that disagreement to run.
+    if not whole.isdecimal() and whole != "":
         raise MoneyError(f"bad rupee string: {s!r}")
-    if frac and not frac.isdigit():
+    if frac and not frac.isdecimal():
         raise MoneyError(f"bad rupee string: {s!r}")
     if len(frac) > 2:
         raise MoneyError(f"sub-paisa precision is not money: {s!r}")
@@ -63,8 +80,18 @@ def from_rupees_str(s: str) -> Paise:
 
 
 def to_rupees_str(p: Paise) -> str:
-    """Render Paise as a rupee string. Never returns a float."""
-    p = int(p)
+    """Render Paise as a rupee string. Never returns a float.
+
+    THE GUARD RUNS FIRST, and the order matters. This was `int(p)`, which is
+    `paise(int(x))` written the other way round: `int()` truncates before
+    anything can refuse, so `to_rupees_str(12.9)` returned "0.12" and
+    `to_rupees_str(-0.5)` returned "0.00" — truncated AND unsigned — and then
+    rendered it as a confident rupee string.
+
+    This is the render function behind every figure in the product. It was the
+    only money primitive that never called `paise()`.
+    """
+    p = int(paise(p))
     sign = "-" if p < 0 else ""
     p = abs(p)
     return f"{sign}{p // 100}.{p % 100:02d}"
