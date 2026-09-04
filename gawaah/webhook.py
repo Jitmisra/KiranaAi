@@ -741,6 +741,495 @@ def _note(entity: dict, field: str) -> Any:
     return None
 
 
+# ---------------------------------------------------------------- collections
+#
+# KHATA. A collection link is minted for a customer's whole outstanding
+# balance with accept_partial on, so it settles in PIECES: a
+# `payment_link.partially_paid` per instalment and a `payment_link.paid` at
+# the end. The four-condition predicate above cannot be used for it — its
+# fourth condition is "the settled amount equals the ask, exactly", and a
+# partial is by definition not that — and it MUST NOT be loosened to allow it,
+# because that is the one gate standing between a ₹5 payment and a green
+# ₹214.37 bill. So collections get a predicate of their own, below, which
+# shares the first two gates verbatim (raw-bytes HMAC, then parse) and then
+# asks a different question: which collection, and how many paise did THIS
+# signed event carry.
+#
+# It is deliberately disjoint from the green predicate by construction:
+#   * a bill link carries notes.session_id and no collection_id; a collection
+#     link carries notes.collection_id and no session_id. Each predicate denies
+#     the other's shape by name (`carries_session_id` / `missing_session_id`).
+#   * `payment.captured` is NOT a collection event. Razorpay sends one per
+#     payment alongside the link event, with a different event id; crediting
+#     both would count every instalment twice. Only the LINK events credit.
+#   * this predicate keeps no replay store. The kernel's `captures` table,
+#     UNIQUE on the signed event id, is the replay authority — a store that
+#     survives a restart, which an in-process set does not.
+
+COLLECTION_EVENTS: frozenset[str] = frozenset(
+    {"payment_link.partially_paid", "payment_link.paid"}
+)
+#: Signed events that CLOSE a collection without moving money.
+COLLECTION_CLOSE_EVENTS: dict[str, str] = {
+    "payment_link.expired": "EXPIRED",
+    "payment_link.cancelled": "CANCELLED",
+}
+_COLLECTION_STATUS: dict[str, str] = {
+    "payment_link.partially_paid": "partially_paid",
+    "payment_link.paid": "paid",
+}
+
+COLLECTION_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "capture",
+        "closes",
+        "secret_not_configured",
+        "bad_signature",
+        "malformed_body",
+        "missing_event",
+        "event_not_collection",
+        "no_link_entity",
+        "carries_session_id",
+        "missing_collection_id",
+        "entity_status_missing",
+        "entity_status_unexpected",
+        "currency_missing",
+        "wrong_currency",
+        "amount_missing",
+        "amount_not_integer",
+        "payment_entity_missing",
+        "payment_status_not_captured",
+        "payment_amount_missing",
+        "payment_exceeds_link_total",
+        "payment_not_positive",
+        "unknown_collection",
+    }
+)
+
+
+@dataclass(frozen=True)
+class CollectionVerdict:
+    """What one delivery says about a collection. `capture` is the only field
+    the kernel acts on; `closes` names a close outcome for a signed
+    expired/cancelled event; everything else is for the audit line."""
+
+    capture: bool
+    reason: str
+    detail: str = ""
+    signature_valid: bool = False
+    event: Optional[str] = None
+    event_id: Optional[str] = None
+    collection_id: Optional[str] = None
+    #: The paise THIS signed event's payment carried. Never the cumulative.
+    amount_paise: Optional[int] = None
+    #: The link's cumulative `amount_paid` as the signed body reports it.
+    link_amount_paid: Optional[int] = None
+    #: The link's ask, for the audit line.
+    link_amount: Optional[int] = None
+    payment_id: Optional[str] = None
+    #: True on `payment_link.paid`: the gateway has closed the link.
+    final: bool = False
+    closes: Optional[str] = None
+    body_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if self.reason not in COLLECTION_REASON_CODES:
+            raise WebhookError(f"reason {self.reason!r} is outside COLLECTION_REASON_CODES")
+        if self.capture and self.reason != "capture":
+            raise WebhookError("a capture verdict must carry reason 'capture'")
+        if self.capture and (self.amount_paise is None or self.collection_id is None):
+            raise WebhookError("a capture verdict must name a collection and an amount")
+
+
+class CollectionPredicate:
+    """Signature over raw bytes, then: which collection, how much, is it final.
+
+    `collection_lookup` is ``collection_id -> something truthy | None``; it is
+    consulted so an envelope naming a collection this counter never minted is
+    refused as `unknown_collection` rather than handed to the kernel.
+    """
+
+    def __init__(self, collection_lookup: Callable[[str], Any]) -> None:
+        if not callable(collection_lookup):
+            raise WebhookError("collection_lookup must be callable")
+        self._lookup = collection_lookup
+
+    def evaluate(self, raw_body: bytes, signature: str, secret: str) -> CollectionVerdict:
+        if isinstance(raw_body, (bytearray, memoryview)):
+            raw_body = bytes(raw_body)
+        if not isinstance(raw_body, bytes):
+            raise WebhookError(f"raw_body must be bytes, got {type(raw_body).__name__}")
+        body_sha = hashlib.sha256(raw_body).hexdigest()
+
+        def deny(reason: str, detail: str, **extra: Any) -> CollectionVerdict:
+            return CollectionVerdict(capture=False, reason=reason, detail=detail,
+                                     body_sha256=body_sha, **extra)
+
+        # GATES 0 and 1 are the green predicate's, unchanged: no parse above
+        # the HMAC.
+        if not _as_ascii_bytes(secret, encoding="utf-8"):
+            return deny("secret_not_configured",
+                        "RAZORPAY_WEBHOOK_SECRET is empty; every signature would be forgeable")
+        if not verify_signature(raw_body, signature, secret):
+            return deny("bad_signature",
+                        "HMAC-SHA256 over the raw request body did not match; body discarded unparsed")
+        parsed = _parse_body(raw_body)
+        if parsed is None:
+            return deny("malformed_body", "signature valid but body is not a JSON object",
+                        signature_valid=True)
+        ok: dict[str, Any] = {"signature_valid": True}
+
+        # The exactly-once key, from HMAC-verified content only. Same rule as
+        # the green predicate: the envelope's own id, else the signed bytes.
+        body_event_id = parsed.get("id")
+        ok["event_id"] = (body_event_id if isinstance(body_event_id, str) and body_event_id
+                          else body_sha)
+
+        event = parsed.get("event")
+        if not isinstance(event, str) or not event:
+            return deny("missing_event", "no 'event' string in the envelope", **ok)
+        ok["event"] = event
+        closes = COLLECTION_CLOSE_EVENTS.get(event)
+        if event not in COLLECTION_EVENTS and closes is None:
+            return deny("event_not_collection",
+                        f"{event!r} is not a collection event {sorted(COLLECTION_EVENTS)}",
+                        **ok)
+
+        entities = _entities(parsed.get("payload"))
+        link = entities.get("payment_link")
+        if link is None:
+            return deny("no_link_entity", "payload carries no payment_link.entity", **ok)
+        # A link that names a session is a BILL. It belongs to the green
+        # predicate and must not be creditable here as well.
+        if _note(link, "session_id") is not None:
+            return deny("carries_session_id",
+                        "payment_link.entity.notes names a session_id: that is a "
+                        "bill link, not a collection", **ok)
+        collection_id = _note(link, "collection_id")
+        if collection_id is None:
+            return deny("missing_collection_id",
+                        "payment_link.entity.notes carries no collection_id", **ok)
+        ok["collection_id"] = collection_id
+        try:
+            known = self._lookup(collection_id)
+        except Exception as exc:  # a broken lookup never credits, never 500s
+            return deny("unknown_collection",
+                        f"collection lookup raised {type(exc).__name__}: {exc}", **ok)
+        if not known:
+            return deny("unknown_collection",
+                        f"collection {collection_id!r} was not minted by this counter", **ok)
+
+        if closes is not None:
+            return CollectionVerdict(
+                capture=False, reason="closes", closes=closes,
+                detail=f"signed {event}: the gateway closed collection {collection_id}",
+                body_sha256=body_sha, **ok)
+
+        # The link must SAY what state it is in, and in what unit. Fail closed.
+        status = link.get("status")
+        if not isinstance(status, str) or not status:
+            return deny("entity_status_missing",
+                        f"payment_link.entity carries no 'status' string (got {status!r})",
+                        **ok)
+        want = _COLLECTION_STATUS[event]
+        if status != want:
+            return deny("entity_status_unexpected",
+                        f"payment_link.entity.status is {status!r}, expected {want!r} for {event}",
+                        **ok)
+        currency = link.get("currency")
+        if not isinstance(currency, str) or not currency:
+            return deny("currency_missing", "payment_link.entity carries no 'currency'", **ok)
+        if currency != CURRENCY:
+            return deny("wrong_currency",
+                        f"payment_link.entity.currency is {currency!r}, not {CURRENCY}", **ok)
+
+        try:
+            link_amount = int(paise(link.get("amount"))) if link.get("amount") is not None else None
+            link_paid = (int(paise(link.get("amount_paid")))
+                         if link.get("amount_paid") is not None else None)
+        except MoneyError as exc:
+            return deny("amount_not_integer",
+                        f"payment_link.entity amounts are not integer paise: {exc}", **ok)
+        if link_amount is None or link_paid is None:
+            return deny("amount_missing",
+                        "payment_link.entity does not report both 'amount' and 'amount_paid'",
+                        **ok)
+        ok["link_amount"] = link_amount
+        ok["link_amount_paid"] = link_paid
+
+        # THE AMOUNT CREDITED IS THIS PAYMENT'S, NOT THE LINK'S RUNNING TOTAL.
+        # `amount_paid` on the link is cumulative and rises with every
+        # instalment; crediting it per event would count ₹200 + ₹450 as
+        # ₹200 + ₹650. The nested payment entity carries what THIS event's
+        # payment moved, and its own event id keys it exactly once.
+        payment = entities.get("payment")
+        if payment is None:
+            return deny("payment_entity_missing",
+                        f"{event} carries no payment.entity, so how many paise this "
+                        "particular event moved is unknown; a partial that cannot be "
+                        "sized abstains", **ok)
+        pstatus = payment.get("status")
+        if pstatus != "captured":
+            return deny("payment_status_not_captured",
+                        f"payment.entity.status is {pstatus!r}, not 'captured'", **ok)
+        pcur = payment.get("currency")
+        if not isinstance(pcur, str) or pcur != CURRENCY:
+            return deny("wrong_currency",
+                        f"payment.entity.currency is {pcur!r}, not {CURRENCY}", **ok)
+        raw_amt = payment.get("amount")
+        if raw_amt is None:
+            return deny("payment_amount_missing", "payment.entity has no 'amount'", **ok)
+        try:
+            amount = int(paise(raw_amt))
+        except MoneyError as exc:
+            return deny("amount_not_integer",
+                        f"payment.entity.amount is not integer paise: {exc}", **ok)
+        if amount <= 0:
+            return deny("payment_not_positive", f"payment.entity.amount is {amount}", **ok)
+        # A single payment larger than the link's own cumulative is a body
+        # contradicting itself. Nothing is chosen between the two numbers.
+        if amount > link_paid:
+            return deny("payment_exceeds_link_total",
+                        f"payment.entity.amount {amount} exceeds the link's own "
+                        f"amount_paid {link_paid}: the body contradicts itself", **ok)
+        pid = payment.get("id")
+        return CollectionVerdict(
+            capture=True, reason="capture",
+            detail=(f"signature verified over {len(raw_body)} raw bytes; {event}; "
+                    f"collection {collection_id}; this payment {amount} paise; "
+                    f"link reports {link_paid} of {link_amount} paid"),
+            amount_paise=amount,
+            payment_id=pid if isinstance(pid, str) and pid else None,
+            final=(event == "payment_link.paid"),
+            body_sha256=body_sha,
+            **ok,
+        )
+
+
+# ---------------------------------------------------------------- refunds
+#
+# WAAPSI. A refund goes back to the customer through the gateway's Refunds
+# API and is REFUNDED on this counter only when the gateway's own signed
+# `refund.processed` arrives — the HTTP answer to the refund call, however
+# confident, never moves it. The predicate below shares GATES 0 and 1 with the
+# green one verbatim (no parse above the HMAC) and then asks its own question:
+# which refund this counter asked for does this signed event name, how many
+# paise does the SIGNED refund entity carry, and did the gateway say
+# processed, failed, or merely created.
+#
+# It is disjoint from the green predicate by construction: `refund.*` is not
+# in GREEN_EVENTS, so no refund body can green a bill; and no `payment.*` or
+# `payment_link.*` body is a refund event, so no payment can move a refund.
+# Like the collection predicate it keeps no replay store — the kernel's
+# `refund_events` table, UNIQUE on the signed event id, is the authority.
+#
+# The amount gate is in the KERNEL, not here: the predicate reports the
+# signed amount and the kernel compares it against the paise it asked for,
+# parking a disagreement with needs_human. That keeps "what the wire said"
+# and "what this counter decided" in separate places with separate names.
+
+REFUND_EVENTS: frozenset[str] = frozenset(
+    {"refund.created", "refund.processed", "refund.failed"}
+)
+#: The status the SIGNED refund entity must report for each event. A
+#: `refund.processed` whose entity says "pending" is a contradiction, not a
+#: refund. `refund.created` is acknowledged whatever the status says.
+_REFUND_STATUS: dict[str, str] = {
+    "refund.processed": "processed",
+    "refund.failed": "failed",
+}
+_REFUND_OUTCOME: dict[str, str] = {
+    "refund.processed": "PROCESSED",
+    "refund.failed": "FAILED",
+}
+
+REFUND_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "refund",
+        "secret_not_configured",
+        "bad_signature",
+        "malformed_body",
+        "missing_event",
+        "event_not_refund",
+        "no_refund_entity",
+        "entity_status_missing",
+        "entity_status_unexpected",
+        "currency_missing",
+        "wrong_currency",
+        "amount_missing",
+        "amount_not_integer",
+        "amount_not_positive",
+        "refund_id_missing",
+        "payment_id_missing",
+        "unknown_refund",
+    }
+)
+
+
+@dataclass(frozen=True)
+class RefundVerdict:
+    """What one delivery says about a refund. `known` is the only field the
+    kernel acts on — a verified refund event naming a refund this counter
+    asked for — and `outcome` says which way it went; everything else is for
+    the audit line."""
+
+    known: bool
+    reason: str
+    detail: str = ""
+    signature_valid: bool = False
+    event: Optional[str] = None
+    event_id: Optional[str] = None
+    #: This counter's own key for the refund, from the signed notes or from
+    #: the row the gateway id resolved to.
+    refund_key: Optional[str] = None
+    gateway_refund_id: Optional[str] = None
+    payment_id: Optional[str] = None
+    #: The paise the SIGNED refund entity carries. The kernel compares.
+    amount_paise: Optional[int] = None
+    status: Optional[str] = None
+    #: PROCESSED / FAILED for the two events that move a refund; None for a
+    #: `refund.created`, which is acknowledged and changes nothing.
+    outcome: Optional[str] = None
+    body_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if self.reason not in REFUND_REASON_CODES:
+            raise WebhookError(f"reason {self.reason!r} is outside REFUND_REASON_CODES")
+        if self.known and self.reason != "refund":
+            raise WebhookError("a known refund verdict must carry reason 'refund'")
+        if self.known and self.refund_key is None:
+            raise WebhookError("a known refund verdict must name a refund_key")
+
+
+class RefundPredicate:
+    """Signature over raw bytes, then: which refund, how much, which way.
+
+    `refund_lookup` is ``(refund_key | None, gateway_refund_id | None) ->
+    row | None``. It is asked with the key from the signed notes first and
+    the gateway's own id as the fallback, so a callback whose notes were
+    lost on the way still finds the row the gateway id was recorded on. An
+    envelope naming a refund this counter never asked for is refused as
+    `unknown_refund` rather than handed to the kernel.
+    """
+
+    def __init__(self, refund_lookup: Callable[[Optional[str], Optional[str]], Any]) -> None:
+        if not callable(refund_lookup):
+            raise WebhookError("refund_lookup must be callable")
+        self._lookup = refund_lookup
+
+    def evaluate(self, raw_body: bytes, signature: str, secret: str) -> RefundVerdict:
+        if isinstance(raw_body, (bytearray, memoryview)):
+            raw_body = bytes(raw_body)
+        if not isinstance(raw_body, bytes):
+            raise WebhookError(f"raw_body must be bytes, got {type(raw_body).__name__}")
+        body_sha = hashlib.sha256(raw_body).hexdigest()
+
+        def deny(reason: str, detail: str, **extra: Any) -> RefundVerdict:
+            return RefundVerdict(known=False, reason=reason, detail=detail,
+                                 body_sha256=body_sha, **extra)
+
+        # GATES 0 and 1 are the green predicate's, unchanged: no parse above
+        # the HMAC.
+        if not _as_ascii_bytes(secret, encoding="utf-8"):
+            return deny("secret_not_configured",
+                        "RAZORPAY_WEBHOOK_SECRET is empty; every signature would be forgeable")
+        if not verify_signature(raw_body, signature, secret):
+            return deny("bad_signature",
+                        "HMAC-SHA256 over the raw request body did not match; body discarded unparsed")
+        parsed = _parse_body(raw_body)
+        if parsed is None:
+            return deny("malformed_body", "signature valid but body is not a JSON object",
+                        signature_valid=True)
+        ok: dict[str, Any] = {"signature_valid": True}
+
+        # The exactly-once key, from HMAC-verified content only.
+        body_event_id = parsed.get("id")
+        ok["event_id"] = (body_event_id if isinstance(body_event_id, str) and body_event_id
+                          else body_sha)
+
+        event = parsed.get("event")
+        if not isinstance(event, str) or not event:
+            return deny("missing_event", "no 'event' string in the envelope", **ok)
+        ok["event"] = event
+        if event not in REFUND_EVENTS:
+            return deny("event_not_refund",
+                        f"{event!r} is not a refund event {sorted(REFUND_EVENTS)}", **ok)
+
+        payload = parsed.get("payload")
+        holder = payload.get("refund") if isinstance(payload, dict) else None
+        entity = holder.get("entity") if isinstance(holder, dict) else None
+        if not isinstance(entity, dict):
+            return deny("no_refund_entity", "payload carries no refund.entity", **ok)
+
+        rid = entity.get("id")
+        if not isinstance(rid, str) or not rid:
+            return deny("refund_id_missing", "refund.entity carries no 'id' string", **ok)
+        ok["gateway_refund_id"] = rid
+        pid = entity.get("payment_id")
+        if not isinstance(pid, str) or not pid:
+            return deny("payment_id_missing",
+                        "refund.entity carries no 'payment_id' string; a refund that "
+                        "names no payment cannot be matched to a bill", **ok)
+        ok["payment_id"] = pid
+
+        # The entity must SAY what happened, and in what unit. Fail closed.
+        status = entity.get("status")
+        if not isinstance(status, str) or not status:
+            return deny("entity_status_missing",
+                        f"refund.entity carries no 'status' string (got {status!r})", **ok)
+        ok["status"] = status
+        want = _REFUND_STATUS.get(event)
+        if want is not None and status != want:
+            return deny("entity_status_unexpected",
+                        f"refund.entity.status is {status!r}, expected {want!r} for {event}",
+                        **ok)
+        currency = entity.get("currency")
+        if not isinstance(currency, str) or not currency:
+            return deny("currency_missing", "refund.entity carries no 'currency'", **ok)
+        if currency != CURRENCY:
+            return deny("wrong_currency",
+                        f"refund.entity.currency is {currency!r}, not {CURRENCY}", **ok)
+        raw_amt = entity.get("amount")
+        if raw_amt is None:
+            return deny("amount_missing", "refund.entity has no 'amount'", **ok)
+        try:
+            amount = int(paise(raw_amt))
+        except MoneyError as exc:
+            return deny("amount_not_integer",
+                        f"refund.entity.amount is not integer paise: {exc}", **ok)
+        if amount <= 0:
+            return deny("amount_not_positive", f"refund.entity.amount is {amount}", **ok)
+        ok["amount_paise"] = amount
+
+        key = _note(entity, "refund_key")
+        try:
+            row = self._lookup(key, rid)
+        except Exception as exc:  # a broken lookup never moves a refund, never 500s
+            return deny("unknown_refund",
+                        f"refund lookup raised {type(exc).__name__}: {exc}", **ok)
+        if not row:
+            return deny("unknown_refund",
+                        f"refund {rid!r}" + (f" (notes.refund_key {key!r})" if key else "")
+                        + " was not asked for by this counter", **ok)
+        row_key = getattr(row, "refund_key", None)
+        if not isinstance(row_key, str) or not row_key:
+            row_key = row.get("refund_key") if isinstance(row, dict) else None
+        if not isinstance(row_key, str) or not row_key:
+            return deny("unknown_refund",
+                        "the refund lookup answered with a row that carries no refund_key",
+                        **ok)
+        return RefundVerdict(
+            known=True, reason="refund",
+            detail=(f"signature verified over {len(raw_body)} raw bytes; {event}; "
+                    f"refund {row_key} ({rid}) on {pid}; signed amount {amount} paise; "
+                    f"status {status}"),
+            refund_key=row_key,
+            outcome=_REFUND_OUTCOME.get(event),
+            body_sha256=body_sha,
+            **ok,
+        )
+
+
 def _collect(entities: dict[str, dict], get: Callable[[dict], Any]) -> dict[str, Any]:
     """Every non-None value the given accessor finds, keyed by entity name.
 
