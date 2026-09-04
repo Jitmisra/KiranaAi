@@ -1,0 +1,206 @@
+/* ===========================================================================
+   THE FACE OF THE SHOP — its link, its code, its photograph.
+   ---------------------------------------------------------------------------
+   Read by ShopProfile.tsx (the shopkeeper's "Your shop" screen) and by the
+   header region of Shop.tsx (the customer's phone). Everything here is
+   prefixed `shf-` so nothing collides with app.css, admin.css, manage.css or
+   storefront.css, each of which is owned by another screen.
+
+   Tokens only. Blue is the machine's own mark; green, amber and red stay
+   reserved for money and recognition, and there is neither on this surface.
+   A link that was printed for a DIFFERENT shop is said in ink on glass, with
+   a navy rule — it is a fact about the sticker, not a verdict on a rupee.
+   =========================================================================== */
+
+/* ------------------------------------------------------- the storefront -- */
+
+/* The shop's plate: photograph, name, address. Glass over the wash, with the
+   flute before the name, so the customer's first screen carries the same
+   signature as the shopkeeper's. */
+.shf-plate {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s4);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-1), var(--glass-edge);
+  backdrop-filter: var(--blur, blur(14px));
+  -webkit-backdrop-filter: var(--blur, blur(14px));
+}
+.shf-plate-ph {
+  flex: none;
+  width: 84px; height: 84px;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-0);
+  display: grid; place-items: center;
+}
+.shf-plate-ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* No photograph yet: the shop's initial, in the machine's blue, so the plate
+   still has a face and the gap does not read as a broken image. */
+.shf-plate-ph .initial {
+  font: 800 34px/1 var(--font-display);
+  color: var(--blue-700);
+  background: var(--blue-050);
+  width: 100%; height: 100%;
+  display: grid; place-items: center;
+}
+.shf-plate-txt { min-width: 0; flex: 1; }
+/* --t-h2 on a phone, --t-h1 given room: at 390 px a three-word name set at
+   h1 wraps to two lines beside the photograph and the flute floats between
+   them (seen in the first screenshot); one size down it holds one line. */
+.shf-plate-txt h1 {
+  font-size: var(--t-h2); font-weight: 800; letter-spacing: -.02em;
+  display: flex; align-items: center; gap: var(--s3);
+  line-height: 1.15;
+}
+@media (min-width: 720px) { .shf-plate-txt h1 { font-size: var(--t-h1); } }
+.shf-plate-txt h1::before {
+  content: '';
+  flex: none; width: 8px; height: .74em;
+  background: var(--flute-grad);
+  transform: skewX(var(--flute-skew));
+  border-radius: 2px;
+  box-shadow: 0 4px 12px rgba(var(--accent-rgb), .35);
+}
+.shf-plate-addr {
+  margin-top: var(--s2);
+  color: var(--ink-3); font-size: var(--t-small); line-height: 1.5;
+  white-space: pre-line;
+}
+.shf-plate-line { margin-top: var(--s2); color: var(--ink-3); font-size: var(--t-small); line-height: 1.55; max-width: 62ch; }
+@media (min-width: 720px) {
+  .shf-plate { padding: var(--s5); gap: var(--s5); }
+  .shf-plate-ph { width: 112px; height: 112px; }
+  .shf-plate-ph .initial { font-size: 44px; }
+}
+
+/* The link was made for another shop. Ink on glass with a navy rule — a
+   fact about the sticker, and deliberately none of the three verdict colours.
+   The slug it carried is shown in mono so the customer can compare it with
+   the one on the sticker they scanned. */
+.shf-wrong {
+  display: flex; gap: var(--s3); align-items: flex-start;
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--navy-900);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+}
+.shf-wrong-ico {
+  flex: none; width: 34px; height: 34px; border-radius: var(--r-md);
+  display: grid; place-items: center;
+  background: var(--surface-3); color: var(--navy-900);
+  font: 800 18px/1 var(--font-display);
+}
+.shf-wrong b { display: block; font-size: var(--t-h3); font-weight: 800; color: var(--navy-900); }
+.shf-wrong p { margin-top: var(--s1); color: var(--ink-2); font-size: var(--t-small); line-height: 1.55; }
+.shf-wrong code {
+  font-family: var(--mono); font-size: var(--t-micro);
+  background: var(--surface-3); border-radius: var(--r-xs); padding: 1px 6px;
+  word-break: break-all;
+}
+
+/* ----------------------------------------------------------- Your shop -- */
+
+/* The sticker: the shape a shopkeeper cuts out and tapes to the shutter. Same
+   idiom as the order desk's `.od-sticker` — dashed scissor line, brand line,
+   the code, the address under it. */
+.shf-sticker {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  border: 2px dashed var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--s5) var(--s4);
+  text-align: center;
+}
+.shf-sticker .brand {
+  font-size: var(--t-micro); font-weight: 800; letter-spacing: .24em;
+  text-transform: uppercase; color: var(--blue-700);
+}
+.shf-sticker h3 { font-size: var(--t-h2); font-weight: 800; letter-spacing: -.01em; }
+.shf-sticker img {
+  width: 260px; max-width: 100%; aspect-ratio: 1 / 1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s2);
+}
+.shf-sticker .sub { font-size: var(--t-small); color: var(--ink-3); line-height: 1.6; max-width: 36ch; }
+
+/* The link itself: one line, mono, selectable, with the slug emphasised so a
+   shopkeeper can read their own handle off it. */
+.shf-link {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-family: var(--mono); font-size: var(--t-small); color: var(--ink-2);
+  word-break: break-all; line-height: 1.5;
+  user-select: all;
+}
+.shf-link b { color: var(--blue-700); font-weight: 700; }
+
+.shf-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+.shf-said { margin-top: var(--s2); color: var(--ink-2); font-size: var(--t-small); }
+
+/* The photograph on Your shop: a preview at the size the storefront draws it,
+   beside the controls, so what is uploaded is seen the way a customer sees it. */
+.shf-photo { display: flex; gap: var(--s4); align-items: flex-start; flex-wrap: wrap; }
+.shf-photo-ph {
+  flex: none;
+  width: 132px; height: 132px;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  display: grid; place-items: center;
+  color: var(--ink-4); font-size: var(--t-micro); font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase; text-align: center;
+  padding: var(--s2);
+}
+.shf-photo-ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shf-photo-txt { flex: 1; min-width: 220px; }
+.shf-photo-txt p { color: var(--ink-3); font-size: var(--t-small); line-height: 1.55; }
+/* The file input is a real control, visually replaced by a button. It stays
+   in the tab order and keeps its label so a keyboard reaches it. */
+.shf-file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The storefront preview's own avatar, the size it is drawn on a phone. */
+.shf-prev-ph {
+  float: left;
+  width: 64px; height: 64px; margin: 0 var(--s3) var(--s2) 0;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--blue-050); color: var(--blue-700);
+  border: 1px solid var(--line);
+  display: grid; place-items: center;
+  font: 800 26px/1 var(--font-display);
+}
+.shf-prev-ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ------------------------------------------------------------- printing --
+   PRINT THE STICKER prints THIS page with everything but the sticker hidden,
+   while `body` carries `shf-printing`. No popup and no second copy of the
+   code: the PNG on screen is the PNG on paper. `visibility` rather than
+   `display`, so the sticker keeps its box while its ancestors vanish; then
+   it is pinned to the sheet's top-left and given the sheet. */
+@media print {
+  body.shf-printing * { visibility: hidden !important; }
+  body.shf-printing .shf-sticker,
+  body.shf-printing .shf-sticker * { visibility: visible !important; }
+  body.shf-printing .shf-sticker {
+    position: fixed; inset: 0;
+    margin: 0; border-radius: 0;
+    border: 2px dashed #8D93A8;
+    justify-content: center;
+    background: #fff;
+  }
+  body.shf-printing .shf-sticker img { width: 70vw; max-width: 130mm; }
+}
