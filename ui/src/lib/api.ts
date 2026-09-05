@@ -291,6 +291,27 @@ export interface Witness {
 export const scan = (blob: Blob) =>
   send<Witness>('/scan', { method: 'POST', body: form({}, { blob, name: 'counter.jpg' }) });
 
+/**
+ * A BILL THE SHOPKEEPER ENTERED, witnessed as exactly that.
+ *
+ * The camera is not always the answer. A bill said out loud and accepted, a
+ * product whose label is facing away, loose goods — none of them can be
+ * photographed into a witness, and CHARGE stayed dead for all of them. This
+ * writes the same shape of record `gawaah/storefront.py` already writes for a
+ * phone order: `kind: "counter_entered"`, `read_by: "shopkeeper"`, and it does
+ * not pretend a camera saw anything.
+ *
+ * It sends sku ids and counts. It does not send prices — the till prices from
+ * its catalogue and the money service re-prices from its own book, and no
+ * figure this browser could put here would be read by either.
+ */
+export const enteredBill = (lines: Array<{ sku_id: string; qty: number }>) =>
+  send<Witness & { kind: string; lines: number }>('/counter/entered', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines }),
+  });
+
 /* --------------------------------------------------------------- teaching -- */
 
 export interface TeachFields {

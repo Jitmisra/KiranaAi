@@ -3275,6 +3275,130 @@ def _witness_lines(raw: bytes, bgr: Any) -> tuple[list[dict[str, Any]],
     return lines, amber, witnessed, unnamed
 
 
+@app.post("/counter/entered", dependencies=AUTH_GUARD)
+async def counter_entered_ep(request: Request) -> JSONResponse:
+    """A bill the SHOPKEEPER entered, witnessed as exactly that.
+
+    THE CAMERA IS NOT ALWAYS THE ANSWER, AND PRETENDING IT IS MAKES A TILL YOU
+    CANNOT USE. A shopkeeper says "do Maggi aur ek Parle-G", accepts the lines,
+    and has a correct bill in front of them -- and CHARGE stayed dead, because
+    the only evidence this counter knew how to mint against was a photograph.
+    Loose goods, a product taught by code with the label facing away, anything
+    the lens cannot resolve: all uncharegable. That is not caution, it is a
+    counter that cannot take money.
+
+    SO THIS RECORDS WHO SAID SO, AND DOES NOT PRETEND OTHERWISE. `kind` is
+    `counter_entered`, `read_by` is `shopkeeper`, the id is prefixed `ent`, and
+    `evidence` says in words that no camera was involved. A person reading the
+    scans directory can tell a photograph from a typed bill at a glance. That
+    is the same bargain `gawaah/storefront.py` already struck for an order
+    placed on a phone -- see `_write_witness` there, which this deliberately
+    mirrors rather than reinvents.
+
+    AND IT BYPASSES NOTHING. There is ONE mint path. This witness is loaded by
+    `paisa.load_scan_witness` and re-priced by `paisa.rerun_scan` like any
+    other, so every guard still stands: each line is re-resolved through
+    paisa's own binding table, re-priced from paisa's OWN book, a line it
+    cannot price BLOCKS the mint as `amber_in_basket`, and one paisa of
+    disagreement refuses. The browser sends sku ids and counts. It does not
+    send prices, and no price it could send would be read.
+    """
+    import datetime as _dt
+    import json
+    import secrets
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return _refusal(UploadRefused(R_FIELD_MISSING, "expected a JSON body"))
+    if not isinstance(body, dict):
+        return _refusal(UploadRefused(R_FIELD_MISSING, "expected a JSON object"))
+
+    raw_lines = body.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        return _refusal(UploadRefused(
+            R_FIELD_MISSING,
+            "`lines` must be a non-empty list of {sku_id, qty}. A bill with no "
+            "lines is not a bill."))
+    if len(raw_lines) > 200:
+        return _refusal(UploadRefused(
+            R_FIELD_MISSING, "a counter bill is capped at 200 lines."))
+
+    known = priced_skus()
+    out: list[dict[str, Any]] = []
+    witnessed = 0
+    i = 0
+    for ln in raw_lines:
+        if not isinstance(ln, dict):
+            return _refusal(UploadRefused(R_FIELD_MISSING, "each line must be an object"))
+        sku = str(ln.get("sku_id") or "").strip()
+        try:
+            qty = int(ln.get("qty"))
+        except (TypeError, ValueError):
+            return _refusal(UploadRefused(
+                R_FIELD_MISSING, f"line {sku!r} has no whole count on it."))
+        if not sku or qty < 1 or qty > 999:
+            return _refusal(UploadRefused(
+                R_FIELD_MISSING,
+                f"line {sku!r} needs a sku and a count between 1 and 999."))
+        rec = known.get(sku)
+        if rec is None:
+            # Named, and refused rather than dropped: a bill quietly one line
+            # short looks exactly like a complete one.
+            return _refusal(UploadRefused(
+                R_NOT_TAUGHT,
+                f"{sku!r} is not a product this counter has taught with a "
+                f"price, so it cannot be put on a bill. Nothing was written."))
+        unit = int(rec["price_paise"])
+        for _ in range(qty):
+            out.append({
+                "id": i, "code": f"{QR_PREFIX}{sku}", "format": "COUNTER",
+                "box": None, "read_by": "shopkeeper", "sku_id": sku,
+                "name": rec.get("name"), "price_paise": unit,
+                "qty_on_the_bill": qty, "reason": "entered_by_the_shopkeeper",
+            })
+            witnessed += unit
+            i += 1
+
+    scan_id = "ent" + secrets.token_hex(9)
+    doc = {
+        "scan_id": scan_id,
+        "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "kind": "counter_entered",
+        "source": "till",
+        "read_by": "shopkeeper",
+        "evidence": ("a bill entered at the counter by the shopkeeper and "
+                     "priced by this till from its own catalogue; no camera "
+                     "was involved and no frame was decoded"),
+        "frame_sha256": None,
+        "frame_px": None,
+        "codes_found": len(out),
+        "distinct_codes": len({ln["code"] for ln in out}),
+        "lines": out,
+        "witnessed_paise": witnessed,
+    }
+    d = scans_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{scan_id}.json").write_text(
+            json.dumps(doc, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    except OSError as exc:
+        return _refusal(UploadRefused(
+            R_INTERNAL,
+            f"this bill's witness could not be written to {d} ({exc}). Nothing "
+            f"was minted, because there would have been nothing for the money "
+            f"service to re-price."))
+
+    return JSONResponse({
+        "ok": True, "settles_money": False, "money_note": MONEY_NOTE,
+        "scan_id": scan_id, "kind": "counter_entered",
+        "witnessed_paise": witnessed, "witnessed_rupees": rupees_str(witnessed),
+        "lines": len(out),
+        "note": ("Entered at the counter, not photographed. The money service "
+                 "re-prices every line from its own book before it mints."),
+    })
+
+
 @app.post("/scan", dependencies=AUTH_GUARD)
 async def scan_ep(request: Request) -> JSONResponse:
     """multipart: image -> a WITNESS this counter wrote down, under an id.

@@ -434,7 +434,26 @@ export default function Till() {
   // A held witness must still match the bill it was taken for.
   const witnessUsable =
     heldWitness !== null && heldWitness.paise === total && Date.now() - heldWitness.at < 600_000;
-  const canCharge = basket.size > 0 && cam.running && (missing.length === 0 || witnessUsable);
+  /**
+   * A BILL WITH A TOTAL CAN BE CHARGED. That is the whole rule now.
+   *
+   * It used to also require the camera to be running AND to have seen every
+   * line, because the only evidence this counter could mint against was a
+   * photograph. The effect was a till that could build a correct bill by voice
+   * — "do Maggi aur ek Parle-G", accepted, ₹338 on screen — and then refuse to
+   * take money for it. Loose goods, a label facing away, anything the lens
+   * cannot resolve: all uncharegable.
+   *
+   * The camera path has not weakened. When it HAS witnessed the bill, that
+   * photograph is what gets minted, exactly as before. What changed is that a
+   * bill it did not witness is now minted against a record that says so —
+   * `kind: counter_entered`, `read_by: shopkeeper` — through the same single
+   * mint path, where paisa re-prices every line from its own book and refuses
+   * on a paisa of disagreement. See `POST /counter/entered`.
+   */
+  const canCharge = basket.size > 0 && total > 0;
+  /** Whether this press will be backed by a photograph or by the shopkeeper. */
+  const witnessedByCamera = cam.running && (missing.length === 0 || witnessUsable);
 
   // Take the photograph the moment everything is visible together.
   useEffect(() => {
@@ -470,7 +489,9 @@ export default function Till() {
   /* ---- money ------------------------------------------------------------- */
 
   const charge = useCallback(async () => {
-    if (!roi || !cam.running) return;
+    // No `cam.running` guard: a bill with a total can be charged, and when the
+    // camera has not witnessed it the branch below writes a record saying so.
+    if (basket.size === 0 || total <= 0) return;
     setCharging(true);
     setChargeRefusal(null);
     setWitnessLines([]);
@@ -491,7 +512,39 @@ export default function Till() {
         setPayState(t('till.pay.waiting'));
         return;
       }
+      // NO PHOTOGRAPH TO TAKE. The camera is off, or it cannot see every line
+      // on this bill. The bill is still correct — a person built it and can
+      // read it — so it is minted against a record that says a person built
+      // it, through the SAME mint path. paisa re-prices every line from its
+      // own book and refuses on a paisa of disagreement, exactly as it does
+      // for a photograph.
+      if (!witnessedByCamera) {
+        setChargeStage('witness');
+        const lines = [...basket.values()].map((l) => ({ sku_id: l.sku_id, qty: l.qty }));
+        const e = await api.enteredBill(lines);
+        if (!e.ok) { setChargeRefusal({ reason: e.reason, detail: e.detail }); return; }
+        if (e.witnessed_paise !== total) {
+          setChargeRefusal({
+            reason: t('till.refuse.disagree', { seen: rupees(e.witnessed_paise), bill: rupees(total) }),
+            detail: t('till.refuse.disagree.detail'),
+          });
+          return;
+        }
+        setChargeStage('mint');
+        const sid = sessionRef.current ?? (sessionRef.current = api.newSessionId());
+        const mm = await api.mint({ session_id: sid, amount_paise: e.witnessed_paise, scan_id: e.scan_id });
+        if (!mm.ok) { setChargeRefusal({ reason: mm.reason, detail: mm.detail }); return; }
+        setPayment({ session_id: sid, short_url: mm.short_url,
+                     amount_paise: mm.amount_paise, scan_id: e.scan_id });
+        setPayState(t('till.pay.waiting'));
+        return;
+      }
+
       setChargeStage('photo');
+      // Past the guard above this is the camera path, so `roi` is set — but the
+      // type does not know that, and an assertion here would be a lie the next
+      // refactor could make true. Checked instead.
+      if (!roi) { setChargeRefusal({ reason: t('till.charge.startCamera') }); return; }
       const blob = await cam.capture(roi, 0.92);
       if (!blob) throw new Error('no frame');
       setChargeStage('witness');
@@ -550,7 +603,7 @@ export default function Till() {
       setCharging(false);
       setChargeStage(null);
     }
-  }, [roi, cam, total, witnessUsable, heldWitness, t]);
+  }, [roi, cam, total, witnessUsable, heldWitness, witnessedByCamera, basket, t]);
 
   // Only a signature-verified webhook can turn this screen green. The browser
   // polls to LEARN that it happened; it can never assert that it did.
@@ -1497,7 +1550,7 @@ export default function Till() {
                   : basket.size === 0
                     ? 'There is nothing on the bill to charge for.'
                     : !cam.running
-                      ? 'CHARGE photographs the counter, so the camera has to be running.'
+                      ? 'This bill was entered at the counter, not photographed. It is recorded that way.'
                       : missing.length
                         ? t('till.charge.notInView', { names: missing.join(', ') })
                         : undefined}
@@ -1506,11 +1559,7 @@ export default function Till() {
                   ? t('till.charge.witnessing')
                   : basket.size === 0
                     ? t('till.charge.nothing')
-                    : !cam.running
-                      ? t('till.charge.startCamera')
-                      : missing.length && !witnessUsable
-                        ? tn('till.charge.show', missing.length)
-                        : t('till.charge.pay', { amount: rupees(total) })}
+                    : t('till.charge.pay', { amount: rupees(total) })}
               </button>
 
               {/* ON THE BOOK, beside CHARGE. Ghost, not green and not the pay
