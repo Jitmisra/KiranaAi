@@ -372,7 +372,7 @@ out of the shop's own tables, and **checks every figure before speaking it**.
   assistant route refuses by name instead of failing.
 - **Voice** — `gemini-2.5-flash-preview-tts`, a drawn presenter with a live vector mouth: 15 Oculus
   visemes driven from the audio's own level through a Web Audio `AnalyserNode`
-- **Ears** — `gemini-2.5-flash`. The browser's `SpeechRecognition` is a cloud call to Google's
+- **Ears** — `gemini-3.6-flash`. The browser's `SpeechRecognition` is a cloud call to Google's
   speech service dressed as a browser feature; when the network refuses it, the microphone simply
   stops with `network` and the shopkeeper can do nothing. `gawaah/stt.py` is a second pair of ears
   on the counter's own key, and the browser falls back to it automatically.

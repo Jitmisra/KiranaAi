@@ -92,7 +92,11 @@ LANGS: dict[str, str] = {
 
 #: Flash, not the TTS preview: this is a transcription, the cheapest capable
 #: model wins, and the same family the router already uses.
-DEFAULT_MODEL = "gemini-2.5-flash"
+#: `gemini-2.5-flash` was retired for new projects ("no longer available to new
+#: users", 404) and the counter went deaf the day a shop's key came from a
+#: project made after that. This is what transcribes today; GAWAAH_STT_MODEL
+#: still overrides it.
+DEFAULT_MODEL = "gemini-3.6-flash"
 
 TIMEOUT_S = 45
 
