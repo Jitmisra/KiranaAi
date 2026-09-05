@@ -321,6 +321,51 @@ function segments(transcript: string): string[][] {
   return out;
 }
 
+
+/**
+ * "do Maggi ek Parle-G" IS TWO LINES, NOT ONE PERSON HESITATING.
+ *
+ * `segments` splits only on "aur", "and", commas and the danda. But the most
+ * natural Hindi order has no conjunction at all — a count, a name, a count, a
+ * name — and it arrived here as ONE segment with two counts, which the rule
+ * below reads as "do teen Maggi", a person changing their mind, and threw the
+ * whole sentence away. Even the pure-Latin "do maggi ek ponds cream" was
+ * unparsed. The server's own splitter has always handled this; the client's
+ * did not, and the client decides which door the sentence goes through.
+ *
+ * A count starts a new line only when a name word precedes it in this chunk
+ * AND a name word follows it — so "Maggi do" (a trailing count) is still two
+ * Maggi, and "do teen Maggi" (two counts, no name between) is still a
+ * hesitation the operator gets back. A postfix multi-order with no "aur"
+ * ("Maggi do Parle-G ek") is not recovered by this and stays a refusal by name;
+ * that form is rare at a counter, and guessing at it would bill the wrong
+ * count.
+ */
+function splitAtNewCount(seg: string[]): string[][] {
+  const words = dropGivePhrases(seg);
+  const isCount = (w: string) => asNumber(normToken(w)) !== null;
+  const isName = (w: string) => {
+    const t = normToken(w);
+    return t !== '' && !FILLER_N.has(t) && !isCount(w) && !FRACTIONS_N.has(t)
+      && !DOZEN_N.has(t) && !UNITS_N.has(t);
+  };
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let seenName = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (isCount(w) && seenName && words.slice(i + 1).some(isName)) {
+      out.push(cur);
+      cur = [];
+      seenName = false;
+    }
+    cur.push(w);
+    if (isName(w)) seenName = true;
+  }
+  if (cur.length) out.push(cur);
+  return out.length ? out : [seg];
+}
+
 /** Remove "de do"-style give-phrases before any word is read as a count. */
 function dropGivePhrases(words: string[]): string[] {
   const norm = words.map(normToken);
@@ -352,7 +397,7 @@ export function parseHinglish(transcript: string): Heard {
   const unparsed: string[] = [];
   let counted = 0;
 
-  for (const seg of segments(transcript ?? '')) {
+  for (const seg of segments(transcript ?? '').flatMap(splitAtNewCount)) {
     const raw = seg.join(' ');
     const words = dropGivePhrases(seg);
 
@@ -1059,7 +1104,15 @@ export function classifyUtterance(text: string): Classified {
   if (has(QUESTION_WORDS_N) || /\?\s*$/.test(text ?? '')) {
     return { route: 'advice', why: 'question_word', heard };
   }
-  if (heard.items.length === 0) return { route: 'advice', why: 'nothing', heard };
+  if (heard.items.length === 0) {
+    // A count this parser could not attach to a name is still an order, not a
+    // question: the server resolves Devanagari, aliases and glued names this
+    // client cannot, and refuses BY NAME when it truly is not one. Sending it
+    // to the advisor instead is how "do Maggi ek Parle-G" became a stock
+    // arrival the model made up.
+    if (tokens.some((t) => asNumber(t) !== null)) return { route: 'order', why: 'count', heard };
+    return { route: 'advice', why: 'nothing', heard };
+  }
   if (has(ADD_VERBS_N)) return { route: 'order', why: 'add_verb', heard };
   if (heard.items.some((i) => i.fraction !== undefined)) {
     return { route: 'order', why: 'weight', heard };

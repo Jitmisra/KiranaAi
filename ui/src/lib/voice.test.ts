@@ -783,3 +783,35 @@ describe('pickVoice prefers a woman inside the tier it lands on', () => {
     expect(pickVoice([], 'hi-IN').voice).toBeNull();
   });
 });
+
+/* ==========================================================================
+ * Two counts in one breath — the natural Hindi order
+ * ======================================================================== */
+
+describe('a count after a name starts a new line', () => {
+  it('reads "do Maggi ek Parle-G" as two lines, not a hesitation', () => {
+    const h = parseHinglish('do Maggi ek Parle-G');
+    expect(h.items.map((i) => [i.qty, i.name])).toEqual([[2, 'Maggi'], [1, 'Parle-G']]);
+    expect(h.counted).toBe(2);
+    expect(h.unparsed).toEqual([]);
+    expect(classifyUtterance('do Maggi ek Parle-G')).toMatchObject({ route: 'order', why: 'count' });
+  });
+  it('does the same in Devanagari, three lines, no conjunction', () => {
+    const h = parseHinglish('दो मैगी एक पार्ले जी एक पॉन्ड्स क्रीम');
+    expect(h.items.map((i) => i.qty)).toEqual([2, 1, 1]);
+    expect(h.unparsed).toEqual([]);
+    expect(classifyUtterance('दो मैगी एक पार्ले जी एक पॉन्ड्स क्रीम').route).toBe('order');
+  });
+  it('still treats "do teen Maggi" as a person hesitating', () => {
+    const h = parseHinglish('do teen Maggi');
+    expect(h.items).toEqual([]);
+    expect(h.unparsed).toEqual(['do teen Maggi']);
+  });
+  it('still reads a trailing count: "Maggi do" is two Maggi', () => {
+    expect(parseHinglish('Maggi do').items).toEqual([{ name: 'Maggi', qty: 2, raw: 'Maggi do' }]);
+  });
+  it('routes a count the parser could not attach to the order door, not the advisor', () => {
+    // A name the client cannot see is the server's problem; it refuses by name.
+    expect(classifyUtterance('2 xyzzy').route).toBe('order');
+  });
+});
