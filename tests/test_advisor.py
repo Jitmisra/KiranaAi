@@ -744,7 +744,7 @@ def test_an_empty_phrasing_answer_speaks_the_counters_own_sentence(shop,
     body = say(shop, "Maggi ka daam").json()
     assert body["reasoned"] is False
     assert body["grok_error"]["reason"] == R_ADVICE_EMPTY
-    assert body["spoken"] == body["answer"]
+    assert body["spoken"] == _tts.spoken_money(body["answer"], "en-IN")
 
 
 def test_a_model_that_reaches_for_add_to_bill_is_refused_by_name(shop,
