@@ -1,0 +1,70 @@
+# Runtime dependencies for the two services that must both run:
+#   the TILL   uvicorn upload_app:app --app-dir tools      :8790
+#   the MONEY  uvicorn --factory gawaah.live_app:app       :8788
+# Both run out of this one file; the image installs it once and serves either.
+#
+# THIS IS NOT A FREEZE OF THE DEV VENV. That venv is 227 MB and most of it is
+# the test rig -- pytest, pytest-cov, coverage, hypothesis, Pygments, iniconfig,
+# pluggy, sortedcontainers, packaging, pip. None of it is imported by a running
+# service, all of it is attack surface and image size, so none of it is here.
+# The list below was derived by importing both entrypoints and reading back the
+# modules that actually loaded, not by guessing from the venv.
+#
+# httpx IS DELIBERATELY ABSENT and its absence is not an oversight. Nothing in
+# gawaah/ or tools/ imports it: every outbound call in the product is stdlib
+# urllib.request -- the gateway client (gawaah/rzp_live.py:44), the model,
+# speech and transcription transports (gawaah/assistant.py:4014, tts.py:39,
+# stt.py:40), and the till's own hop to the money service on 8788
+# (tools/upload_app.py:7203). httpx is pulled in only by fastapi.testclient,
+# which lives in the test suite and in tools/demo.py. It is a test dependency
+# wearing a runtime dependency's clothes; shipping it would add httpx, httpcore,
+# h11-for-httpx and certifi to the image to satisfy no import at all.
+#
+# Two things the image itself has to provide, because pip cannot:
+#   - ca-certificates. gawaah/rzp_live.py:110 calls ssl.create_default_context()
+#     and there is no certifi in this list, so TLS to api.razorpay.com trusts
+#     the SYSTEM store. A slim base image without ca-certificates fails every
+#     gateway call with CERTIFICATE_VERIFY_FAILED and nothing else.
+#   - node, at build time only, for `cd ui && npm ci && npm run build`. ui/dist
+#     is gitignored, so a fresh checkout has no front end until that runs.
+
+# -- the web layer ------------------------------------------------------------
+fastapi==0.141.1
+starlette==1.6.0          # imported outright by gawaah/auth.py, not just via fastapi
+uvicorn==0.52.4           # no --ws extra: neither service declares a WebSocket route
+pydantic==2.13.5          # imported outright by gawaah/paisa.py
+
+# -- the eyes -----------------------------------------------------------------
+# CONTRIB, not plain opencv-python-headless. gawaah/takhti.py needs cv2.aruco
+# for the mat markers and cv2.barcode; dropping to the plain build saves disk
+# and then fails at import inside the recogniser, which is the worst place to
+# find out. Already the -headless build: no GUI, no libGL in the container.
+opencv-contrib-python-headless==5.0.0.93
+numpy==2.5.2
+# Both ONNX models are read through cv2.dnn.readNetFromONNX (gawaah/embedder2.py:109,
+# gawaah/detector.py:212), so there is NO onnxruntime here and none is wanted.
+
+# zxing-cpp imports as `zxingcpp`. Lazily loaded at request time by
+# tools/upload_app.py:4106, which degrades to a named refusal when it is
+# missing -- so a build that drops it still starts, and silently cannot read a
+# printed barcode. Ship it.
+zxing-cpp==3.1.1
+
+# Pillow is not touched by either server process. It is here for
+# tools/seed_shop.py:1058, which draws the product photos, because results/ is
+# gitignored and a fresh deploy has no shop at all until seed_shop runs. Drop
+# Pillow only if the image will always seed with --no-photos.
+pillow==12.3.0
+
+# -- transitive, pinned on purpose --------------------------------------------
+# Not the whole dependency tree: these are the ones where a floating resolve
+# plausibly breaks the build rather than merely changing it.
+pydantic_core==2.46.5     # compiled, and pydantic requires this exact build
+annotated-doc==0.0.5      # a 0.0.x fastapi dep -- no compatibility promise at all
+typing-inspection==0.4.4  # pydantic 2.13 tracks this closely
+annotated-types==0.8.0
+typing_extensions==4.16.0
+anyio==4.14.2             # starlette's concurrency floor; a major bump moves it
+idna==3.19                # anyio's only onward requirement
+h11==0.16.0               # uvicorn's HTTP/1.1 implementation, not an optional extra
+click==8.5.0              # uvicorn's CLI; `python -m uvicorn` does not start without it

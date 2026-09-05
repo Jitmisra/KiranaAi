@@ -1354,7 +1354,20 @@ class PaisaService:
         self.kernel = kernel
         self.gateway = gateway
         self.config = config
-        self.price_book: PriceBook = price_book or DictPriceBook({})
+        #: `is None`, NOT `or`. Every price book here defines `__len__`, so an
+        #: EMPTY one is falsy — and `or` then threw the caller's book away and
+        #: kept a `DictPriceBook({})` for the life of the process.
+        #:
+        #: That is not a style point. `live_app` injects a self-reloading
+        #: `FileBackedPriceBook` precisely so a catalogue written AFTER boot is
+        #: picked up. When the money service started before `shop.json` existed
+        #: — a fresh clone, or a container that came up before the seeder — the
+        #: reloading book was discarded at construction, nothing referenced the
+        #: mtime check any more, and the service could never price anything
+        #: again. Measured: the injected book priced ponds at 30000 the moment
+        #: the file appeared; the one this line kept still answered None.
+        #: Every mint refuses, and no amount of waiting fixes it.
+        self.price_book: PriceBook = DictPriceBook({}) if price_book is None else price_book
         self._lock = threading.RLock()
         #: WHEN THIS COUNTER LAST HEARD FROM THE GATEWAY AT ALL.
         #:

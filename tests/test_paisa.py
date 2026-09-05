@@ -1565,3 +1565,67 @@ def test_an_appearance_sku_paisa_cannot_price_is_still_amber(tmp_path, monkeypat
     v = paisa.rerun_scan(req, book, data_dir=str(tmp_path))
     assert not v.agrees
     assert v.reason == "amber_in_basket"
+
+
+# ===========================================================================
+# AN EMPTY PRICE BOOK IS STILL A PRICE BOOK
+#
+# Every book here defines __len__, so an empty one is FALSY. `price_book or
+# DictPriceBook({})` therefore threw the caller's book away and kept a dead
+# dict for the life of the process. `live_app` injects a SELF-RELOADING
+# FileBackedPriceBook exactly so a catalogue written after boot is picked up;
+# discarding it meant a money service that started before shop.json existed —
+# a fresh clone, or a container that came up before the seeder — could never
+# price anything again, and every mint refused with no way back but a restart.
+# ===========================================================================
+
+class _EmptyButReal:
+    """A price book with nothing in it yet, that will have something later."""
+
+    def __init__(self) -> None:
+        self._prices: dict[str, int] = {}
+
+    def __len__(self) -> int:                 # this is what made it falsy
+        return len(self._prices)
+
+    def price_paise(self, item_id: str):
+        return self._prices.get(item_id)
+
+    def fill(self, item_id: str, paise: int) -> None:
+        self._prices[item_id] = paise
+
+
+def _service_with(book, tmp_path):
+    """A real PaisaService built round one price book. Same parts as `rig`."""
+    clock = VirtualClock()
+    ledger = Ledger(os.path.join(str(tmp_path), "audit.jsonl"))
+    kernel = Kernel(os.path.join(str(tmp_path), "kernel.db"), clock, ledger)
+    cfg = PaisaConfig(mode="sim", key_id="rzp_test_LEAKCANARY",
+                      key_secret=KEY_SECRET, webhook_secret=WEBHOOK_SECRET, seed=7)
+    sim = RazorpaySim(webhook_secret=cfg.effective_webhook_secret, clock=clock, seed=7)
+    return PaisaService(clock=clock, ledger=ledger, kernel=kernel, gateway=sim,
+                        config=cfg, price_book=book)
+
+
+def test_an_empty_price_book_is_kept_not_replaced(tmp_path):
+    book = _EmptyButReal()
+    assert not book, "the premise: an empty book is falsy"
+    svc = _service_with(book, tmp_path)
+    assert svc.price_book is book, (
+        "the caller's book was replaced because it was empty — the bug this "
+        "test exists for")
+
+
+def test_a_book_filled_after_construction_still_prices(tmp_path):
+    """The whole point of injecting a reloading book."""
+    book = _EmptyButReal()
+    svc = _service_with(book, tmp_path)
+    book.fill("ponds", 30000)                 # the seeder runs, later
+    assert svc.price_book.price_paise("ponds") == 30000
+
+
+def test_no_book_at_all_still_gets_an_empty_one(tmp_path):
+    """`is None` must not break the default the `or` was there to provide."""
+    svc = _service_with(None, tmp_path)
+    assert svc.price_book is not None
+    assert svc.price_book.price_paise("anything") is None

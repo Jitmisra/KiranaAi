@@ -1,0 +1,83 @@
+# What must never reach the build context, let alone the image.
+#
+# Two rules matter more than the rest:
+#   .env      the gateway credentials. It is chmod 600 and gitignored, and it
+#             is excluded here so that no COPY, however careless, can pull it
+#             in. Secrets reach the container as Render environment variables.
+#   results/  the shop itself — a password hash, live session tokens, customer
+#             names and phone numbers, ~6,000 camera frames and the money chain
+#             with real payment ids. All of it is regenerable by
+#             tools/seed_shop.py. An image carries the counter, not the shop.
+
+# ---------------------------------------------------------------- secrets --
+.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# ------------------------------------------------------- the shop's state --
+results/
+build/
+.wrangler/
+
+# ------------------------------------------------------ local python venv --
+# 227 MB of development tooling, built for macOS arm64. Useless and wrong in a
+# linux image, and the interpreter inside it would shadow the image's own.
+.venv/
+.venv-doc/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# ---------------------------------------------------------------- the ui ---
+# node_modules is reinstalled from package-lock.json inside the build stage, so
+# the host copy (119 MB, macOS binaries) would be both huge and wrong.
+# dist is rebuilt in the same stage — shipping a stale host build is the exact
+# failure this image exists to prevent.
+ui/node_modules/
+ui/dist/
+ui/test-results/
+ui/playwright-report/
+ui/e2e/
+ui/playwright.config.ts
+ui/vitest.config.ts
+**/*.tsbuildinfo
+
+# ----------------------------------------------------------------- tests ---
+tests/
+reference/
+parts/
+parts6/
+
+# ------------------------------------------------------------------ vcs ----
+.git/
+.gitignore
+.github/
+.gitattributes
+
+# ------------------------------------------------------------- editor/os ---
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ------------------------------------------------------------ prose only ---
+# FAILURES.md and PRD.md alone are 450 KB of writing that no process reads.
+*.md
+**/*.md
+Makefile
+LICENSE
+
+# ------------------------------------------------- docker's own artefacts --
+Dockerfile
+.dockerignore
+docker-compose*.yml
+render.yaml

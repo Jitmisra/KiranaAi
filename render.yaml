@@ -1,0 +1,234 @@
+# GAWAAH / Kirana Shop AI — Render Blueprint
+# =============================================================================
+# TWO web services, ONE repo, ONE Dockerfile. They differ only by the command
+# they start, because they are the same code with different jobs:
+#
+#   gawaah-till   the counter. Catalogue, camera, books, storefront, receipts.
+#                 HOLDS NO GATEWAY CREDENTIAL, and nothing below gives it one.
+#   gawaah-money  the money. The ONLY process with Razorpay credentials, the
+#                 only thing that mints, and a uvicorn --factory app.
+#
+# That split is invariant 5 and it is why there are two blocks here instead of
+# one. It also costs something real on Render: two services are two containers
+# with two filesystems, and this counter's till and money service share state
+# through FILES. Read DEPLOY.md, section "The shop is not there, and the two
+# services cannot see each other's" BEFORE you demo anything. The short of it:
+# on the free tier the money service starts with an EMPTY price book, so every
+# line is amber and no bill can go green. DEPLOY.md gives the one-container
+# fallback that does work.
+#
+# SECRETS. There is not a single secret value in this file and there must never
+# be one. Every credential is declared `sync: false`, which means Render asks a
+# human for it once, in the dashboard, and stores it there. `.env` is chmod 600,
+# gitignored, and is neither COPYed into the image nor referenced here.
+#
+# RZP_MODE IS PINNED TO `sim` as a literal, not left to a human. GAWAAH_ALLOW_
+# LIVE_KEYS is deliberately absent everywhere: without it gawaah/rzp_live.py
+# refuses any key id that does not start `rzp_test_`, and that refusal is a
+# feature of this deployment, not an obstacle to it.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------- THE TILL --
+  # `make serve` on Render. Same app, same module path, $PORT instead of 8790
+  # and 0.0.0.0 instead of 127.0.0.1 because the request arrives from Render's
+  # proxy, not from localhost.
+  - type: web
+    name: gawaah-till
+    runtime: docker
+    plan: free
+    region: singapore          # Razorpay is an Indian gateway and the shop is
+                               # in India. Both services MUST be in the same
+                               # region or every till->money hop crosses an
+                               # ocean twice.
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .           # the whole repo: the image builds ui/dist, which
+                               # is gitignored and therefore not in the checkout
+    healthCheckPath: /health   # open by design — tools/upload_app.py names
+                               # "/" and "/health" as unguarded so a monitor
+                               # with no account can still ask
+    autoDeploy: false          # a push mid-demo must not restart the counter
+                               # and wipe the shop. Deploy on purpose.
+
+    # WHAT THIS DOES, IN ORDER:
+    #   1. make the data directories. A no-op on this image, which already
+    #      creates and chowns /app/results — but it fails LOUDLY, at boot,
+    #      rather than deep inside the first write, if those paths are ever
+    #      pointed somewhere the runtime user cannot write.
+    #   2. background a seeder that waits for this very server to answer
+    #      /health and then fills an empty counter with 30 real kirana products
+    #      through the counter's OWN HTTP API. results/ is gitignored, so a
+    #      fresh container has no shop at all; without this the demo opens on
+    #      an empty catalogue. Exit 1 means "the till is not up yet" and is the
+    #      only code worth retrying — 0 seeded, 2 already seeded, 3 seeded with
+    #      refusals. No --force: on a container that DID keep its disk, "already
+    #      seeded" must stop, not seed twice.
+    #   3. exec uvicorn as PID 1 so Render's stop signal reaches it.
+    # The seeder prints a freshly generated shopkeeper password ONCE, to stdout,
+    # which on Render means INTO THE SERVICE LOGS. That is a real disclosure and
+    # DEPLOY.md says so out loud.
+    dockerCommand: >-
+      sh -c 'mkdir -p "$GAWAAH_DATA_DIR" "$GAWAAH_SHOP_DIR" || exit 1;
+      if [ "$GAWAAH_SEED_ON_BOOT" = "1" ]; then
+      ( i=0; while [ $i -lt 24 ]; do sleep 5;
+      python tools/seed_shop.py --till "http://127.0.0.1:$PORT"; c=$?;
+      [ $c -eq 1 ] || break; i=$((i+1)); done ) &
+      fi;
+      exec python -m uvicorn upload_app:app --app-dir tools
+      --host 0.0.0.0 --port "$PORT"'
+
+    envVars:
+      # -- the model key, and NOTHING ELSE out of .env -----------------------
+      # The Makefile `serve` target greps exactly the model/voice names out of
+      # .env and pointedly does NOT `. ./.env` the way `serve-money` does,
+      # because sourcing the whole file would hand RAZORPAY_KEY_SECRET to the
+      # one process that must never hold it. This list honours that boundary:
+      # there is no RAZORPAY_* variable on this service.
+      # Without a key the advisor still answers — the deterministic parser
+      # takes over and the voice falls back to the browser's. It is a quieter
+      # product, not a broken one, so this may be left blank.
+      - key: GOOGLE_API_KEY
+        sync: false
+      # Optional, and only if your .env sets them: GAWAAH_LLM_BASE_URL,
+      # GAWAAH_LLM_MODEL, GAWAAH_TTS_MODEL, GAWAAH_TTS_VOICE, XAI_API_KEY,
+      # GAWAAH_LLM_KEY. Add them by hand in the dashboard rather than as seven
+      # blanks here; each one has a working default in the code.
+
+      # -- where the money service lives -------------------------------------
+      # tools/upload_app.py:7194 — GAWAAH_PAISA_URL, default
+      # http://127.0.0.1:8788, which is wrong on Render because the money
+      # service is a different container. Paste gawaah-money's PUBLIC https URL
+      # here after the first deploy (no trailing slash).
+      # NOT declared with `fromService`: that yields host:port with no scheme,
+      # and this value is used as a string prefix — `https://` has to be in it.
+      # The browser never talks to the money service; the till proxies, so this
+      # is a server-to-server address and CORS never enters into it.
+      - key: GAWAAH_PAISA_URL
+        sync: false
+
+      # -- the lock ----------------------------------------------------------
+      # UNSET, this counter is wide open: anyone who finds the URL can edit the
+      # catalogue, read the books and place orders. That is correct on a laptop
+      # on a shop's own wifi and indefensible on a public onrender.com hostname.
+      # Set it to 1. The storefront, the receipts, "/" and /health stay open —
+      # gawaah/auth.py names them — so a customer with a QR is unaffected.
+      - key: GAWAAH_REQUIRE_AUTH
+        sync: false
+
+      # -- where the shop is kept -------------------------------------------
+      # Both are honoured by store_dir()/data_dir(). THESE TWO PATHS ARE NOT
+      # ARBITRARY: the Dockerfile runs as the non-root user `gawaah` (uid
+      # 10001) and creates and chowns exactly `/app/results/shop`. A path
+      # outside it — /data, say — is root-owned, and the first write fails.
+      # On the free tier this is ordinary container filesystem and it is ERASED
+      # on every deploy, restart and spin-down. Named explicitly anyway so that
+      # mounting a disk here later is a plan change, not a code change.
+      - key: GAWAAH_DATA_DIR
+        value: /app/results
+      - key: GAWAAH_SHOP_DIR
+        value: /app/results/shop
+
+      # Seed an empty counter at boot. Set to 0 to bring one up bare.
+      - key: GAWAAH_SEED_ON_BOOT
+        value: "1"
+
+      # NOT SET, and this is deliberate: FORWARDED_ALLOW_IPS / --proxy-headers.
+      # Every absolute URL this app builds (receipts, storefront QRs, auth
+      # cookies) reads the `Host` and `X-Forwarded-Proto` HEADERS itself and
+      # only falls back to request.url.scheme if the header is absent, and
+      # `request.client` appears nowhere in gawaah/ or tools/. Widening the
+      # trusted-proxy list would change nothing except what the container is
+      # willing to believe from a stranger. PYTHONUNBUFFERED is likewise absent
+      # here because the image already sets it — without it the seeder's one
+      # and only printing of the shopkeeper password could sit in a pipe
+      # buffer for minutes.
+
+  # --------------------------------------------------------------- THE MONEY --
+  # `make serve-money` on Render. --factory because gawaah.live_app:app is a
+  # function that BUILDS the app: it is the one place that binds paisa to the
+  # real gateway, and paisa refuses to construct one itself.
+  - type: web
+    name: gawaah-money
+    runtime: docker
+    plan: free
+    region: singapore          # same region as the till, deliberately
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health   # gawaah/paisa.py's own /health. It reports
+                               # key_secret_configured and
+                               # webhook_secret_configured as BOOLEANS — never
+                               # a value, never a prefix, never a length — and
+                               # price_book_entries, which is the number that
+                               # tells you whether this deployment can bill
+                               # anything at all. Watch it.
+    autoDeploy: false
+
+    # MEASURED, NOT PREDICTED: this service comes up with
+    # price_book_entries: 0 and STAYS THERE. Two reasons, and each one alone is
+    # enough:
+    #   1. shop.json is written by the TILL, in the till's container. Render
+    #      disks attach to one service and cannot be shared at any tier, so
+    #      this container's /app/results/shop.json never appears.
+    #   2. Even if it did, gawaah/paisa.py:1357 is
+    #      `price_book or DictPriceBook({})`. An empty OfferPriceBook is falsy,
+    #      so a money process that boots before shop.json exists throws its
+    #      file-backed book away at construction and cannot pick the file up
+    #      afterwards. Verified in this image: seed-then-start gives 30,
+    #      start-then-seed gives 0, same container, same files.
+    # Consequence: on this two-service blueprint every line is amber and PAY
+    # refuses. That is invariant 7 working correctly on a deployment that lied
+    # to it — but it means NO BILL CAN GO GREEN HERE. If the demo has to bill,
+    # use DEPLOY.md §3c (one container, two processes, money started only after
+    # shop.json is non-empty) and delete this service.
+    dockerCommand: >-
+      sh -c 'mkdir -p "$GAWAAH_DATA_DIR" "$GAWAAH_SHOP_DIR" || exit 1;
+      exec python -m uvicorn --factory gawaah.live_app:app
+      --host 0.0.0.0 --port "$PORT"'
+
+    envVars:
+      # -- the gateway. THIS SERVICE AND NO OTHER ---------------------------
+      # Values are typed into the Render dashboard by a human, once. `sync:
+      # false` is what makes that true: Render will not read a value for these
+      # out of this file, and this file does not contain one.
+      # Use TEST-MODE keys. The key id looks like rzp_test_XXXXXXXXXXXX.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      # The same long random string you paste into the Razorpay dashboard at
+      # Account & Settings -> Webhooks -> Secret. In sim mode nothing at the
+      # gateway will ever post to you, but SET IT ANYWAY: paisa falls back to a
+      # named placeholder when it is empty, /health then reports
+      # webhook_secret_configured: false, and `make preflight` calls that a
+      # FAILURE — correctly, because an empty secret makes every signature
+      # forgeable.
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # -- the mode ----------------------------------------------------------
+      # PINNED, as a literal, on purpose. `sim` is the local simulator: it
+      # mints simulated links and turns a bill green through POST /sim/pay,
+      # which builds and verifies a properly signed webhook in-process. No real
+      # money can move and no real payment can be created.
+      # GAWAAH_ALLOW_LIVE_KEYS is NOT here and must not be added: without it
+      # gawaah/rzp_live.py refuses any key that is not rzp_test_.
+      - key: RZP_MODE
+        value: sim
+
+      # -- where the money keeps its books -----------------------------------
+      # GAWAAH_DATA_DIR is three things at once for this service: the shop.json
+      # it prices from, the audit.jsonl hash chain it appends to, and kernel.db.
+      # On the free tier ALL THREE ARE ERASED on every restart. The chain
+      # restarts from genesis and the day's takings go with it.
+      # /app/results because that is the one directory the image's non-root
+      # user can write — see the till's copy of this note.
+      - key: GAWAAH_DATA_DIR
+        value: /app/results
+      # Read by gawaah/offers.py to find offers.json. Absent file, no offers —
+      # which is correct here: the till applies the discount to the price it
+      # publishes, so applying it a second time would be a double discount.
+      - key: GAWAAH_SHOP_DIR
+        value: /app/results/shop
