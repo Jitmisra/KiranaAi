@@ -148,8 +148,8 @@ counter they cannot look at.
 | | |
 |---|---|
 | Counter | <https://gawaah-till.onrender.com> |
-| Phone | `9000012345` |
-| Password | `review-me-2026` |
+| Phone | `9820114477` |
+| Password | `kirana-demo-2026` |
 | Or make your own | press *Create an account* — name, phone, password. No invitation code on this deployment |
 | Storefront (no sign-in) | append `/#/shop` — the customer's side is open by design |
 

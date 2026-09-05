@@ -130,6 +130,19 @@ services:
       - key: GAWAAH_OPEN_SIGNUP
         value: yes-i-mean-it
 
+      # -- A DEMO ACCOUNT THAT SURVIVES A RESTART ---------------------------
+      # The free tier has no persistent disk, so every deploy starts with an
+      # empty results/ and the boot seeder runs again. Without this it invents
+      # a fresh random password each time and prints it to a log -- so any
+      # credential written in the README is wrong within one restart, which is
+      # exactly what happened. Pinning it means the seeded account is the same
+      # after every wipe, and the README can name it.
+      #
+      # A real shop deletes this with the two lines above it. tools/seed_shop.py
+      # refuses anything under eight characters and never uses this by default.
+      - key: GAWAAH_SEED_PASSWORD
+        value: kirana-demo-2026
+
       # -- where the shop is kept -------------------------------------------
       # Both are honoured by store_dir()/data_dir(). THESE TWO PATHS ARE NOT
       # ARBITRARY: the Dockerfile runs as the non-root user `gawaah` (uid
