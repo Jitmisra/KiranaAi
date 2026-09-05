@@ -5519,6 +5519,7 @@ async def saaf_stack_ep(request: Request) -> JSONResponse:
     compare these" and "these agreed" are different answers.
     """
     try:
+        from gawaah import saaf as saaf_defaults
         from gawaah.saaf import BurstStacker
 
         form = await read_form(request)
@@ -5537,7 +5538,43 @@ async def saaf_stack_ep(request: Request) -> JSONResponse:
         h, w = frames[0].shape[:2]
         frames = [f if f.shape[:2] == (h, w) else cv2.resize(f, (w, h)) for f in frames]
 
-        res = BurstStacker(scale=2).stack(frames)
+        # THE RESOLUTION CEILING, OVERRIDABLE FOR THIS MACHINE'S CAMERA.
+        #
+        # DEFAULT_MAX_BLUR_SCORE = 0.46 is calibrated, not guessed: MTF50 at
+        # 0.15 cyc/px, measured across 10 scenes into 0.4573..0.4684. It is a
+        # threshold on RESOLUTION, so a camera that genuinely resolves less
+        # genuinely fails it, and lowering the shipped default would quietly
+        # lower what every shop is allowed to teach.
+        #
+        # But the number a LAPTOP WEBCAM produces at arm's length sits right on
+        # it — a softness of sigma 1.0, which nobody would call a blurry photo,
+        # scores 0.486 — so on some machines the gate rejects every frame of
+        # every burst and the camera path is simply unusable. That is a worse
+        # outcome than a slightly softer taught view, and it is a property of
+        # the operator's hardware, not of this shop's standards.
+        #
+        # So it is settable per machine and NOT changed here. An operator who
+        # raises it is choosing to teach from a softer picture, which is a
+        # choice they can see the consequence of on the very next scan.
+        _ceiling = os.environ.get("GAWAAH_MAX_BLUR_SCORE", "").strip()
+        _kw: dict[str, Any] = {"scale": 2}
+        if _ceiling:
+            try:
+                v = float(_ceiling)
+            except ValueError:
+                raise UploadRefused(
+                    R_FIELD_MISSING,
+                    f"GAWAAH_MAX_BLUR_SCORE={_ceiling!r} is not a number. It is "
+                    f"a blur-score ceiling between 0 and 1; the built-in is "
+                    f"{saaf_defaults.DEFAULT_MAX_BLUR_SCORE}.") from None
+            if not (0.0 < v <= 1.0):
+                raise UploadRefused(
+                    R_FIELD_MISSING,
+                    f"GAWAAH_MAX_BLUR_SCORE={v} is outside (0, 1]. The built-in "
+                    f"is {saaf_defaults.DEFAULT_MAX_BLUR_SCORE}.")
+            _kw["max_blur_score"] = v
+
+        res = BurstStacker(**_kw).stack(frames)
         return JSONResponse({
             "ok": res.image is not None,
             "settles_money": False,
@@ -5570,9 +5607,20 @@ async def saaf_stack_ep(request: Request) -> JSONResponse:
                 "blur_score": _f(r.blur_score),
                 "shift_px": _f(r.shift_px),
             } for r in (res.reports or [])],
-            "gates": {"blur_var_min": 60.0, "sat_frac_max": 0.02,
-                      "max_blur_score": 0.46, "min_shift_px": 0.15,
-                      "min_diversity": 0.10},
+            # THE GATES ACTUALLY APPLIED, read from the module that applies
+            # them. These were five hardcoded literals, so they reported 0.46
+            # even when the run used a different ceiling — and the page prints
+            # this number to the shopkeeper as the bar their frame missed. A
+            # figure on screen that does not match the one that judged them is
+            # worse than no figure.
+            "gates": {
+                "blur_var_min": saaf_defaults.DEFAULT_BLUR_VAR_MIN,
+                "sat_frac_max": saaf_defaults.DEFAULT_SAT_FRAC_MAX,
+                "max_blur_score": _kw.get(
+                    "max_blur_score", saaf_defaults.DEFAULT_MAX_BLUR_SCORE),
+                "min_shift_px": saaf_defaults.DEFAULT_MIN_SHIFT_PX,
+                "min_diversity": saaf_defaults.DEFAULT_MIN_DIVERSITY,
+            },
         })
     except UploadRefused as exc:
         return _refusal(exc)

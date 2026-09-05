@@ -478,11 +478,23 @@ export default function Products() {
       if (Array.isArray(rep?.frames)) {
         setGate(rep);
         if ((rep.used ?? 0) < 1) {
+          // THE MEASUREMENT, NOT JUST THE VERDICT. "Nothing survived" with the
+          // reason hidden in a tooltip is a dead end; the same refusal with
+          // "0.49 against a 0.46 ceiling" tells you it was marginal, and that
+          // backing off a hand-width will clear it.
+          const worstScore = Math.max(
+            ...rep.frames.filter((f) => !f.used && typeof f.blur_score === 'number')
+              .map((f) => f.blur_score as number), 0);
+          const ceiling = rep.gates?.max_blur_score;
+          const measured = worstScore > 0 && typeof ceiling === 'number'
+            ? ` The softest frame scored ${worstScore.toFixed(3)} against a ${ceiling.toFixed(2)} ceiling.`
+            : '';
           setCapErr({
             reason: 'Every frame failed the quality gate',
             detail: `${rep.rejected} of ${rep.burst} frames rejected — `
-              + `${worstOf(rep)} The gate judged ONLY the rectangle you drew, `
-              + `so this is about the product, not the room. Nothing was kept.`,
+              + `${worstOf(rep)}${measured} The gate judged ONLY the rectangle you drew, `
+              + `so this is about the product, not the room. Nothing was kept. `
+              + `UPLOAD A FILE takes a still photo instead, which is not burst-gated.`,
           });
           return;
         }
