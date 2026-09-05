@@ -114,6 +114,22 @@ services:
       - key: GAWAAH_REQUIRE_AUTH
         sync: false
 
+      # -- OPEN SIGN-UP, BECAUSE THIS ONE IS A DEMONSTRATION -----------------
+      # A literal, not `sync: false`, because it is not a secret and because a
+      # reviewer opening this repository should be able to see that the door on
+      # THIS deployment is open and why. gawaah/auth.py takes only this exact
+      # string; "1" and "true" leave the invitation gate shut.
+      #
+      # A REAL SHOP MUST DELETE THESE TWO LINES. With them, anybody who reaches
+      # the URL can make themselves an account on the counter that holds the
+      # catalogue, the books and the customers' numbers. It is here because the
+      # data behind it is seeded fixtures on a free tier with no disk -- a
+      # restart wipes and re-seeds, so a demo that gets vandalised heals itself
+      # -- and because a counter nobody can sign into is a counter nobody can
+      # review.
+      - key: GAWAAH_OPEN_SIGNUP
+        value: yes-i-mean-it
+
       # -- where the shop is kept -------------------------------------------
       # Both are honoured by store_dir()/data_dir(). THESE TWO PATHS ARE NOT
       # ARBITRARY: the Dockerfile runs as the non-root user `gawaah` (uid

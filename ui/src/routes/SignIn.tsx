@@ -4,7 +4,7 @@ import * as auth from '../lib/authapi';
 import { shopNameplate, shopProfile, type ShopProfileDoc } from '../lib/adminapi';
 import { BOUNCED_FROM } from '../App';
 import { useT } from '../lib/i18n';
-import { Card, Pill, Verdict, Refusal, Skeleton, SkeletonText } from '../components/ui';
+import { Segmented, Card, Pill, Verdict, Refusal, Skeleton, SkeletonText } from '../components/ui';
 import '../styles/auth.css';
 
 /**
@@ -352,6 +352,17 @@ export default function SignIn() {
           <FormCard
             status={status}
             mode={mode}
+            onMode={(m) => {
+              setMode(m);
+              setRefusal(null);
+              setNote(null);
+              setTried(false);
+              // The password and the invitation code do not survive the switch.
+              // The name and the number are the same person either way; a
+              // secret left in a field on a screen that now says something else
+              // is a secret nobody remembers is there.
+              setForm((f) => ({ ...f, password: '', invite: '' }));
+            }}
             form={form}
             onSet={set}
             problems={showProblems}
@@ -373,10 +384,11 @@ export default function SignIn() {
 /* ================================================== the form, signed out == */
 
 function FormCard({
-  status, mode, form, onSet, problems, busy, refusal, note, onSubmit,
+  status, mode, onMode, form, onSet, problems, busy, refusal, note, onSubmit,
 }: {
   status: auth.AuthStatus;
   mode: Mode;
+  onMode: (m: Mode) => void;
   form: Form;
   onSet: <K extends keyof Form>(k: K, v: string) => void;
   problems: Problems;
@@ -409,22 +421,32 @@ function FormCard({
           after it needs an invitation from somebody signed in.
         </p>
       ) : (
-        // SIGN-UP IS NOT OFFERED WHEN IT CANNOT SUCCEED.
+        // SIGN-UP IS OFFERED ONLY WHEN IT CAN ACTUALLY SUCCEED.
         //
-        // Once this counter has an account, `POST /auth/signup` refuses
-        // anything without a code the shop itself issued -- so the toggle was
-        // an invitation to fill in four fields, press CREATE THE ACCOUNT and be
-        // told no. Worse, on a public address it reads like an open door and
-        // sends people looking for a way through one that was never open.
-        //
-        // The server has not changed and does not need to: the gate was always
-        // there. What changed is that the page stops advertising a form whose
-        // only outcome is a refusal, and says instead where a code comes from.
-        <p className="auth-lede auth-closed">
-          Signing in is the only way onto this counter. It already has an
-          account, so a new one needs an invitation code from somebody signed
-          in — they can issue one from <span className="mono">Settings</span>.
-        </p>
+        // `status.signup_open` is the server's own answer, not a guess: true on
+        // a counter with no accounts yet (somebody has to be first) and on one
+        // whose operator set GAWAAH_OPEN_SIGNUP for a public demonstration.
+        // When it is false, `POST /auth/signup` refuses anything without a code
+        // the shop issued -- so offering the form would be four fields and a
+        // refusal, and on a public address it reads like an open door.
+        status.signup_open ? (
+          <div className="auth-switch">
+            <Segmented
+              value={mode}
+              onChange={onMode}
+              options={[
+                { value: 'in', label: 'Sign in', title: 'You already have an account here' },
+                { value: 'up', label: 'Create an account', title: 'Open on this counter' },
+              ]}
+            />
+          </div>
+        ) : (
+          <p className="auth-lede auth-closed">
+            Signing in is the only way onto this counter. It already has an
+            account, so a new one needs an invitation code from somebody signed
+            in — they can issue one from <span className="mono">Settings</span>.
+          </p>
+        )
       )}
 
       <form className="auth-form" onSubmit={onSubmit} aria-busy={busy}>
@@ -465,7 +487,7 @@ function FormCard({
           disabled={busy}
         />
 
-        {signUp && !first && (
+        {signUp && !first && !status.signup_open && (
           <TextField
             label="Invitation code"
             value={form.invite}

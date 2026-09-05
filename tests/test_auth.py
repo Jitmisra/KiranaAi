@@ -1120,3 +1120,84 @@ def test_current_shopkeeper_never_raises(client: TestClient) -> None:
     auth.accounts_path().parent.mkdir(parents=True, exist_ok=True)
     auth.accounts_path().write_text("not json at all", encoding="utf-8")
     assert auth.current_shopkeeper(_Req(scope)) is None
+
+
+# ===========================================================================
+# OPEN SIGN-UP, AND THE SWITCH THAT COSTS SOMETHING TO SET
+#
+# A counter nobody can create an account on is a counter a reviewer can only
+# look at through a screenshot. GAWAAH_OPEN_SIGNUP=yes-i-mean-it props the door
+# open for a public demonstration. Any other value leaves it shut, and nothing
+# else about the lock changes.
+# ===========================================================================
+
+def test_a_second_account_still_needs_an_invite_by_default(client):
+    first = client.post("/auth/signup", json={
+        "name": "Ramesh", "phone": "9820114477", "password": "first-pass-2026"})
+    assert first.status_code == 200, first.text
+    second = client.post("/auth/signup", json={
+        "name": "Stranger", "phone": "9000000001", "password": "second-pass-2026"})
+    assert second.status_code == 400
+    assert second.json()["reason"] == auth.R_SIGNUP_CLOSED
+
+
+def test_the_switch_opens_it_and_only_the_exact_value_does(client, monkeypatch):
+    client.post("/auth/signup", json={
+        "name": "Ramesh", "phone": "9820114477", "password": "first-pass-2026"})
+
+    # Near-misses do not count. "1" and "true" are what somebody types when
+    # they are guessing at a flag, and a safety that turns off on a guess is
+    # not a safety.
+    for wrong in ("1", "true", "yes", "YES-I-MEAN-IT", ""):
+        monkeypatch.setenv(auth.OPEN_SIGNUP_ENV, wrong)
+        assert auth.signup_is_open() is False, wrong
+        r = client.post("/auth/signup", json={
+            "name": "Stranger", "phone": "9000000002", "password": "nope-pass-2026"})
+        assert r.status_code == 400 and r.json()["reason"] == auth.R_SIGNUP_CLOSED
+
+    monkeypatch.setenv(auth.OPEN_SIGNUP_ENV, auth.OPEN_SIGNUP_VALUE)
+    assert auth.signup_is_open() is True
+    r = client.post("/auth/signup", json={
+        "name": "Second Person", "phone": "9000000003", "password": "open-pass-2026"})
+    assert r.status_code == 200, r.text
+
+
+def test_status_says_which_door_is_open(client, monkeypatch):
+    client.post("/auth/signup", json={
+        "name": "Ramesh", "phone": "9820114477", "password": "first-pass-2026"})
+    shut = client.get("/auth/status").json()
+    assert shut["signup_open"] is False and shut["signup_needs_invite"] is True
+
+    monkeypatch.setenv(auth.OPEN_SIGNUP_ENV, auth.OPEN_SIGNUP_VALUE)
+    open_ = client.get("/auth/status").json()
+    assert open_["signup_open"] is True and open_["signup_needs_invite"] is False
+    assert open_["signup_switch"] == auth.OPEN_SIGNUP_ENV
+
+
+def test_an_open_door_still_refuses_a_wrong_invitation(client, monkeypatch):
+    """A code that was typed is checked even when none was required."""
+    client.post("/auth/signup", json={
+        "name": "Ramesh", "phone": "9820114477", "password": "first-pass-2026"})
+    monkeypatch.setenv(auth.OPEN_SIGNUP_ENV, auth.OPEN_SIGNUP_VALUE)
+    r = client.post("/auth/signup", json={
+        "name": "Stranger", "phone": "9000000004",
+        "password": "open-pass-2026", "invite": "inv_not_from_here"})
+    assert r.status_code == 400
+    assert r.json()["reason"] == auth.R_INVITE_UNKNOWN
+
+
+def test_an_open_door_weakens_nothing_else(client, monkeypatch):
+    """Short passwords, the phone as a password, and duplicates still refuse."""
+    client.post("/auth/signup", json={
+        "name": "Ramesh", "phone": "9820114477", "password": "first-pass-2026"})
+    monkeypatch.setenv(auth.OPEN_SIGNUP_ENV, auth.OPEN_SIGNUP_VALUE)
+    for body, reason in (
+        ({"name": "A", "phone": "9000000005", "password": "short"},
+         auth.R_PASSWORD_SHORT),
+        ({"name": "A", "phone": "9000000006", "password": "9000000006"},
+         auth.R_PASSWORD_IS_PHONE),
+        ({"name": "A", "phone": "9820114477", "password": "another-pass-2026"},
+         auth.R_PHONE_TAKEN),
+    ):
+        r = client.post("/auth/signup", json=body)
+        assert r.status_code == 400 and r.json()["reason"] == reason, body

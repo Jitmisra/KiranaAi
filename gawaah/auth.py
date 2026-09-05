@@ -93,6 +93,40 @@ router = APIRouter()
 # Every one of these is a state this module can actually reach, and every one
 # has a test. None is a guess and none is decoration.
 
+#: OPEN SIGN-UP, AND THE ONE PLACE IT BELONGS.
+#:
+#: By default this counter lets exactly one account be opened without an
+#: invitation -- the first, because somebody has to be first -- and every
+#: account after that needs a code from a person already signed in. That is
+#: correct for a shop: the till holds the catalogue, the books, the customers'
+#: numbers and the till's own money screens, and a stranger who finds the URL
+#: should not be able to make themselves a shopkeeper.
+#:
+#: A PUBLIC DEMONSTRATION IS THE EXCEPTION, AND IT IS A REAL ONE. A counter
+#: nobody can create an account on is a counter a reviewer can only look at
+#: through a screenshot. So the door can be propped open -- deliberately, by
+#: whoever deploys, with a value they had to type out in full:
+#:
+#:     GAWAAH_OPEN_SIGNUP=yes-i-mean-it
+#:
+#: Same shape as GAWAAH_ALLOW_LIVE_KEYS in gawaah/rzp_live.py and for the same
+#: reason: a switch that turns a safety off should cost more than a `1`, and
+#: should be greppable in a deployment's config as an obvious decision. Any
+#: other value, including "true" and "1", leaves the invitation gate shut.
+#:
+#: What it does NOT do: weaken anything else. Passwords are still scrypt-hashed
+#: and still refused if they are short or are the phone number, the phone is
+#: still unique, and every route still needs a session.
+OPEN_SIGNUP_ENV = "GAWAAH_OPEN_SIGNUP"
+OPEN_SIGNUP_VALUE = "yes-i-mean-it"
+
+
+def signup_is_open() -> bool:
+    """Whether a stranger may open an account with no invitation. Read fresh
+    every time, so an operator who sets it does not have to restart."""
+    return (os.environ.get(OPEN_SIGNUP_ENV) or "").strip() == OPEN_SIGNUP_VALUE
+
+
 R_BAD_BODY = "auth_body_not_json"
 R_BAD_FIELD = "auth_field_not_text"
 R_NO_NAME = "auth_name_missing"
@@ -1577,7 +1611,7 @@ async def signup_ep(request: Request) -> JSONResponse:
             # question `/auth/signin` goes to some trouble not to answer. With
             # this order, everybody without a good code gets the same sentence.
             invite_rec: Optional[dict[str, Any]] = None
-            if not first:
+            if not first and not signup_is_open():
                 if not invite:
                     raise AuthRefused(
                         R_SIGNUP_CLOSED,
@@ -1585,6 +1619,12 @@ async def signup_ep(request: Request) -> JSONResponse:
                         "needs an invitation from somebody signed in. Ask them "
                         "for a code from POST /auth/invite. Nothing was "
                         "created.")
+                invite_rec = _check_invite(doc, invite)
+            elif not first and invite:
+                # The door is open, but a code that was typed is still checked.
+                # Accepting a wrong one because the gate happens to be down
+                # would burn nothing and teach the operator that their invites
+                # do not mean anything.
                 invite_rec = _check_invite(doc, invite)
 
             if digits in doc["accounts"]:
@@ -1842,8 +1882,9 @@ def status_ep(request: Request) -> JSONResponse:
             "settles_money": False,
             "accounts": n,
             "store_readable": readable,
-            "signup_open": n == 0,
-            "signup_needs_invite": n > 0,
+            "signup_open": n == 0 or signup_is_open(),
+            "signup_needs_invite": n > 0 and not signup_is_open(),
+            "signup_switch": OPEN_SIGNUP_ENV,
             "enforced": enforced,
             "switch": "GAWAAH_REQUIRE_AUTH",
             "switch_on": switch_on,

@@ -148,15 +148,19 @@ counter they cannot look at.
 | | |
 |---|---|
 | Counter | <https://gawaah-till.onrender.com> |
-| Phone | `9820114477` |
-| Password | `kirana-demo-2026` |
+| Getting in | press *Create an account* — name, phone, password. No invitation code needed on this deployment |
 | Storefront (no sign-in) | append `/#/shop` — the customer's side is open by design |
 
-Two honest notes. This password is published on purpose and anyone can therefore edit
-the demo shop; the data is seeded fixtures, and on a free tier with no persistent disk
-a restart wipes and re-seeds it, so anything broken heals itself. And the first request
-after an idle spell takes ~50 seconds — Render's free instances spin down, which is the
-same cold start that can outrun a webhook.
+Sign-up is open here on purpose, set by one line in `render.yaml`:
+`GAWAAH_OPEN_SIGNUP=yes-i-mean-it`. It is not the default and a real shop deletes it —
+by default a counter allows exactly one account without an invitation (somebody has to
+be first) and every one after needs a code from a person already signed in. It is open
+here because a counter nobody can sign into is a counter nobody can review, and because
+the data behind it is seeded fixtures on a free tier with no disk: a restart wipes and
+re-seeds, so a demo that gets vandalised heals itself.
+
+The first request after an idle spell takes ~50 seconds — Render's free instances spin
+down, which is the same cold start that can outrun a webhook.
 
 ### The data you are looking at
 
