@@ -130,7 +130,10 @@ PROFILE_FORMAT = 1
 #: This module uses the list the other way round from everybody else: a receipt
 #: QR pointing AT one of these hosts is refused, because a code that opens a
 #: bill must never be a code that asks for money.
-GATEWAY_HOSTS = ("rzp.io", "razorpay.com", "rzp.link")
+GATEWAY_HOSTS = ("rzp.io", "razorpay.com", "rzp.link",
+                 # the simulator's host: RFC 2606 `.invalid`, unresolvable,
+                 # so a receipt in sim mode still shows its own link.
+                 "pay.gawaah-sim.invalid")
 
 #: Addresses that mean "whatever device opens this". A QR carrying one is a
 #: perfectly good QR that no phone can follow, which is a silent failure unless

@@ -570,13 +570,50 @@ def test_collect_then_partial_shows_green_settled_and_neutral_still_due(rig):
     assert v["outstanding_paise"] == 45000
 
 
-def test_the_qr_refuses_the_simulators_invalid_host_by_name(rig):
+def test_the_qr_encodes_the_simulators_link_in_sim_mode(rig):
+    """A counter in sim mode must still be able to SHOW its collection link.
+
+    This used to assert the opposite, and the opposite was the bug: the host
+    allowlist held only the three real gateway hosts, so every counter not
+    wired to a live gateway refused to render the very QR it had just minted.
+    A customer pressing PAY on the storefront got `refused_to_show_this_string`
+    and no way to pay at all.
+
+    `pay.gawaah-sim.invalid` is RFC 2606 reserved and can never resolve, so
+    rendering it cannot move money, cannot be phished with, and cannot be
+    followed anywhere. What holds invariant 6 is not this list — it is that
+    nothing in this program CONSTRUCTS a payable string, and that only a
+    signature-verified webhook turns a bill green.
+    """
     bid = till_book(rig).json()["book_id"]
     c = rig.till.post(f"/khata/{bid}/collect").json()
+    assert c["short_url"].startswith("https://pay.gawaah-sim.invalid/")
     q = rig.till.get(c["qr_url"])
-    assert q.status_code == 400
-    assert q.json()["reason"] == "refused_to_encode_this_string"
-    assert q.json()["short_url"].startswith("https://pay.gawaah-sim.invalid/")
+    assert q.status_code == 200, q.json()
+    assert q.headers["content-type"] == "image/png"
+
+
+def test_the_allowlist_widened_by_one_host_and_not_generally():
+    """One unresolvable host was added. Nothing else became payable.
+
+    Checked through `storefront._checked_link`, which is the same allowlist the
+    khata QR consults — `tools.upload_app.LINK_HOSTS`, read by every consumer
+    rather than copied.
+    """
+    from gawaah import storefront
+    from tools import upload_app
+
+    assert "pay.gawaah-sim.invalid" in upload_app.LINK_HOSTS
+    for good in ("https://pay.gawaah-sim.invalid/l/abc", "https://rzp.io/i/abc"):
+        assert storefront._checked_link(good) == good
+
+    for bad in ("https://evil.example.com/pay",
+                # a look-alike: the sim host as a PREFIX of somebody else's
+                "https://pay.gawaah-sim.invalid.evil.com/pay",
+                "upi://pay?pa=someone@bank"):
+        with pytest.raises(storefront.StorefrontRefused) as e:
+            storefront._checked_link(bad)
+        assert e.value.reason == "refused_to_show_this_string", bad
 
 
 def test_two_spellings_of_one_number_are_one_household(rig):

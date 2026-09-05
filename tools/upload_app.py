@@ -7445,7 +7445,26 @@ def _looks_like_upi(url: str) -> bool:
     return url.lstrip("\x00-\x20 \t\r\n").lower().lstrip().startswith("upi:")
 
 
-LINK_HOSTS = ("rzp.io", "razorpay.com", "rzp.link")
+#: The host the SIMULATOR mints on. `gawaah/rzp_sim.py` moved off the gateway's
+#: own domain shape on purpose — a test double that mints `rzp.io/i/<token>` is
+#: a forgery primitive sitting in the codebase (invariant 6). `.invalid` is
+#: reserved by RFC 2606 and can never resolve, so a link here cannot be paid,
+#: cannot be phished with, and cannot be mistaken for a real one by anything
+#: that tries to follow it.
+#:
+#: IT IS ON THE ALLOWLIST, AND THAT IS NOT A HOLE. The list answers "is this
+#: shaped like a payable link this counter minted", and in sim mode it is —
+#: leaving it off meant a customer who pressed PAY on the storefront got
+#: `refused_to_show_this_string` and no way to pay at all, on every counter
+#: not wired to a live gateway. What keeps the invariant is not this list: it
+#: is that nothing here CONSTRUCTS a payable string, and that only a
+#: signature-verified webhook can turn a bill green.
+SIM_LINK_HOST = "pay.gawaah-sim.invalid"
+
+#: Hosts a payable link may live on. Real gateway hosts, plus the simulator's
+#: unresolvable one. Every consumer reads this — receipts, khata, shopface and
+#: the storefront all defer to it rather than keeping a second copy.
+LINK_HOSTS = ("rzp.io", "razorpay.com", "rzp.link", SIM_LINK_HOST)
 R_REFUSED_QR = "refused_to_encode_this_string"
 
 

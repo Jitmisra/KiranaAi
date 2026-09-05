@@ -123,7 +123,11 @@ _SAID_AROUND_A_NAME = frozenset({
 
 #: Hosts a payable link may live on — the till's own allowlist, asked of the
 #: till when it is loaded so there is one list and not two.
-_LINK_HOSTS_FALLBACK = ("rzp.io", "razorpay.com", "rzp.link")
+#: Used only when `tools.upload_app.LINK_HOSTS` cannot be imported. It must
+#: carry the simulator's unresolvable host for the same reason that list does
+#: — otherwise a counter in sim mode refuses to show its own collection link.
+_LINK_HOSTS_FALLBACK = ("rzp.io", "razorpay.com", "rzp.link",
+                        "pay.gawaah-sim.invalid")
 
 
 class KhataRefused(Exception):
