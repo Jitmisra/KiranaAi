@@ -2032,3 +2032,24 @@ def test_a_two_letter_glue_is_not_enough_to_match():
     """Short glue is noise; the pass needs four characters to fire."""
     with pytest.raises(assistant.AssistantRefused):
         assistant.resolve_product("a b", _shop())
+
+
+def test_devanagari_reaches_the_alias_table():
+    """पॉन्ड्स क्रीम -> "ponds krim" -> krim is cream -> pondscream.
+
+    ALIASES was consulted only on the words AS TYPED, so a sentence that
+    arrived in Devanagari could never be widened by it: the romaniser spells
+    क्रीम as it SOUNDS ("krim"), which is three edits from "cream" and outside
+    any typo budget worth having. The shopkeeper was told the shop has nothing
+    called पॉन्ड्स क्रीम while pondscream sat in the catalogue.
+    """
+    shop = {"pondscream": {"name": "pondscream", "price_paise": 30000}}
+    assert assistant.resolve_product("पॉन्ड्स क्रीम", shop) == "pondscream"
+    assert assistant.resolve_product("ponds cream", shop) == "pondscream"
+
+
+def test_widening_a_romanised_spelling_still_refuses_the_unknown():
+    shop = {"pondscream": {"name": "pondscream", "price_paise": 30000}}
+    with pytest.raises(assistant.AssistantRefused) as e:
+        assistant.resolve_product("पेप्सी", shop)
+    assert e.value.reason == assistant.R_NO_SUCH_PRODUCT

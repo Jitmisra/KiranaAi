@@ -1480,6 +1480,14 @@ ALIASES: dict[str, str] = {
     # --- oil, and the things beside it on the same shelf
     "tel": "oil",
     "sabun": "soap", "saabun": "soap", "saban": "soap",
+    # English words a shopkeeper says in Devanagari, which come back out of
+    # the romaniser spelt as they SOUND: क्रीम is "krim", not "cream", and
+    # that is three edits away -- outside any typo budget worth having.
+    "krim": "cream", "kreem": "cream", "creem": "cream",
+    "powder": "powder", "paudar": "powder", "pauder": "powder",
+    "sampu": "shampoo", "shampu": "shampoo",
+    "biskut": "biscuit", "biskit": "biscuit",
+    "tel": "oil", "tail": "oil",
     "surf": "detergent", "manjan": "toothpaste",
     "agarbatti": "incense", "dhoop": "incense",
     "mombatti": "candle", "mombati": "candle",
@@ -2242,6 +2250,20 @@ def resolve_product(phrase: str, known: dict[str, dict[str, Any]]) -> str:
             hits = _match(spelt, known)
             if hits:
                 break
+            # AND THE SAME SPELLING, WIDENED.
+            #
+            # `ALIASES` was only ever consulted on the words as typed, so it
+            # could not help a sentence that arrived in Devanagari: "पॉन्ड्स
+            # क्रीम" romanises to "ponds krim", the table holds krim -> cream,
+            # and nothing ever asked it. The shopkeeper was told the shop has
+            # nothing called पॉन्ड्स क्रीम while `pondscream` sat in the
+            # catalogue. Every alias already written now works from either
+            # script, which is what the table always claimed to be for.
+            widened_spelt = [ALIASES.get(t, t) for t in spelt]
+            if widened_spelt != spelt:
+                hits = _match(widened_spelt, known)
+                if hits:
+                    break
         if not hits and spellings:
             hits = _near(spellings[0], known, bonus=0)
     if len(hits) == 1:
