@@ -37,6 +37,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from gawaah import advisor  # noqa: E402
+from gawaah import tts as _tts
 from gawaah import assistant  # noqa: E402
 from gawaah import purchases  # noqa: E402
 from gawaah import storefront  # noqa: E402
@@ -251,7 +252,7 @@ def test_with_no_key_the_figures_are_spoken_and_reasoning_is_declined(shop):
     assert body["brain"] == BRAIN_LOCAL and body["key_present"] is False
     assert body["reasoned"] is False and body["advice"] is None
     assert body["grounded"] is True
-    assert body["spoken"] == body["answer"]
+    assert body["spoken"] == _tts.spoken_money(body["answer"], "en-IN")
     assert "Nothing has been billed" in body["spoken"]
     assert "XAI_API_KEY" in body["cannot_reason_because"]
     assert body["left_the_machine"] is None
@@ -280,7 +281,8 @@ def test_a_price_answer_comes_from_the_catalogue_not_the_advisor(shop):
     body = say(shop, "Maggi ka daam kya hai").json()
     assert body["data"]["price_paise"] == MAGGI[2]
     assert isinstance(body["data"]["price_paise"], int)
-    assert "14.00" in body["spoken"]
+    # The eye keeps the written form; the mouth gets the spoken one.
+    assert "14.00" in body["answer"] and "14 rupees" in body["spoken"]
 
 
 def test_an_instruction_to_bill_is_refused_because_this_is_a_call(shop):
@@ -313,7 +315,7 @@ def test_the_margin_is_kharreds_figure_and_the_unknown_part_is_named(
     assert d["covered"]["margin_paise"] == BISCUIT[2] - 1400
     assert d["covered"]["margin_rupees"] == "7.45"
     assert d["margin_is_partial"] is False
-    assert "7.45" in body["spoken"]
+    assert "7 rupees 45 paise" in body["spoken"]
 
 
 def test_a_sale_with_no_recorded_cost_is_a_partial_margin_not_a_zero(
@@ -368,7 +370,7 @@ def test_uska_means_the_product_this_call_last_named(shop):
     assert second["tool"] == TOOL_PRICE
     assert second["data"]["sku_id"] == SOAP[0]
     assert second["context"]["carried_product"] == SOAP[1]
-    assert "39.50" in second["spoken"]
+    assert "39 rupees 50 paise" in second["spoken"]
 
 
 def test_uska_with_nothing_named_yet_is_refused_not_guessed(shop):
@@ -472,7 +474,7 @@ def test_grok_routes_then_phrases_and_the_history_goes_with_it(shop, tmp_path,
     assert body["brain"] == BRAIN_GROK and body["reasoned"] is True
     assert body["tool"] == TOOL_TAKINGS
     assert body["advice"].startswith("Aaj 1 bill hua")
-    assert body["spoken"] == body["advice"]
+    assert body["spoken"] == _tts.spoken_money(body["advice"], "en-IN")
     assert body["data"]["revenue_paise"] == MAGGI[2]
     assert body["grok_error"] is None
     assert len(fake.calls) == 2
@@ -619,8 +621,8 @@ def test_advice_quoting_a_figure_it_was_not_given_is_dropped_by_name(
     body = say(shop, "aaj kitna hua").json()
     assert body["ok"] is True
     assert body["reasoned"] is False and body["advice"] is None
-    assert body["spoken"] == body["answer"]
-    assert "14.00" in body["spoken"]
+    assert body["spoken"] == _tts.spoken_money(body["answer"], "en-IN")
+    assert "14 rupees" in body["spoken"]
     assert body["grok_error"]["reason"] == R_MODEL_INVENTED_A_FIGURE
     assert "1400" in body["grok_error"]["detail"]
     assert body["cannot_reason_because"] == body["grok_error"]["detail"]
@@ -730,7 +732,7 @@ def test_a_phrasing_call_that_fails_still_delivers_the_figures(shop,
     assert body["ok"] is True and body["brain"] == BRAIN_GROK
     assert body["reasoned"] is False and body["advice"] is None
     assert body["grok_error"]["reason"] == R_GROK_HTTP
-    assert "14.00" in body["spoken"]
+    assert "14 rupees" in body["spoken"]
     assert body["cannot_reason_because"]
 
 
@@ -819,3 +821,14 @@ def test_the_module_contains_no_payment_primitive_and_no_arithmetic_on_money():
                       "vpa", "to_rupees_str", "from_rupees_str"):
         assert forbidden not in low, f"{forbidden!r} is in advisor.py"
     assert "add_to_bill" not in json.dumps(advisor.TOOLS)
+
+
+def test_a_hindi_question_is_answered_in_hindi_and_rupees_are_spoken_as_words(shop):
+    """The parser's takings prose was English-only, and its money was written
+    "Rs 3173.00", which a voice does not know how to say. Asked in Hindi, the
+    figures now come back in Hindi and the voice line carries "रुपये"."""
+    body = say(shop, "आज की बिक्री कितनी हुई", lang="hi-IN").json()
+    assert body.get("tool") == "todays_takings", body
+    spoken = body.get("spoken") or ""
+    assert "Rs " not in spoken and "₹" not in spoken, spoken
+    assert "रुपये" in spoken or "बिल" in spoken, spoken

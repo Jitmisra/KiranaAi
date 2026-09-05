@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import struct
 import urllib.error
 import urllib.request
@@ -73,7 +74,35 @@ LANGS: dict[str, str] = {
     "hi-IN": "Hindi",
     "en-IN": "Indian English",
     "bn-IN": "Bengali",
+    # The picker offers these; a voice that refused them made the button a lie.
+    "ta-IN": "Tamil",
+    "te-IN": "Telugu",
 }
+
+#: How a figure is READ OUT. "Rs 3173.00" is a way of writing money for a
+#: page; a mouth says "तीन हज़ार एक सौ तिहत्तर रुपये", and the nearest thing a
+#: synthesiser reads reliably in every script is the digits followed by the
+#: word for rupees in that language. Left as "Rs", one voice said "dollars"
+#: and another spelt the letters. The paise are read only when they are not
+#: zero, because "27 रुपये 0 पैसे" is not how anybody says 27 rupees.
+_MONEY_WORDS: dict[str, tuple[str, str]] = {
+    "hi": ("रुपये", "पैसे"), "bn": ("টাকা", "পয়সা"), "ta": ("ரூபாய்", "பைசா"),
+    "te": ("రూపాయలు", "పైసలు"), "en": ("rupees", "paise"),
+}
+_MONEY_RE = re.compile(r"(?:Rs\.?\s?|₹\s?|INR\s?)(\d[\d,]*)(?:\.(\d{1,2}))?")
+
+
+def spoken_money(text: str, lang: str = "hi-IN") -> str:
+    """Every written amount in `text`, as a voice should read it. Pure."""
+    words = _MONEY_WORDS.get((lang or "en").split("-")[0].lower(), _MONEY_WORDS["en"])
+    def one(m: "re.Match[str]") -> str:
+        whole = m.group(1).replace(",", "")
+        paise = (m.group(2) or "").ljust(2, "0")
+        out = f"{int(whole)} {words[0]}"
+        if paise and int(paise):
+            out += f" {int(paise)} {words[1]}"
+        return out
+    return _MONEY_RE.sub(one, text or "")
 
 DEFAULT_MODEL = "gemini-2.5-flash-preview-tts"
 #: Measured on 3 September 2026 against the 3.1 preview: 5.4 s against 7.5 s
@@ -234,7 +263,7 @@ def synthesise(text: str, lang: str = "hi-IN") -> Voiced:
 
     Raises TTSRefused, always with a name and a sentence a page can show.
     """
-    said = _clean(text)
+    said = _clean(spoken_money(text, lang))
     if not said:
         raise TTSRefused(R_EMPTY, "nothing was given to say.")
     if lang not in LANGS:

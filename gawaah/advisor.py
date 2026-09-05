@@ -92,6 +92,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from . import assistant
+from . import tts as _tts
 from .assistant import AssistantRefused, GrokUnavailable
 from .ledger import Ledger
 from .money import MoneyError
@@ -969,16 +970,58 @@ def _sentences_out(session: Session) -> dict[str, Any]:
             "answers": len(session.turns), "fields": []}
 
 
+#: The one deterministic answer a shopkeeper asks for most, in the language
+#: they asked it in. The parser's prose was English-only, so a Hindi question
+#: that the model failed to route came back as "12 bills today ... Rs 3173.00"
+#: — right figures, wrong language, and "Rs" read aloud as something else.
+#: Only the hot template is translated here; every other tool's prose still
+#: gets its money normalised for speech by `_tts.spoken_money`.
+_TAKINGS = {
+    "hi": ("आज ({label}) {bills} बिल हुए, कुल {rev}। उसमें से {settled} गेटवे से "
+           "सेटल हो चुका है और {await_} अभी बाकी है।",
+           "आज ({label}) इस काउंटर पर कोई बिल नहीं बना। यह चेन का जवाब है, अंदाज़ा नहीं।"),
+    "bn": ("আজ ({label}) {bills}টি বিল হয়েছে, মোট {rev}। তার মধ্যে {settled} গেটওয়ে "
+           "থেকে সেটল হয়েছে আর {await_} এখনও বাকি।",
+           "আজ ({label}) এই কাউন্টারে কোনো বিল হয়নি। এটা চেইনের উত্তর, অনুমান নয়।"),
+    "ta": ("இன்று ({label}) {bills} பில்கள், மொத்தம் {rev}. அதில் {settled} கேட்வேயில் "
+           "செட்டில் ஆகிவிட்டது, {await_} இன்னும் நிலுவையில்.",
+           "இன்று ({label}) இந்த கவுண்டரில் பில் எதுவும் இல்லை. இது சங்கிலியின் பதில், ஊகம் அல்ல."),
+    "te": ("ఈరోజు ({label}) {bills} బిల్లులు, మొత్తం {rev}. అందులో {settled} గేట్‌వే ద్వారా "
+           "సెటిల్ అయింది, {await_} ఇంకా పెండింగ్‌లో ఉంది.",
+           "ఈరోజు ({label}) ఈ కౌంటర్‌లో బిల్లు ఏదీ లేదు. ఇది చైన్ సమాధానం, ఊహ కాదు."),
+}
+
+
+def _in_the_askers_language(tool: str, result: dict[str, Any], answer: str,
+                            lang: Optional[str]) -> str:
+    base = (lang or "en").split("-")[0].lower()
+    tpl = _TAKINGS.get(base)
+    brief = result.get("data") if isinstance(result.get("data"), dict) else None
+    if tool != "todays_takings" or tpl is None or brief is None:
+        return answer
+    bills = int(brief.get("bills") or 0)
+    label = str(brief.get("date") or brief.get("day") or "")
+    if not bills:
+        return tpl[1].format(label=label)
+    r = lambda k: _tts.spoken_money(f"Rs {brief.get(k) or '0.00'}", lang or "hi-IN")
+    return tpl[0].format(label=label, bills=bills, rev=r("revenue_rupees"),
+                         settled=r("settled_rupees"), await_=r("awaiting_rupees"))
+
+
 def _grounded(*, tool: str, args: dict[str, Any], result: dict[str, Any],
               brain: str, err: Optional[GrokUnavailable],
               carried: Optional[str], left: Optional[dict[str, Any]],
-              advice: Optional[str], cannot: Optional[str]
+              advice: Optional[str], cannot: Optional[str],
+              lang: Optional[str] = None,
               ) -> dict[str, Any]:
     """A turn whose figures came from a tool run on this machine."""
-    answer = str(result.get("answer") or "")
+    answer = _in_the_askers_language(tool, result, str(result.get("answer") or ""), lang)
     return {
         "tool": tool, "arguments": args, "answer": answer,
-        "advice": advice, "spoken": advice or answer,
+        # What the VOICE gets: the same sentence with every "Rs 3173.00"
+        # turned into digits plus the word for rupees in the asker's
+        # language. The page keeps `answer` for the eye; a mouth reads this.
+        "advice": advice, "spoken": _tts.spoken_money(advice or answer, lang or "en-IN"),
         "grounded": True, "reasoned": advice is not None,
         "data": result.get("data"),
         "context": {"carried_product": carried},
@@ -1001,7 +1044,7 @@ def answer_turn(session: Session, text: str,
         result = execute(tool, args, brain=BRAIN_LOCAL)
         return _grounded(tool=tool, args=args, result=result,
                          brain=BRAIN_LOCAL, err=None, carried=carried,
-                         left=None, advice=None, cannot=_no_model_note())
+                         left=None, advice=None, cannot=_no_model_note(), lang=lang)
 
     # ---- the model routes ----------------------------------------------
     try:
@@ -1013,7 +1056,7 @@ def answer_turn(session: Session, text: str,
         return _grounded(tool=tool, args=args, result=result,
                          brain=BRAIN_LOCAL, err=exc, carried=carried,
                          left=_sentences_out(session), advice=None,
-                         cannot=exc.detail)
+                         cannot=exc.detail, lang=lang)
 
     if chosen is None:
         # Prose. If this counter's own parser can read the sentence AND run
@@ -1044,7 +1087,7 @@ def answer_turn(session: Session, text: str,
         return _grounded(tool=tool, args=args, result=result,
                          brain=BRAIN_LOCAL, err=err, carried=None,
                          left=_sentences_out(session), advice=None,
-                         cannot=err.detail)
+                         cannot=err.detail, lang=lang)
 
     # ---- this machine answers ------------------------------------------
     tool, args = chosen
@@ -1083,7 +1126,7 @@ def answer_turn(session: Session, text: str,
         err = exc
     return _grounded(tool=tool, args=args, result=result, brain=BRAIN_GROK,
                      err=err, carried=None, left=left, advice=advice,
-                     cannot=err.detail if err else None)
+                     cannot=err.detail if err else None, lang=lang)
 
 
 # ----------------------------------------------------------------- routes --

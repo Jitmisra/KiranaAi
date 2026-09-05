@@ -241,3 +241,29 @@ def test_the_language_asked_for_reaches_the_phrasing_prompt() -> None:
     assert "Devanagari" in system and "Hindi" in system
     p2 = advisor.advice_payload(sess, "how much today", "todays_takings", {}, {"total_rupees": "80.00"}, lang="en-IN")
     assert "Devanagari" not in p2["messages"][0]["content"]
+
+
+# ===========================================================================
+# MONEY, AS A MOUTH SAYS IT
+# "Rs 3173.00" is how a page writes money. One voice read it as "dollars" and
+# another spelt the letters. A voice gets digits plus the word for rupees in
+# the asker's language, and the paise only when they are not zero.
+# ===========================================================================
+import pytest as _pt
+
+@_pt.mark.parametrize("text,lang,expect", [
+    ("12 bills come to Rs 3173.00.", "hi-IN", "12 bills come to 3173 रुपये."),
+    ("Rs 27.50 is owed", "hi-IN", "27 रुपये 50 पैसे is owed"),
+    ("Rs 3,173.00 and ₹12", "bn-IN", "3173 টাকা and 12 টাকা"),
+    ("Rs 399.00", "ta-IN", "399 ரூபாய்"),
+    ("Rs 399.00", "te-IN", "399 రూపాయలు"),
+    ("Rs 399.00", "en-IN", "399 rupees"),
+    ("no money here", "hi-IN", "no money here"),
+])
+def test_spoken_money(text, lang, expect):
+    assert tts.spoken_money(text, lang) == expect
+
+
+def test_the_voice_speaks_every_language_on_the_picker():
+    for tag in ("hi-IN", "en-IN", "bn-IN", "ta-IN", "te-IN"):
+        assert tag in tts.LANGS
