@@ -1281,7 +1281,13 @@ function validate(mode: Mode, form: Form, status: auth.AuthStatus | null): Probl
     p.password = 'That password is this account’s own phone number, which is written on the shop board.';
   }
 
-  if (signUp && status && status.accounts > 0 && !form.invite.trim()) {
+  // `signup_open` HAS TO BE READ HERE TOO, not just where the field is drawn.
+  // It was not, so on an open counter the form demanded an invitation code it
+  // no longer showed: CREATE THE ACCOUNT set a problem on a hidden field and
+  // then did nothing, with no way for anybody to see why. A validator that
+  // guards a field the page has stopped rendering is a dead button.
+  if (signUp && status && status.accounts > 0 && !status.signup_open
+      && !form.invite.trim()) {
     p.invite = 'This counter already has an account, so a new one needs an invitation code from somebody signed in.';
   }
 

@@ -148,7 +148,9 @@ counter they cannot look at.
 | | |
 |---|---|
 | Counter | <https://gawaah-till.onrender.com> |
-| Getting in | press *Create an account* — name, phone, password. No invitation code needed on this deployment |
+| Phone | `9000012345` |
+| Password | `review-me-2026` |
+| Or make your own | press *Create an account* — name, phone, password. No invitation code on this deployment |
 | Storefront (no sign-in) | append `/#/shop` — the customer's side is open by design |
 
 Sign-up is open here on purpose, set by one line in `render.yaml`:
