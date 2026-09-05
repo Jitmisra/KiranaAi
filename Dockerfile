@@ -141,6 +141,8 @@ COPY models/ ./models/
 # The two services.
 COPY gawaah/ ./gawaah/
 COPY tools/ ./tools/
+# The two start scripts. See docker/till.sh for why the start command is a file.
+COPY docker/ ./docker/
 
 # The built page. tools/upload_app.py resolves UI_DIST as
 # <parent of tools>/ui/dist, so /app/ui/dist is exactly where it looks.

@@ -70,15 +70,11 @@ services:
     # The seeder prints a freshly generated shopkeeper password ONCE, to stdout,
     # which on Render means INTO THE SERVICE LOGS. That is a real disclosure and
     # DEPLOY.md says so out loud.
-    dockerCommand: >-
-      sh -c 'mkdir -p "$GAWAAH_DATA_DIR" "$GAWAAH_SHOP_DIR" || exit 1;
-      if [ "$GAWAAH_SEED_ON_BOOT" = "1" ]; then
-      ( i=0; while [ $i -lt 24 ]; do sleep 5;
-      python tools/seed_shop.py --till "http://127.0.0.1:$PORT"; c=$?;
-      [ $c -eq 1 ] || break; i=$((i+1)); done ) &
-      fi;
-      exec python -m uvicorn upload_app:app --app-dir tools
-      --host 0.0.0.0 --port "$PORT"'
+    # ONE WORD PER ARGUMENT, NOTHING TO RE-QUOTE. Render re-quotes this field
+    # before the container sees it, and the previous multi-statement command
+    # reached the shell as a single word: `sh: 1: mkdir -p ... : not found`,
+    # exit 127. Everything that needs a shell now lives in docker/till.sh.
+    dockerCommand: sh docker/till.sh
 
     envVars:
       # -- the model key, and NOTHING ELSE out of .env -----------------------
@@ -185,10 +181,8 @@ services:
     # to it — but it means NO BILL CAN GO GREEN HERE. If the demo has to bill,
     # use DEPLOY.md §3c (one container, two processes, money started only after
     # shop.json is non-empty) and delete this service.
-    dockerCommand: >-
-      sh -c 'mkdir -p "$GAWAAH_DATA_DIR" "$GAWAAH_SHOP_DIR" || exit 1;
-      exec python -m uvicorn --factory gawaah.live_app:app
-      --host 0.0.0.0 --port "$PORT"'
+    # See the till's command above: a file, not an inline shell script.
+    dockerCommand: sh docker/money.sh
 
     envVars:
       # -- the gateway. THIS SERVICE AND NO OTHER ---------------------------
