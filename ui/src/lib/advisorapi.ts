@@ -105,6 +105,23 @@ export interface AdvisorHealth {
     why_not: string | null;
     sends: string;
   };
+  /**
+   * THE SECOND PAIR OF EARS, reported the way the voice is.
+   *
+   * The browser listens with its own `SpeechRecognition` first because it
+   * needs no key. When that service cannot be reached the page posts the
+   * recording to `/advisor/listen` instead, and this block says whether that
+   * is even possible — so a screen can promise it before a shopkeeper presses
+   * the microphone and finds out.
+   */
+  ears?: {
+    available: boolean;
+    model: string | null;
+    languages: string[];
+    max_seconds: number;
+    why_not: string | null;
+    sends: string;
+  };
   sends_to_the_model: string;
   cannot_reason_because: string | null;
   note: string;

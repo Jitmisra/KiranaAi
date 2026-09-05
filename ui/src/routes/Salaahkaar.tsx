@@ -166,7 +166,9 @@ export default function Salaahkaar() {
               </div>
 
               <p className="adv-voice sk-note">
-                {e.micOk ? <>Hearing through this browser’s speech service. </> : <>{e.micReason} </>}
+                {e.earsViaCounter
+                  ? <>Hearing through <span className="mono">{e.health?.ears?.model ?? 'the counter'}</span> — this browser could not reach its own speech service, so the recording is written down on the till’s key instead. </>
+                  : e.micOk ? <>Hearing through this browser’s speech service. </> : <>{e.micReason} </>}
                 {e.useNatural
                   ? <>Speaking with <span className="mono">{e.health?.voice?.voice ?? 'a natural voice'}</span> via {e.health?.voice?.model ?? 'the provider'}, fetched once per sentence and kept on the till; the browser’s own voice takes over if that fails.</>
                   : <>{e.choice.note}</>}
@@ -175,8 +177,14 @@ export default function Salaahkaar() {
 
             <Card title="What leaves this machine">
               <p className="adv-lede">
-                <b>The microphone always sends audio somewhere.</b> The browser transcribes speech with its
-                own service, so what you say leaves this machine even with no key set.{' '}
+                <b>The microphone always sends audio somewhere.</b>{' '}
+                {e.earsViaCounter
+                  ? <>This browser could not reach its own speech service, so the recording goes to{' '}
+                      {e.health?.ears?.model ?? 'the provider this shop configured'} to be written down — the
+                      same departure, to a provider you chose rather than one nobody chose. Only the audio
+                      goes: not the catalogue, the prices or the bill.{' '}</>
+                  : <>The browser transcribes speech with its
+                      own service, so what you say leaves this machine even with no key set.{' '}</>}
                 {e.useNatural ? (
                   <>
                     <b>With the natural voice on, the spoken sentence leaves too</b> — once per distinct

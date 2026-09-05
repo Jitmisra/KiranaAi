@@ -10,7 +10,7 @@ import {
   endCall, getCall, patchCall, pushTurn, setLang as storeLang, updateTurn, useCall,
   type CallState, type Presence, type Turn, type VoicedBy,
 } from '../lib/salaahkaar-store';
-import { speechSupport, VoiceMic, type MicEvents } from '../lib/voice';
+import { speechSupport, VoiceMic, ServerEars, type MicEvents } from '../lib/voice';
 import { SpeechDirector } from '../lib/lipsync';
 import { wordSpans, type Viseme, type WordSpan } from '../lib/visemes';
 
@@ -86,6 +86,9 @@ export interface Engine {
   interim: string;
   micError: string | null;
   toggleMic: () => void;
+  /** Whether the COUNTER is doing the hearing, because the browser's own
+      speech service could not be reached. Changes what the page may claim. */
+  earsViaCounter: boolean;
   /* voice out */
   canSpeak: boolean;
   speakOn: boolean;
@@ -334,6 +337,22 @@ export function useSalaahkaar(): Engine {
 
   const support = useMemo(() => speechSupport(), []);
   const micRef = useRef<VoiceMic | null>(null);
+  /**
+   * WHEN CHROME'S SPEECH SERVICE CANNOT BE REACHED, THE COUNTER LISTENS.
+   *
+   * `SpeechRecognition` is a cloud call to Google's speech service wearing a
+   * browser API's clothes. When it fails with `network` — which on a shop's
+   * wifi is the common case, not the exotic one — the microphone simply stops
+   * and there is nothing the shopkeeper can do about it. The till's own bar
+   * already fell back to `/advisor/listen` for exactly this; the call did not,
+   * so the one screen built around talking was the one screen that went deaf.
+   *
+   * Flips once and stays flipped for the session: a service that refused a
+   * moment ago will refuse the next press, and nobody should discover that
+   * twice.
+   */
+  const [viaCounter, setViaCounter] = useState(false);
+  const earsRef = useRef<ServerEars | null>(null);
   const busyRef = useRef(false);
   const speakingRef = useRef(false);
   const quietEnds = useRef(0);
@@ -344,14 +363,30 @@ export function useSalaahkaar(): Engine {
 
   /** Open the microphone if the call is live and nothing else is talking. */
   const reopen = useCallback(() => {
-    if (!support.ok) return;
     if (!getCall().onCall || busyRef.current || speakingRef.current) return;
+    if (viaCounter) {
+      const ears = earsRef.current;
+      if (!ears || ears.listening) return;
+      setMicError(null);
+      // Recording is async — the device takes a moment to open — so the button
+      // goes live now and `end` turns it off.
+      setListening(true);
+      void ears.start();
+      return;
+    }
+    if (!support.ok) return;
     const mic = micRef.current;
     if (!mic || mic.listening) return;
     setMicError(null);
     mic.start();
     setListening(mic.listening);
-  }, [support]);
+  }, [support, viaCounter]);
+
+  /** `reopen` read through a ref, so the error handler below can pick a
+      sentence back up without taking it as a dependency and rebuilding the
+      recogniser on every render. */
+  const reopenRef = useRef(reopen);
+  useEffect(() => { reopenRef.current = reopen; }, [reopen]);
 
   const events = useMemo<MicEvents>(() => ({
     partial: (text) => setInterim(text),
@@ -372,15 +407,53 @@ export function useSalaahkaar(): Engine {
       if (!getCall().onCall || busyRef.current || speakingRef.current) return;
       quietEnds.current += 1;
       if (quietEnds.current > 4) return;
-      setTimeout(reopen, 350);
+      // THROUGH THE REF, NOT THE CLOSURE. Captured directly this is the
+      // `reopen` built before the ears changed, so after a fallback to the
+      // counter it would start the DEAD browser recogniser again — and its
+      // error would land on screen as though nothing had been fixed.
+      setTimeout(() => reopenRef.current(), 350);
     },
-  }), [reopen]);
+  }), []);
 
-  const mic = useMemo(() => new VoiceMic({ lang, on: events }), [lang, events]);
+  /**
+   * The call's events, plus the one that changes ears. A `network` failure is
+   * not the shopkeeper's problem to solve, so rather than printing it and
+   * stopping the call, the counter takes over and the page says so.
+   */
+  const micEvents = useMemo<MicEvents>(() => ({
+    ...events,
+    error: (message) => {
+      const unreachable = /could not be reached|network|not provide speech/i.test(message);
+      if (unreachable && ServerEars.supported && !viaCounter) {
+        setViaCounter(true);
+        setMicError(null);
+        setListening(false);
+        // The call is still live and nobody is speaking, so pick the sentence
+        // back up on the counter's ears rather than making them press again.
+        quietEnds.current = 0;
+        setTimeout(() => reopenRef.current(), 250);
+        return;
+      }
+      // Already on the counter's ears: a late error from the browser's own
+      // recogniser is a straggler from before the switch, not something the
+      // shopkeeper can act on. Printing it would put "the speech service could
+      // not be reached" back over a microphone that is working.
+      if (unreachable && viaCounter) return;
+      setMicError(message);
+      quietEnds.current = 99;
+    },
+  }), [events, viaCounter]);
+
+  const mic = useMemo(() => new VoiceMic({ lang, on: micEvents }), [lang, micEvents]);
+  const ears = useMemo(() => new ServerEars({ lang, on: events }), [lang, events]);
   useEffect(() => {
     micRef.current = mic;
     return () => mic.stop();
   }, [mic]);
+  useEffect(() => {
+    earsRef.current = ears;
+    return () => ears.cancel();
+  }, [ears]);
 
   /* ---- saying something -------------------------------------------------- */
 
@@ -567,12 +640,16 @@ export function useSalaahkaar(): Engine {
   }, [onCall, startedAt]);
 
   const toggleMic = useCallback(() => {
-    if (listening) { mic.stop(); quietEnds.current = 99; return; }
+    if (listening) {
+      if (viaCounter) ears.stop(); else mic.stop();
+      quietEnds.current = 99;
+      return;
+    }
     if (!getCall().onCall) { startCall(); return; }
     quietEnds.current = 0;
     stopSpeaking();
     reopen();
-  }, [listening, mic, startCall, stopSpeaking, reopen]);
+  }, [listening, mic, ears, viaCounter, startCall, stopSpeaking, reopen]);
 
   const setLang = useCallback((l: string) => { storeLang(l); }, []);
 
@@ -607,7 +684,15 @@ export function useSalaahkaar(): Engine {
     reasons: health?.reasons === true,
     chips, catLoading, catRefusal,
     presence, busy, elapsed,
-    micOk: support.ok, micReason: support.reason, listening, interim, micError, toggleMic,
+    // WITH THE COUNTER'S EARS THE BROWSER'S OWN SUPPORT NO LONGER DECIDES.
+    // `micOk` gates the microphone button, and leaving it false on a browser
+    // whose speech service is unreachable would grey out the one control that
+    // now works.
+    micOk: viaCounter ? true : support.ok,
+    micReason: viaCounter
+      ? 'This browser could not reach its speech service, so the counter is listening instead — on the same key it already reasons and speaks with.'
+      : support.reason,
+    listening, interim, micError, toggleMic, earsViaCounter: viaCounter,
     canSpeak: speakOn && !!choice.voice,
     speakOn, setSpeakOn, useNatural, naturalAvailable, chooseVoice, choice, voicing, voiceRefusal,
     caption, capWord, viseme, amp,
