@@ -334,8 +334,8 @@ export function TopBar({ route, onGo, onMenu, menuOpen, status, shopName }: {
           onClick={(e) => { e.preventDefault(); onGo(HOME); }}
         >
           <span className="brand-glyph"><BrandGlyph /></span>
-          <span className="brand-mark">GAWAAH</span>
-          <span className="brand-deva" lang="hi">गवाह</span>
+          <span className="brand-mark">KIRANA SHOP AI</span>
+          <span className="brand-deva" lang="hi">किराना शॉप</span>
           {shop && <span className="brand-shop" title={shop}>{shop}</span>}
         </a>
 

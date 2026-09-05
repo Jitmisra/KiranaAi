@@ -327,7 +327,7 @@ export default function CustomerShell() {
             the shop — nothing on this page can do it.
           </p>
           <div className="cx-mark">
-            GAWAAH <span className="deva" lang="hi">गवाह</span>
+            KIRANA SHOP AI <span className="deva" lang="hi">किराना शॉप</span>
           </div>
         </footer>
       </main>

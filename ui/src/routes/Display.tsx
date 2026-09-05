@@ -122,7 +122,7 @@ export default function Display() {
 
   useEffect(() => {
     document.title = shop ? `${shop} — your bill` : 'Your bill';
-    return () => { document.title = 'GAWAAH — the counter'; };
+    return () => { document.title = 'Kirana Shop AI — the counter'; };
   }, [shop]);
 
   return (
@@ -175,7 +175,7 @@ function ShopMark({ shop, loading }: { shop: string | null; loading: boolean }) 
   if (loading) return <span className="disp-shop skel disp-shop-skel" aria-hidden="true" />;
   return (
     <span className="disp-shop disp-brand">
-      GAWAAH <span className="disp-brand-deva" lang="hi">गवाह</span>
+      KIRANA SHOP AI <span className="disp-brand-deva" lang="hi">किराना शॉप</span>
     </span>
   );
 }

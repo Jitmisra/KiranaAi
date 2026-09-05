@@ -290,7 +290,7 @@ export default function SignIn() {
           <p>
             {(shop?.address ?? plate?.address)?.trim()
               ? firstLine((shop?.address ?? plate?.address)!)
-              : 'GAWAAH — the counter that witnesses what leaves the shelf'}
+              : 'Kirana Shop AI — the counter that witnesses what leaves the shelf'}
           </p>
           <p className="auth-host mono">{hostLabel()}</p>
         </div>

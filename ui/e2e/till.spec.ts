@@ -43,7 +43,7 @@ test('the shell loads and routes without a single console error', async () => {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(BASE);
 
-  await expect(page.locator('.brand-mark')).toHaveText('GAWAAH');
+  await expect(page.locator('.brand-mark')).toHaveText('KIRANA SHOP AI');
   // The nav is a grouped sidebar; each button carries a label and a sub-label,
   // so it is addressed by its label text rather than by an exact accessible name.
   for (const label of ['Products', 'Till']) {
