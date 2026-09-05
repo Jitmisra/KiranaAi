@@ -7,6 +7,7 @@ import { rupees, totalPaise } from '../lib/money';
 import { Card, KV, Pill, Verdict, Empty, Field, Refusal, LoadingCard, Working } from '../components/ui';
 import '../styles/storefront.css';
 import '../styles/shopface.css';
+import { shopUniqueLink, type ShopUniqueLink } from '../lib/shopapi';
 
 /**
  * The shop, read on a customer's phone.
@@ -154,6 +155,55 @@ export function slugFromHash(): string | null {
   return s && s.trim() ? s.trim() : null;
 }
 
+
+
+/**
+ * THE SHOP'S OWN QR AND LINK, top-right of the plate.
+ *
+ * `ShopPlate` is rendered only outside the customer shell (`!nav`), so this is
+ * the shopkeeper's view by construction: what goes on the shutter and into a
+ * WhatsApp status — one address that opens THIS shop and no other. The till
+ * says plainly when the address is a loopback nobody's phone can open.
+ */
+function PlateLink() {
+  const [link, setLink] = useState<ShopUniqueLink | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void shopUniqueLink().then((r) => { if (alive && r && r.ok) setLink(r); })
+      .catch(() => { /* no link: the plate is still a plate */ });
+    return () => { alive = false; };
+  }, []);
+  if (!link) return null;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(link.url); }
+    catch {
+      const ta = document.createElement('textarea'); ta.value = link.url;
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch { /* nothing else to try */ }
+      ta.remove();
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <div className="shf-plate-link" data-testid="shop-link">
+      <img className="shf-plate-qr" src={`${link.qr_url}?px=360`} width={120} height={120}
+           alt={`QR that opens ${link.name ?? 'this shop'}`} />
+      <div className="shf-plate-link-txt">
+        <span className="shf-plate-link-k">{link.unique ? 'THIS SHOP’S LINK' : 'STOREFRONT LINK'}</span>
+        <a className="mono shf-plate-url" href={link.url} target="_blank" rel="noreferrer">{link.url}</a>
+        <div className="shf-plate-link-row">
+          <button type="button" className="btn sm" onClick={() => void copy()}>{copied ? 'COPIED' : 'COPY LINK'}</button>
+          <a className="btn sm ghost" href={`${link.qr_url}?px=1200`} target="_blank" rel="noreferrer">OPEN QR</a>
+        </div>
+        {!link.reachable_from_a_phone && (
+          <span className="shf-plate-link-note">This address is this machine only — a phone cannot open it until the till is on a public address.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ShopPlate() {
   const [slug, setSlug] = useState<string | null>(() => slugFromHash());
   const [face, setFace] = useState<StoreShop | 'refused' | null>(null);
@@ -224,6 +274,7 @@ function ShopPlate() {
             Add what you need and give an address — the shopkeeper packs it.
           </p>
         </div>
+        <PlateLink />
       </header>
     </>
   );

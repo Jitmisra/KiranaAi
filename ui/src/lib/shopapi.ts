@@ -488,6 +488,26 @@ export interface ShopLink {
 export const shopLink = () => send<ShopLink>('/store/link');
 
 /**
+ * THE SHOP'S OWN UNIQUE LINK, for the shopkeeper to hand out. `/shop/link` is
+ * the guarded, shopkeeper-side answer (slug, whether it is unique, whether a
+ * phone could open it); `/store/link` above is what the storefront itself reads.
+ */
+export interface ShopUniqueLink {
+  ok: boolean;
+  configured: boolean;
+  slug: string | null;
+  name: string | null;
+  url: string;
+  qr_url: string;
+  origin: string;
+  reachable_from_a_phone: boolean;
+  unique: boolean;
+  note: string;
+  unique_note?: string;
+}
+export const shopUniqueLink = () => send<ShopUniqueLink>('/shop/link');
+
+/**
  * A link made out to ONE customer, and the claiming of it.
  *
  * The shutter QR is one sticker everybody scans, which is right — a printed

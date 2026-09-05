@@ -204,3 +204,17 @@
   }
   body.shf-printing .shf-sticker img { width: 70vw; max-width: 130mm; }
 }
+
+
+/* THE SHOP'S OWN LINK, top-right of the plate (shopkeeper's view). */
+.shf-plate { position: relative; }
+.shf-plate-link { display: flex; gap: 12px; align-items: flex-start; margin-left: auto;
+  padding: 10px 12px; border-radius: 14px; background: rgba(43,132,234,.06);
+  border: 1px solid rgba(43,132,234,.18); max-width: 380px; }
+.shf-plate-qr { width: 120px; height: 120px; border-radius: 10px; background: #fff; flex: 0 0 auto; }
+.shf-plate-link-txt { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shf-plate-link-k { font-size: 11px; letter-spacing: .08em; font-weight: 700; opacity: .7; }
+.shf-plate-url { font-size: 12px; word-break: break-all; }
+.shf-plate-link-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.shf-plate-link-note { font-size: 11.5px; opacity: .75; line-height: 1.35; }
+@media (max-width: 760px) { .shf-plate-link { max-width: 100%; margin-left: 0; } }
