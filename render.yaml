@@ -102,8 +102,36 @@ services:
       # and this value is used as a string prefix — `https://` has to be in it.
       # The browser never talks to the money service; the till proxies, so this
       # is a server-to-server address and CORS never enters into it.
+      # A LITERAL, NOT A SECRET. This is a public hostname, and leaving it
+      # `sync: false` meant an unset value on first deploy -- so the till fell
+      # back to tools/upload_app.py's default of http://127.0.0.1:8788, which
+      # inside its own container is nothing, and every /api/money/* call came
+      # back 502. Written here, it is right the moment the blueprint applies.
+      # NOT `fromService`: that yields host:port with no scheme, and this value
+      # is used as a string prefix.
       - key: GAWAAH_PAISA_URL
-        sync: false
+        value: https://gawaah-money.onrender.com
+
+      # -- WHICH BRAIN, AND WHICH VOICE -------------------------------------
+      # Only the KEY is a secret. Without these three the assistant fell back
+      # to gawaah/assistant.py's built-in default of api.x.ai and answered
+      # `grok_refused_the_request` on a counter whose key is a Google one --
+      # the chip on screen read "local · this machine" while a perfectly good
+      # key sat in the environment, pointed at the wrong provider.
+      - key: GAWAAH_LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: GAWAAH_LLM_MODEL
+        value: gemini-3.1-flash-lite
+      - key: GAWAAH_TTS_MODEL
+        value: gemini-3.1-flash-tts-preview
+
+      # -- THE RESOLUTION CEILING, FOR THIS DEPLOYMENT'S CAMERAS -------------
+      # gawaah/saaf.py's 0.46 is calibrated against MTF50 and does not move for
+      # everybody. A laptop webcam at arm's length lands right on it, and a
+      # public demo is judged on somebody else's hardware, so this counter is
+      # told to accept a softer picture. A real shop should leave it unset.
+      - key: GAWAAH_MAX_BLUR_SCORE
+        value: "0.60"
 
       # -- the lock ----------------------------------------------------------
       # UNSET, this counter is wide open: anyone who finds the URL can edit the

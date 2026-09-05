@@ -49,6 +49,18 @@ const BURST_GAP_MS = 90;
  */
 const STAGE_AR = { w: 4, h: 3 };
 
+/** The dominant reason CODE among the rejected frames — the thing to group on. */
+function worstOfCode(rep: api.SaafStackBody): string {
+  const counts = new Map<string, number>();
+  for (const f of rep.frames) {
+    if (f.used) continue;
+    counts.set(f.code, (counts.get(f.code) ?? 0) + 1);
+  }
+  let worst = ''; let n = 0;
+  for (const [k, v] of counts) if (v > n) { worst = k; n = v; }
+  return worst;
+}
+
 /** Name the measurement that failed most often, in words, not in field names. */
 function worstOf(rep: api.SaafStackBody): string {
   const counts = new Map<string, number>();
@@ -478,17 +490,23 @@ export default function Products() {
       if (Array.isArray(rep?.frames)) {
         setGate(rep);
         if ((rep.used ?? 0) < 1) {
-          // THE MEASUREMENT, NOT JUST THE VERDICT. "Nothing survived" with the
-          // reason hidden in a tooltip is a dead end; the same refusal with
-          // "0.49 against a 0.46 ceiling" tells you it was marginal, and that
-          // backing off a hand-width will clear it.
-          const worstScore = Math.max(
-            ...rep.frames.filter((f) => !f.used && typeof f.blur_score === 'number')
-              .map((f) => f.blur_score as number), 0);
-          const ceiling = rep.gates?.max_blur_score;
-          const measured = worstScore > 0 && typeof ceiling === 'number'
-            ? ` The softest frame scored ${worstScore.toFixed(3)} against a ${ceiling.toFixed(2)} ceiling.`
-            : '';
+          // THE FRAME'S OWN SENTENCE, NOT A NUMBER THIS PAGE PICKED.
+          //
+          // This used to print `max(blur_score)` next to whichever reason was
+          // most common -- two facts from different frames, glued together, and
+          // they contradicted each other on a real capture: "the camera never
+          // found focus ... scored 0.387 against a 0.46 ceiling", when 0.387 is
+          // comfortably UNDER that ceiling. A refusal that argues with itself is
+          // worse than one that says nothing.
+          //
+          // `reason` already carries the measurement that actually failed,
+          // written by the module that failed it, so the number and the words
+          // can never come apart again.
+          const worstCode = worstOfCode(rep);
+          const measured = (() => {
+            const f = rep.frames.find((x) => !x.used && x.code === worstCode && x.reason);
+            return f ? ` ${String(f.reason).replace(/^[a-z_]+:\s*/, '').trim()}` : '';
+          })();
           setCapErr({
             reason: 'Every frame failed the quality gate',
             detail: `${rep.rejected} of ${rep.burst} frames rejected — `
