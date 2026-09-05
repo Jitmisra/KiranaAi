@@ -572,7 +572,26 @@ def step_account(till: Till, rep: Report) -> Optional[str]:
     # Generated here, printed once at the end, written to no file. `token_hex`
     # rather than a wordlist because a demo password that looks memorable is a
     # demo password that gets reused somewhere that matters.
+    #
+    # GAWAAH_SEED_PASSWORD OVERRIDES IT, AND EXISTS FOR EXACTLY ONE CASE: a
+    # PUBLIC demonstration where the lock is on and the password is printed to
+    # a build log nobody reading the README can see. A counter judges cannot
+    # sign into is a counter they cannot look at. Setting it is a deliberate
+    # act by whoever deploys, it is never the default, and anything it opens
+    # should be a shop that can be thrown away -- on a free tier with no disk,
+    # a restart wipes the data and re-seeds, so a demo that gets vandalised
+    # heals itself.
+    #
+    # It is refused below eight characters so it cannot become the weakest
+    # password on the counter by accident.
     password = "kirana-" + secrets.token_hex(5)
+    fixed = (os.environ.get("GAWAAH_SEED_PASSWORD") or "").strip()
+    if fixed:
+        if len(fixed) < 8:
+            print(f"  {C}skip{X}   GAWAAH_SEED_PASSWORD is under 8 characters; "
+                  f"using a generated one instead")
+        else:
+            password = fixed
     if not rep.apply:
         print(f"  {D}would{X}  open an account for {SHOPKEEPER_NAME} "
               f"({SHOPKEEPER_PHONE}) with a freshly generated password")

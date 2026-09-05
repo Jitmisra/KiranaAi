@@ -4,7 +4,7 @@ import * as auth from '../lib/authapi';
 import { shopNameplate, shopProfile, type ShopProfileDoc } from '../lib/adminapi';
 import { BOUNCED_FROM } from '../App';
 import { useT } from '../lib/i18n';
-import { Card, Pill, Segmented, Verdict, Refusal, Skeleton, SkeletonText } from '../components/ui';
+import { Card, Pill, Verdict, Refusal, Skeleton, SkeletonText } from '../components/ui';
 import '../styles/auth.css';
 
 /**
@@ -352,17 +352,6 @@ export default function SignIn() {
           <FormCard
             status={status}
             mode={mode}
-            onMode={(m) => {
-              setMode(m);
-              setRefusal(null);
-              setNote(null);
-              setTried(false);
-              // The password and the invitation code do not survive the switch.
-              // The name and the number are the same person either way; a
-              // secret left in a field on a screen that now says something
-              // else is a secret nobody remembers is there.
-              setForm((f) => ({ ...f, password: '', invite: '' }));
-            }}
             form={form}
             onSet={set}
             problems={showProblems}
@@ -384,11 +373,10 @@ export default function SignIn() {
 /* ================================================== the form, signed out == */
 
 function FormCard({
-  status, mode, onMode, form, onSet, problems, busy, refusal, note, onSubmit,
+  status, mode, form, onSet, problems, busy, refusal, note, onSubmit,
 }: {
   status: auth.AuthStatus;
   mode: Mode;
-  onMode: (m: Mode) => void;
   form: Form;
   onSet: <K extends keyof Form>(k: K, v: string) => void;
   problems: Problems;
@@ -421,16 +409,22 @@ function FormCard({
           after it needs an invitation from somebody signed in.
         </p>
       ) : (
-        <div className="auth-switch">
-          <Segmented
-            value={mode}
-            onChange={onMode}
-            options={[
-              { value: 'in', label: 'Sign in', title: 'You already have an account here' },
-              { value: 'up', label: 'Create an account', title: 'Needs an invitation code' },
-            ]}
-          />
-        </div>
+        // SIGN-UP IS NOT OFFERED WHEN IT CANNOT SUCCEED.
+        //
+        // Once this counter has an account, `POST /auth/signup` refuses
+        // anything without a code the shop itself issued -- so the toggle was
+        // an invitation to fill in four fields, press CREATE THE ACCOUNT and be
+        // told no. Worse, on a public address it reads like an open door and
+        // sends people looking for a way through one that was never open.
+        //
+        // The server has not changed and does not need to: the gate was always
+        // there. What changed is that the page stops advertising a form whose
+        // only outcome is a refusal, and says instead where a code comes from.
+        <p className="auth-lede auth-closed">
+          Signing in is the only way onto this counter. It already has an
+          account, so a new one needs an invitation code from somebody signed
+          in — they can issue one from <span className="mono">Settings</span>.
+        </p>
       )}
 
       <form className="auth-form" onSubmit={onSubmit} aria-busy={busy}>

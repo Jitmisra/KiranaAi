@@ -540,3 +540,8 @@
      which at this width is close enough to the edge to push it off-screen. */
   .auth-pop { right: -8px; width: min(300px, calc(100vw - 24px)); }
 }
+
+/* The line that replaces the sign-up toggle once this counter has an account.
+   Quieter than a refusal, because nothing has gone wrong -- it is the ordinary
+   state of every counter after its first day. */
+.auth-closed { opacity: .8; line-height: 1.5; }
