@@ -2389,7 +2389,30 @@ def _match(q: list[str], known: dict[str, dict[str, Any]]) -> list[str]:
         haystack = _norm_name(str(r.get("name") or "")) + normalise(s)
         if all(any(h.startswith(t) for h in haystack) for t in q):
             prefix.append(s)
-    return sorted(prefix)
+    if prefix:
+        return sorted(prefix)
+
+    # SAID AS TWO WORDS, WRITTEN AS ONE.
+    #
+    # A shopkeeper says "ponds cream". The Products screen has `pondscream`,
+    # because that is what somebody typed into the sku box. Every pass above
+    # compares word against word, so two tokens can never meet one glued token
+    # and the phrase was refused as a product this shop does not sell — while
+    # the shop was selling it, two lines further down the same refusal's own
+    # list. It works the other way too: "parlegbiscuit" said in one breath now
+    # finds `parle_g_biscuit`.
+    #
+    # Last, and only on an empty result, so it can never overrule a pass that
+    # compared real words. Several hits still raise R_AMBIGUOUS rather than
+    # picking one — gluing widens what can be FOUND, never what may be assumed.
+    glued = "".join(q)
+    if len(glued) >= 4:
+        squashed = [s for s, r in known.items()
+                    if glued in ("".join(normalise(s)),
+                                 "".join(_norm_name(str(r.get("name") or ""))))]
+        if squashed:
+            return sorted(squashed)
+    return []
 
 
 def _whole_number(value: Any, *, what: str, reason: str) -> int:

@@ -87,6 +87,11 @@ const MIC_LANGS: readonly { id: string; label: string; note: string }[] = [
   { id: 'hi-IN', label: 'हिन्दी', note: 'best for Hindi speech; brand names come back in Devanagari' },
   { id: 'en-IN', label: 'English', note: 'best when the catalogue is written in English' },
   { id: 'bn-IN', label: 'বাংলা', note: 'best for Bengali speech' },
+  // Tamil and Telugu reach the MODEL, not the chrome — she hears and answers
+  // in them, and every label around her stays English because no `strings/ta`
+  // exists yet. The note is the tooltip, and it says exactly that.
+  { id: 'ta-IN', label: 'தமிழ்', note: 'hears Tamil and answers in Tamil; the screen around her stays English' },
+  { id: 'te-IN', label: 'తెలుగు', note: 'hears Telugu and answers in Telugu; the screen around her stays English' },
 ];
 
 const MIC_LANG_KEY = 'gawaah.mic.lang.v1';

@@ -439,6 +439,18 @@ export const LANGS = [
   { tag: 'hi-IN', label: 'हिन्दी', short: 'हि', hears: 'hears Hindi, answers in Devanagari' },
   { tag: 'en-IN', label: 'English', short: 'En', hears: 'hears English brand names best' },
   { tag: 'bn-IN', label: 'বাংলা', short: 'বাং', hears: 'hears Bengali, answers in Bengali script' },
+  // TAMIL AND TELUGU REACH THE MODEL, NOT THE CHROME.
+  //
+  // Salaahkaar's answers are phrased by a model that reads these languages, so
+  // asking in Tamil and being answered in Tamil works today. What does NOT
+  // exist is a `strings/ta.ts` — so every button, label and heading around her
+  // stays English, which is exactly the fallback `lib/i18n.ts` documents for a
+  // key nobody has translated: the English sentence, never a blank.
+  //
+  // `hears` says so plainly, because it is the tooltip on the button and this
+  // counter does not ship a control that implies more than it does.
+  { tag: 'ta-IN', label: 'தமிழ்', short: 'த', hears: 'hears Tamil and answers in Tamil — the screen around her stays English' },
+  { tag: 'te-IN', label: 'తెలుగు', short: 'తె', hears: 'hears Telugu and answers in Telugu — the screen around her stays English' },
 ] as const;
 export type LangTag = (typeof LANGS)[number]['tag'];
 export const isLangTag = (v: string): v is LangTag => LANGS.some((l) => l.tag === v);
@@ -456,6 +468,14 @@ export const GREETING: Record<LangTag, { reasons: string; figures: string }> = {
   'en-IN': {
     reasons: 'Salaahkaar on the line. Ask about today’s takings, the margin, open orders, stock, or a price — or say “2 Maggi bill me daal do” and it goes on the bill for you to accept.',
     figures: 'Salaahkaar on the line, reading figures only — no model is set, so I cannot reason about them. Ask about today’s takings, the margin, open orders, stock, or a price.',
+  },
+  'ta-IN': {
+    reasons: 'சலாஹ்கார் இணைப்பில் உள்ளார். இன்றைய விற்பனை, லாபம், ஆர்டர், ஸ்டாக் அல்லது விலை பற்றி கேளுங்கள் — அல்லது “2 மேகி பில்லில் சேர்” என்று சொல்லுங்கள்.',
+    figures: 'சலாஹ்கார் இணைப்பில், எண்களை மட்டும் படிக்கிறார் — எந்த மாதிரியும் அமைக்கப்படவில்லை. விற்பனை, லாபம், ஆர்டர், ஸ்டாக் அல்லது விலை கேளுங்கள்.',
+  },
+  'te-IN': {
+    reasons: 'సలహాకార్ లైన్‌లో ఉన్నారు. ఈరోజు అమ్మకాలు, లాభం, ఆర్డర్లు, స్టాక్ లేదా ధర గురించి అడగండి — లేదా “2 మ్యాగీ బిల్లులో వేయి” అని చెప్పండి.',
+    figures: 'సలహాకార్ లైన్‌లో, సంఖ్యలు మాత్రమే చదువుతున్నారు — ఏ మోడల్‌ సెట్ చేయలేదు. అమ్మకాలు, లాభం, ఆర్డర్లు, స్టాక్ లేదా ధర అడగండి.',
   },
 };
 

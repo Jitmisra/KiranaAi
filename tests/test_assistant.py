@@ -1980,3 +1980,55 @@ def test_a_weighed_line_and_a_packet_line_have_the_same_shape(big_shop):
     for line in lines:
         for key in ("unit_paise", "line_paise", "qty"):
             assert isinstance(line[key], int) and not isinstance(line[key], bool)
+
+
+# ===========================================================================
+# SAID AS TWO WORDS, WRITTEN AS ONE
+#
+# A shopkeeper says "ponds cream". The Products screen holds `pondscream`,
+# because that is what somebody typed into the sku box. Every match pass
+# compared word against word, so two tokens could never meet one glued token
+# and the phrase was refused as a product this shop does not sell — inside a
+# refusal that then listed the shop's products.
+# ===========================================================================
+
+def _shop():
+    return {
+        "pondscream": {"name": "pondscream", "price_paise": 30000},
+        "parle_g_biscuit": {"name": "Parle-G biscuit 100g", "price_paise": 1000},
+        "DermaCoRoller": {"name": "DermaCoRoller", "price_paise": 39900},
+        "maggi_noodles_70g": {"name": "Maggi 2-Minute Noodles 70 g", "price_paise": 1400},
+    }
+
+
+@pytest.mark.parametrize("said,expected", [
+    ("ponds cream", "pondscream"),          # two words, one sku
+    ("pondscream", "pondscream"),           # unchanged
+    ("derma co roller", "DermaCoRoller"),   # three words, one sku
+    ("dermaco", "DermaCoRoller"),           # prefix, unchanged
+    ("parlegbiscuit", "parle_g_biscuit"),   # one breath, three sku words
+    ("parle g biscuit", "parle_g_biscuit"), # unchanged
+    ("maggi", "maggi_noodles_70g"),         # unchanged
+])
+def test_gluing_finds_the_product(said, expected):
+    assert assistant.resolve_product(said, _shop()) == expected
+
+
+def test_gluing_never_invents_a_product():
+    """It widens what can be FOUND, never what may be assumed."""
+    with pytest.raises(assistant.AssistantRefused) as e:
+        assistant.resolve_product("pepsi cola", _shop())
+    assert e.value.reason == assistant.R_NO_SUCH_PRODUCT
+
+
+def test_gluing_is_last_and_cannot_overrule_a_real_word_match():
+    """A phrase that matches by whole word keeps that answer."""
+    shop = dict(_shop())
+    shop["ponds"] = {"name": "ponds", "price_paise": 30000}
+    assert assistant.resolve_product("ponds", shop) == "ponds"
+
+
+def test_a_two_letter_glue_is_not_enough_to_match():
+    """Short glue is noise; the pass needs four characters to fire."""
+    with pytest.raises(assistant.AssistantRefused):
+        assistant.resolve_product("a b", _shop())

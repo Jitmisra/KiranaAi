@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   routeTurn, describeAction, undoPlan, readApplied, readTopSellers, readLowRows, pickVoice,
-  suggestions, sayableProducts, shortName, hasRupees, tokens, LANGS, isLangTag,
+  suggestions, sayableProducts, shortName, hasRupees, tokens, LANGS, isLangTag, GREETING,
 } from './salaahkaar';
 import type { Proposal } from './assistantapi';
 
@@ -255,10 +255,36 @@ describe('pickVoice', () => {
 /* ---------------------------------------------------------- the rest -- */
 
 describe('the small helpers', () => {
-  it('lists the three languages the till voices', () => {
-    expect(LANGS.map((l) => l.tag)).toEqual(['hi-IN', 'en-IN', 'bn-IN']);
+  it('lists the languages the till voices, translated ones first', () => {
+    expect(LANGS.map((l) => l.tag))
+      .toEqual(['hi-IN', 'en-IN', 'bn-IN', 'ta-IN', 'te-IN']);
     expect(isLangTag('bn-IN')).toBe(true);
+    expect(isLangTag('ta-IN')).toBe(true);
     expect(isLangTag('fr-FR')).toBe(false);
+  });
+
+  it('says out loud that Tamil and Telugu do not translate the screen', () => {
+    // The chrome has strings/{en,hi,bn}.ts and nothing else, so ta/te fall back
+    // to English by i18n's documented rule. A button that implied otherwise
+    // would be the one kind of lie this counter is built not to tell, so the
+    // tooltip has to carry the limit.
+    for (const tag of ['ta-IN', 'te-IN']) {
+      const l = LANGS.find((x) => x.tag === tag)!;
+      expect(l.hears).toMatch(/stays English/);
+    }
+    // The three that DO translate must not claim that limit.
+    for (const tag of ['hi-IN', 'en-IN', 'bn-IN']) {
+      expect(LANGS.find((x) => x.tag === tag)!.hears).not.toMatch(/stays English/);
+    }
+  });
+
+  it('greets in every language it offers', () => {
+    // GREETING is keyed by LangTag, so a language added to the picker with no
+    // greeting is a call that opens on `undefined`.
+    for (const l of LANGS) {
+      expect(GREETING[l.tag]?.reasons, `${l.tag} reasons`).toBeTruthy();
+      expect(GREETING[l.tag]?.figures, `${l.tag} figures`).toBeTruthy();
+    }
   });
   it('drops the Devanagari gloss from a name', () => {
     expect(shortName('Maggi 2-Minute Noodles 70 g (मैगी नूडल्स)')).toBe('Maggi 2-Minute Noodles 70 g');
