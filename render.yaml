@@ -37,6 +37,7 @@ services:
   - type: web
     name: gawaah-till
     runtime: docker
+    repo: https://github.com/Jitmisra/KiranaAi
     plan: free
     region: singapore          # Razorpay is an Indian gateway and the shop is
                                # in India. Both services MUST be in the same
@@ -152,6 +153,7 @@ services:
   - type: web
     name: gawaah-money
     runtime: docker
+    repo: https://github.com/Jitmisra/KiranaAi
     plan: free
     region: singapore          # same region as the till, deliberately
     branch: main
